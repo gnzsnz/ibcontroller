@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.jsonl
+poc/*
+/jdk/
+/build/
+*.jar
+/ibcontroller.toml
+ibcontroller/*.jar
+.env
