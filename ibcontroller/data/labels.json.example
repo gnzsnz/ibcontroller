@@ -1,0 +1,44 @@
+{
+  "_readme": [
+    "Example override for {config_dir}/labels.json -- ibcontroller init/run copy this",
+    "file as labels.json.example, NOT as labels.json: labels.load_labels() applies",
+    "{config_dir}/labels.json unconditionally the moment it exists, so activating an",
+    "override is a deliberate rename, never automatic.",
+    "",
+    "labels.py's own _deep_merge overrides one field at a time -- you only need to name",
+    "the label that actually changed, not repeat every sibling field or every other",
+    "domain untouched. This file is trimmed down to two illustrative examples, not a",
+    "full copy of the bundled data/labels.json:",
+    "",
+    "  - login.gateway_titles: shows how to add a title variant IBKR renamed/localized",
+    "    (the override REPLACES the whole list, so include every title you still want,",
+    "    not just the new one).",
+    "  - dismiss_rules: this one is a list, not a nested object, so an override replaces",
+    "    the whole list rather than merging entry by entry -- copy the bundled entries",
+    "    here (as done below) before adding your own, or you'll lose the built-in ones.",
+    "",
+    "Remove this _readme key before using the file for real -- it is not a real Labels",
+    "field and is harmless where cattrs ignores unknown keys, but it's not meant to ship.",
+    "See labels.py's own module docstring and DismissRule's docstring for the full",
+    "mechanism."
+  ],
+  "login": {
+    "gateway_titles": [
+      "IBKR Gateway",
+      "IB Gateway",
+      "Interactive Brokers Gateway"
+    ]
+  },
+  "dismiss_rules": [
+    {
+      "name": "non_brokerage_account",
+      "match_text": "This is not a brokerage account",
+      "click": "I understand and accept"
+    },
+    {
+      "name": "auto_restart_confirmation",
+      "match_text": "trading platform restart automatically",
+      "click": "OK"
+    }
+  ]
+}

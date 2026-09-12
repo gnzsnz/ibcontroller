@@ -27,6 +27,7 @@ from typed_settings.converters import Converter
 from typed_settings.dict_utils import set_path
 from typed_settings.exceptions import TsError
 from typed_settings.loaders import (
+    DictLoader,
     EnvLoader,
     FileLoader,
     LoadedSettings,
@@ -35,6 +36,8 @@ from typed_settings.loaders import (
 )
 from typed_settings.processors import FormatProcessor
 from typed_settings.types import Secret
+
+from ibcontroller.app_dirs import resolve_app_dirs
 
 ENV_PREFIX = "IBCONTROLLER_"
 ENV_SENSITIVE: list[str] = ["IBCONTROLLER_USERID", "IBCONTROLLER_PASSWORD"]
@@ -148,6 +151,19 @@ class ExistingSessionAction(StrEnum):
     SECONDARY = "secondary"
 
 
+class AcceptIncomingConnections(StrEnum):
+    """AcceptIncomingConnections is the user's choice for what to do when ibcontroller
+    detects incoming API connections (see `AcceptIncomingConnectionsRecognizer` in
+    recognisers.py). The default is MANUAL, which leaves the user to decide what to do
+    in the GUI. ACCEPT and REJECT are the two automatic options, and MANUAL is a special
+    case that forces the user to decide what to do in the GUI.
+    """
+
+    ACCEPT = "accept"
+    REJECT = "reject"
+    MANUAL = "manual"
+
+
 @ts.settings
 class Config:
     """
@@ -180,6 +196,9 @@ class Config:
     # IBC: ReadOnlyLogin -- loaded but not yet wired to any behavior, see TODO.md.
     read_only_login: bool = False
     read_only_api: bool | None = None  # None = leave the existing setting unchanged
+    accept_incoming_connections: AcceptIncomingConnections = (
+        AcceptIncomingConnections.MANUAL
+    )
     existing_session_action: ExistingSessionAction = ExistingSessionAction.MANUAL
 
     # Login/2FA timeout and retry settings
@@ -193,17 +212,39 @@ class Config:
     second_factor_authentication_exit_interval: float = 60.0
 
     # AutoRestartTime "hh:mm AM/PM" format (e.g. "08:00 AM")
-    auto_restart_time: str | None = None
+    auto_restart_time: str | None = None  # None = leave the existing setting unchanged
+    # AutoLogoffTime "hh:mm AM/PM" format (e.g. "08:00 AM"); shares one Lock and
+    # Exit radio-button pair with auto_restart_time -- if both are set, the latter
+    # wins (applied last, matching builtin_settings.toml's order and IBC itself).
+    auto_logoff_time: str | None = None  # None = leave the existing setting unchanged
+
+    # TWS-only scheduled actions (Gateway has no equivalent), consumed by
+    # schedule.py/control_loop.py -- not GUI settings written to TWS.
+    # ColdRestartTime "HH:MM" 24-hour local time; every Sunday, close TWS tidily and
+    # relaunch with a full fresh login (weekly reauth, Sunday 01:00 US/Eastern token
+    # invalidation).
+    cold_restart_time: str | None = None  # None = disable
+    # ClosedownAt "HH:MM" (daily) or "<Weekday> HH:MM" (weekly); close TWS tidily,
+    # no relaunch. If both cold_restart_time and closedown_at are set, whichever
+    # occurs first wins.
+    closedown_at: str | None = None  # None = disable
 
     # Credentials -- environment-variable-only. Field name matches the real env var
     # (IBCONTROLLER_USERID) directly -- no alias/mapping needed.
     userid: Secret = ts.secret(default=None)
     password: Secret = ts.secret(default=None)
 
-    # Logging and tracing -- log_dir is always resolved (where ibcontroller's own log
-    # file lives); trace files land alongside it when trace_enabled is on.
+    # Logging and tracing -- log_dir is the one path ibcontroller's own log/trace files
+    # land in, always resolved: never None. Defaults to the platformdirs log dir
+    # (app_dirs.resolve_app_dirs, honoring IBCONTROLLER_APP_DIR's docker mode); a
+    # caller-supplied `load_config(log_dir=...)` is only a lower-priority default
+    # (DictLoader), so the config file's `log_dir` and the IBCONTROLLER_LOG_DIR env var
+    # genuinely override it. (2026-09-12: this field used to be `str | None` with
+    # `load_config`'s platform-dirs parameter force-overwriting whatever TOML set --
+    # pyrefly correctly refused `Path(config.log_dir)` in launcher.py:602, and a config
+    # file `log_dir` silently never took effect.) See load_config for the loader order.
     trace_enabled: bool = False
-    log_dir: str | None = None
+    log_dir: str = ts.option(factory=lambda: str(resolve_app_dirs()[1]))
     # Logging level for ibcontroller's own log file (not the raw wire trace).
     # Was previously unannotated (`log_level = logging.INFO`), which meant attrs
     # never turned it into a real field at all -- not configurable, silently fixed
@@ -213,7 +254,7 @@ class Config:
 
 def load_config(
     config_dir: str | Path,
-    log_dir: str | Path,
+    log_dir: str | Path | None = None,
     toml_path: str | Path | None = None,
     dotenv_path: str | Path | None = None,
 ) -> Config:
@@ -251,7 +292,16 @@ def load_config(
     # returning the top-level dict, so it silently discards the whole file --
     # confirmed live.
     CONF_FORMATS = {"*.toml": TomlFormat(None)}
-    CONF_LOADERS: list[FileLoader | EnvLoader] = [
+    # A caller-supplied log_dir (platform dirs in production, a tmp dir in tests) is
+    # a low-priority DEFAULT -- first in the loader list, so every later loader wins
+    # over it and `log_dir` in the config file (or IBCONTROLLER_LOG_DIR) genuinely
+    # takes effect. The Config field's own factory default (resolve_app_dirs) is the
+    # even-lower built-in base when neither param nor file/env set it.
+    _log_dir_default: dict[str, str] = {}
+    if log_dir is not None:
+        _log_dir_default["log_dir"] = str(log_dir)
+    CONF_LOADERS: list[FileLoader | EnvLoader | DictLoader] = [
+        DictLoader(_log_dir_default),
         ts.loaders.FileLoader(
             files=[_config_file],
             # pyrefly: ignore [bad-argument-type]
@@ -274,9 +324,6 @@ def load_config(
         )
     except TsError as exc:
         raise ConfigError(str(exc)) from exc
-
-    if log_dir is not None:
-        _config.log_dir = str(log_dir)
 
     if (
         _config.userid.get_secret_value() is None

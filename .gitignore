@@ -14,3 +14,4 @@ poc/*
 /ibcontroller.toml
 ibcontroller/*.jar
 .env
+.install4j/*

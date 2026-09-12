@@ -1,0 +1,151 @@
+# Example ibkr_settings.toml -- declarative Gateway/TWS Global Configuration settings,
+# applied once at instance startup by settings.py's apply_settings_from_file, layered
+# on top of the bundled built-in entries (data/builtin_settings.toml -- read_only_api/
+# auto_restart_time, applied from ibcontroller.toml/env alone, no file needed).
+#
+# THIS FILE is for everything else: account-specific/optional settings (like the
+# api_precautions_* toggles below), or overriding a built-in entry itself. Not
+# auto-loaded: point Config.settings_file (TOML: [settings] file = "...", or env
+# IBCONTROLLER_SETTINGS_FILE) at a real copy of this file to opt in. None (the default)
+# applies the built-ins only.
+#
+# Paper and live get separate files, pointed to by whoever launches each instance --
+# there is no baked-in trading-mode branching here, by design (CLAUDE.md, 2026-09-05).
+#
+# --- Overriding a built-in entry ------------------------------------------------------
+# If a future TWS/Gateway release moves a built-in control (a different tree_path or
+# label), add an entry here with the SAME value_from_config as the built-in you're
+# replacing -- settings.py's merge rule matches on that field and uses your entry
+# instead of the bundled one, rather than applying both. Example (commented out --
+# read_only_api's real navigation hasn't actually changed; this just shows the shape):
+#
+# [[settings]]
+# tree_path = "API/Settings/Read-Only"    # a hypothetical new location
+# action = "toggle"
+# label = "Read-Only API Access"          # a hypothetical new label
+# value_from_config = "read_only_api"     # same key as the built-in -- this replaces it
+#
+# Each [[settings]] entry:
+#   tree_path         -- Global Configuration's own JTree path, e.g. "API/Settings"
+#   action             -- "toggle" (a checkbox/radio), "type_text", "type_text_near_label"
+#                          (a field with no accessible name, found by position -- see
+#                          field_index below), or "auto_restart_time" (a composite
+#                          action, see its own section below -- takes no label/label_ref
+#                          at all).
+#   label / label_ref   -- the widget's accessible label, either literal ("label") or a
+#                          name resolved through labels.json's settings.controls map
+#                          ("label_ref") -- use label_ref for anything already named
+#                          there (version-proofed against IBKR renaming it), label for
+#                          anything not worth naming yet. Not used by "auto_restart_time".
+#   value / value_from_config -- the wanted value, either literal ("value") or an
+#                          attribute name looked up on the already-loaded Config at
+#                          apply time ("value_from_config") -- this is how
+#                          Config.read_only_api flows down to the real Gateway
+#                          setting without a second, redundant declaration. A value
+#                          that resolves to None (either source) skips the entry
+#                          entirely -- "leave unchanged", matching IBC's own "" ==
+#                          leave-unchanged semantics.
+#
+#                          IMPORTANT: value_from_config only works for the fixed,
+#                          closed set of Config fields settings.py already knows about
+#                          (today: read_only_api, auto_restart_time) -- the override
+#                          case above is the only reason to use it here. Config's own
+#                          schema is closed (an unknown key in ibcontroller.toml itself
+#                          fails at startup -- see ibcontroller.toml.example), so
+#                          value_from_config can never be pointed at a new, made-up
+#                          field just by editing this file. Naming anything else here
+#                          logs a warning at load time and is silently skipped forever
+#                          at apply time -- never fatal, but never applies either. For
+#                          any setting that isn't one of the two above (like the
+#                          api_precautions_* entries below), use a literal "value".
+#   field_index         -- only used by "type_text_near_label"; which text field (by
+#                          position, 0-based) within the container below the matched
+#                          label. Defaults to 0.
+#
+# Known gap, not urgent (2026-09-06): some Global Configuration screens use dropdown
+# (JComboBox) controls -- not supported by any action here yet. Nothing declared below
+# needs one; revisit if a real deployment does.
+
+# Note: Read-Only API (API/Settings) and the Auto Restart time (Lock and Exit) are now
+# built-in (data/builtin_settings.toml) -- set read_only_api/auto_restart_time in
+# ibcontroller.toml directly, nothing needed here unless you're overriding their
+# navigation (see above). This file starts with everything else.
+
+# --- API precautions (API/Precautions) ------------------------------------------------
+# Live-checked against a real paper Gateway 10.50 account, 2026-09-06 -- NOT identical
+# to IBC's own ConfigureApiPrecautionsTask.java list (see labels.py's own docstring for
+# the full finding). Two real corrections from that live check:
+#   - api_precautions_bypass_us_stocks_market_data_in_shares is NOT a real control on
+#     this account/build at all (raises ElementNotFoundError if declared) -- dropped
+#     here. Likely account/market-data-entitlement gated, not a stale label; a
+#     different account could plausibly have it.
+#   - api_precautions_bypass_route_marketable_to_bbo exists on the real panel but isn't
+#     in IBC's own list -- added below, set to false (disabled) by default per the
+#     user's own instruction, everything else enabled.
+# All 8 entries below are live-confirmed: each one actually landed (selected=True/False
+# read back via a real dump) before Apply was clicked to commit them.
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_us_stocks_market_data_in_shares"
+# value = true
+# Commented out, not dropped from labels.json: confirmed live 2026-09-06 that this
+# control does not exist on this paper account/Gateway 10.50 build at all (raises
+# ElementNotFoundError if declared active) -- likely market-data-entitlement gated, not
+# a stale label. A different account/permission set could plausibly have it; uncomment
+# and live-test again if you actually see this checkbox in your own Configuration dialog.
+
+[[settings]]
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_order_precautions"
+value = true
+
+[[settings]]
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_bond_warning"
+value = true
+
+[[settings]]
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_negative_yield_to_worst"
+value = true
+
+[[settings]]
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_called_bond_warning"
+value = true
+
+[[settings]]
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_same_action_pair_trade"
+value = true
+
+[[settings]]
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_price_based_volatility"
+value = true
+
+[[settings]]
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_redirect_order_warning"
+value = true
+
+[[settings]]
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_no_overfill_protection"
+value = true
+
+[[settings]]
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_route_marketable_to_bbo"
+value = false

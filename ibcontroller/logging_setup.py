@@ -1,15 +1,16 @@
 """Shared logging configuration.
 
-**File handlers run on listener threads, not the caller's, since 2026-09-08.**
-Both `configure_logging`'s app-log file handler and `configure_trace`'s trace
-handlers attach to their loggers as `logging.handlers.QueueHandler`s, with the
-real `FileHandler`s owned by per-stream `QueueListener` threads. This is the
-stdlib's canonical answer to "don't block the event loop on disk I/O": a
-coroutine's `logger.info(...)`/`logger.debug(...)` is a synchronous
-`queue.put()`; the file write happens on the listener thread. (There is no
-`asyncio` logging handler in the stdlib -- `QueueHandler`/`QueueListener` is the
-documented replacement, and it is what `dispatch.py`'s trace path now relies on
-to keep its per-command/per-event writes off the event loop.) The console
+**File handlers run on listener threads, not the caller's.** `configure_logging`'s
+app-log file handler, `configure_trace`'s trace handlers, and
+`configure_gateway_stdout`'s launched-process stdout handler all attach to their
+loggers as `logging.handlers.QueueHandler`s, with the real `FileHandler`s owned by
+per-stream `QueueListener` threads. This is the stdlib's canonical answer to
+"don't block the event loop on disk I/O": a coroutine's
+`logger.info(...)`/`logger.debug(...)` is a synchronous `queue.put()`; the file
+write happens on the listener thread. (There is no `asyncio` logging handler in
+the stdlib -- `QueueHandler`/`QueueListener` is the documented replacement, and
+it is what `dispatch.py`'s trace path and `launcher.py`'s stdout-drain both rely
+on to keep their per-line writes off the event loop.) The console
 `StreamHandler` deliberately stays attached directly (synchronous): a tty write
 is the cheap case, and keeping it sync means console output can't be lost in a
 dying process. `stop_logging()` drains and joins the listener threads; call it
@@ -34,11 +35,12 @@ import queue
 from pathlib import Path
 
 _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
-# A trace file is NDJSON -- every line is exactly one JSON object. The default
-# `_FORMAT` (asctime/levelname/name prefix) would corrupt that, so trace
-# FileHandlers use a message-only formatter; the FileHandler's own terminator
+# No timestamp/level/name prefix -- for streams where each line already carries
+# its own content and must not be altered: trace files (NDJSON, one line = one
+# JSON object) and the launched process's own raw stdout passthrough (already
+# Gateway/TWS's own formatted log output). The FileHandler's own terminator
 # supplies the trailing newline.
-_TRACE_FORMAT = "%(message)s"
+_MESSAGE_ONLY_FORMAT = "%(message)s"
 # When trace is disabled the loggers are still created (so `dispatch.py`'s
 # `isEnabledFor(DEBUG)` gate is false even if a stale Dispatcher references
 # them) but set above CRITICAL with no handlers.
@@ -46,10 +48,12 @@ _TRACE_LEVEL_DISABLED = logging.CRITICAL + 1
 
 # Every live QueueListener, keyed by owner so reconfiguration and shutdown can
 # find exactly the right ones: "app" for the `ibcontroller` logger's file
-# handler, f"trace:{instance}" for one instance's two trace streams. Keys exist
-# because `configure_logging` and `configure_trace` are called independently
-# (launch_instance calls both, back to back); stopping a reconfiguring owner's
-# *own* previous listeners must not stop the other owner's.
+# handler, f"trace:{instance}" for one instance's two trace streams,
+# f"stdout:{instance}" for one instance's launched-process stdout passthrough.
+# Keys exist because `configure_logging`/`configure_trace`/
+# `configure_gateway_stdout` are called independently (launch_instance calls
+# all three, back to back); stopping a reconfiguring owner's *own* previous
+# listeners must not stop another owner's.
 _active_listeners: dict[str, list[logging.handlers.QueueListener]] = {}
 
 
@@ -200,11 +204,48 @@ def configure_trace(
     event_logger.setLevel(logging.DEBUG)
     cmd_logger.addHandler(
         _queued_file_handler(
-            path / f"cmd-{instance}.jsonl", key=key, mode="w", fmt=_TRACE_FORMAT
+            path / f"cmd-{instance}.jsonl", key=key, mode="w", fmt=_MESSAGE_ONLY_FORMAT
         )
     )
     event_logger.addHandler(
         _queued_file_handler(
-            path / f"events-{instance}.jsonl", key=key, mode="w", fmt=_TRACE_FORMAT
+            path / f"events-{instance}.jsonl",
+            key=key,
+            mode="w",
+            fmt=_MESSAGE_ONLY_FORMAT,
         )
     )
+
+
+def configure_gateway_stdout(instance: str, log_dir: str | Path) -> logging.Logger:
+    """Configures one instance's queued logger for the launched process's raw
+    stdout (Gateway/TWS's own console/log4j output) -- `gateway-{instance}.log`
+    under `log_dir`. Appended across the process's whole life (unlike
+    `configure_trace`'s per-session truncate: a restarted process should keep
+    adding to the same file, not lose the prior run's lines). Message-only
+    formatter, since each line is already Gateway/TWS's own formatted output;
+    behind the same QueueHandler/QueueListener pattern as `configure_logging`/
+    `configure_trace`, so a caller feeding lines into the returned logger never
+    blocks on the write.
+
+    Safe to call more than once for the same instance -- previous listeners for
+    that instance are stopped first, matching `configure_trace`'s own contract.
+    """
+    key = f"stdout:{instance}"
+    _stop_listeners(key)
+    logger = logging.getLogger(f"ibcontroller.stdout.{instance}")
+    logger.handlers = []
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+
+    path = Path(log_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    logger.addHandler(
+        _queued_file_handler(
+            path / f"gateway-{instance}.log",
+            key=key,
+            mode="a",
+            fmt=_MESSAGE_ONLY_FORMAT,
+        )
+    )
+    return logger

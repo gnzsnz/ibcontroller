@@ -35,6 +35,7 @@ dependencies = [
     "platformdirs>=4.11.7",
     "typer>=0.15.1",
     "typed-settings",
+    "anyio>=4.15.1",
 ]
 
 [project.scripts]

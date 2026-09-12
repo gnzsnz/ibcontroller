@@ -1,0 +1,80 @@
+{
+  "login": {
+    "gateway_titles": ["IBKR Gateway", "IB Gateway", "Interactive Brokers Gateway"],
+    "tws_titles": ["New Login", "Login"],
+    "login_buttons": ["Log In", "Paper Log In", "Login"],
+    "api_type_ib_api": "IB API",
+    "api_type_fix": "FIX CTCI",
+    "trading_mode_live": "Live Trading",
+    "trading_mode_paper": "Paper Trading",
+    "username_field": "Username",
+    "password_field": "Password",
+    "starting_application_title": "Starting application...",
+    "tws_main_window_menu_item": "File/Lock Application"
+  },
+  "second_factor_auth": {
+    "title": "Second Factor Authentication"
+  },
+  "existing_session": {
+    "title": "Existing session detected",
+    "continue_buttons": ["OK", "Continue Login", "Reconnect This Session"],
+    "cancel_buttons": ["Cancel", "Exit Application"]
+  },
+  "accept_incoming_connection": {
+    "title": "Accept incoming connection",
+    "accept_buttons": ["OK", "Yes"],
+    "reject_buttons": ["No"]
+  },
+  "login_failed": {
+    "title": "Login failed",
+    "dismiss_button": "OK"
+  },
+  "dismiss_rules": [
+    {
+      "name": "non_brokerage_account",
+      "match_text": "This is not a brokerage account",
+      "click": "I understand and accept"
+    },
+    {
+      "name": "auto_restart_confirmation",
+      "match_text": "trading platform restart automatically",
+      "click": "OK"
+    }
+  ],
+  "too_many_failed_login_attempts": {
+    "message_prefix": "Too many failed login attempts",
+    "dismiss_button": "OK"
+  },
+  "shutdown": {
+    "gateway_menu_path": "File/Close",
+    "tws_menu_path": "File/Exit"
+  },
+  "settings": {
+    "gateway_menu_path": "Configure/Settings",
+    "tws_menu_path": "File/Global Configuration...",
+    "dialog_title_marker": "Configuration",
+    "apply_button": "Apply",
+    "cancel_button": "Cancel",
+    "ok_button": "OK",
+    "splash_title_marker": "Starting application...",
+    "controls": {
+      "read_only_api": "Read-Only API",
+      "api_precautions_bypass_order_precautions": "Bypass Order Precautions for API Orders",
+      "api_precautions_bypass_bond_warning": "Bypass Bond warning for API Orders.",
+      "api_precautions_bypass_negative_yield_to_worst": "Bypass negative yield to worst confirmation for API Orders.",
+      "api_precautions_bypass_called_bond_warning": "Bypass Called Bond warning for API Orders",
+      "api_precautions_bypass_same_action_pair_trade": "Bypass \"same action pair trade\" warning for API orders.",
+      "api_precautions_bypass_price_based_volatility": "Bypass price-based volatility risk warning for API Orders.",
+      "api_precautions_bypass_us_stocks_market_data_in_shares": "Bypass US Stocks market data in shares warning for API Orders",
+      "api_precautions_bypass_redirect_order_warning": "Bypass Redirect Order warning for Stock API Orders",
+      "api_precautions_bypass_no_overfill_protection": "Bypass No Overfill Protection precaution for destinations where implied natively.",
+      "api_precautions_bypass_route_marketable_to_bbo": "Bypass Route Marketable to BBO warning for API orders.",
+      "auto_logoff_time_label": "Set Auto Log Off Time (HH:MM)",
+      "auto_restart_time_label": "Set Auto Restart Time (HH:MM)",
+      "auto_logoff_radio": "Auto logoff",
+      "auto_restart_radio": "Auto restart",
+      "am_radio": "AM",
+      "pm_radio": "PM"
+    }
+  }
+}

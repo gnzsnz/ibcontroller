@@ -1,0 +1,106 @@
+# Built-in declarative settings -- always loaded (settings.load_builtin_settings_file),
+# always applied (control_loop._apply_declarative_settings), regardless of whether
+# Config.settings_file is set. Each entry below only actually fires when its own
+# value_from_config resolves to something other than None (settings.py's own
+# _resolve_value/skip-on-None rule) -- so this file is a safe no-op on any install
+# that hasn't set the matching Config field.
+#
+# Overriding a built-in entry: if a future TWS/Gateway release moves a control (a
+# different tree_path/label, say), add an entry to your own ibkr_settings.toml with
+# the SAME value_from_config as the built-in you're replacing -- settings.py's merge
+# rule matches on that field and uses your entry instead of this one, rather than
+# applying both. See ibkr_settings.toml.example for a worked override example.
+#
+# See that same file for the entry-field reference (tree_path/action/label/
+# label_ref/value/value_from_config/field_index) -- not repeated here.
+
+# auto_logoff_time is applied BEFORE auto_restart_time -- both write the same
+# Lock and Exit radio-button pair, so if a deployment sets both fields, the
+# last one applied wins the shared radio group. Keeping auto_logoff_time
+# first here makes auto_restart_time win when both are set, matching IBC's
+# own stated precedence ("if values are supplied for both, only the
+# auto-restart time is set"). Do not reorder these two entries.
+[[settings]]
+tree_path = "Lock and Exit"
+action = "auto_logoff_time"
+value_from_config = "auto_logoff_time"
+
+[[settings]]
+tree_path = "Lock and Exit"
+action = "auto_restart_time"
+value_from_config = "auto_restart_time"
+
+[[settings]]
+tree_path = "API/Settings"
+action = "toggle"
+label_ref = "read_only_api"
+value_from_config = "read_only_api"
+
+# Note: unlike read_only_api/auto_restart_time above, api_precautions_* has no
+# backing Config field -- these are literal-value, account-specific opt-ins
+# (see ibkr_settings.toml.example, the actual place to enable them). Fixed
+# 2026-09-12 (issue #1): these used to say `value_from_config =
+# "api_precautions_..."`, which raises `SettingsError: Config has no field
+# named ...` the moment anyone uncommented one, since Config never had (or
+# was meant to have) matching fields for these.
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_order_precautions"
+# value = true
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_bond_warning"
+# value = true
+
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_negative_yield_to_worst"
+# value = true
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_called_bond_warning"
+# value = true
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_same_action_pair_trade"
+# value = true
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_price_based_volatility"
+# value = true
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_us_stocks_market_data_in_shares"
+# value = true
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_redirect_order_warning"
+# value = true
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_no_overfill_protection"
+# value = true
+
+# [[settings]]
+# tree_path = "API/Precautions"
+# action = "toggle"
+# label_ref = "api_precautions_bypass_route_marketable_to_bbo"
+# value = false

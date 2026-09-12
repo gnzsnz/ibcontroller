@@ -1,0 +1,139 @@
+# ibcontroller configuration file -- flat, no [section] headers.
+#
+# Precedence (highest to lowest):
+#   1. Environment variables (override everything)
+#   2. This config file
+#   3. Built-in defaults
+#
+# Credentials are environment-variable-only and must never appear in this file --
+# ibcontroller.config.load_config() refuses to start if it finds one here. They use a
+# single pair regardless of trading_mode below (the mode says which account to
+# authenticate as; it does not select different credential variables):
+#   IBCONTROLLER_USERID     / IBCONTROLLER_PASSWORD
+# Each also accepts a _FILE-suffixed variant (e.g. IBCONTROLLER_PASSWORD_FILE=/run/secrets/pass)
+# that reads the value from a file instead -- Docker/Compose secrets, not the env var itself.
+#
+# A .env file also works, via `ibcontroller run --dotenv <path>` -- it only fills in
+# environment variables that aren't already set (python-dotenv, override=False), so it's a
+# convenience for populating the environment layer above, not a fourth layer of its own.
+#
+# This file is copied here by `ibcontroller init` (or automatically by `ibcontroller run`
+# the first time it's missing) with every key commented out below -- as shipped, it
+# changes nothing versus built-in defaults. Only IBCONTROLLER_USERID/IBCONTROLLER_PASSWORD
+# are actually required to run -- everything else here has a safe default or is
+# auto-detected from the real install.
+#
+# IMPORTANT: this schema is closed. Every key here must already be a real field in
+# ibcontroller/config.py -- an unknown key is rejected at startup (a clean error
+# message + non-zero exit, not silently ignored, not a crash-with-traceback). You
+# cannot add a new TWS/Gateway-settings toggle by just adding a key here; that
+# always needs a config.py code change first (a new Config field), plus adding it
+# to settings.py's own allow-list if it's meant to drive a declarative setting via
+# "value_from_config" -- see ibkr_settings.toml.example.
+
+# Socket/instance name (env: IBCONTROLLER_INSTANCE). Optional: when unset,
+# defaults to "{program}-{trading_mode}" (e.g. "gateway-paper").
+# instance = "dev"
+
+# "gateway" or "tws" (env: IBCONTROLLER_PROGRAM)
+# Default "gateway"
+# program = "gateway"
+
+# Installed TWS/Gateway version, e.g. "10.50" (env: IBCONTROLLER_TWS_VERSION). Omit this
+# key (the default) to auto-detect it from tws_path -- if more than one version is
+# installed, the greatest is picked (optionally narrowed by tws_channel below); set this
+# explicitly to pin one instead.
+# tws_version = "10.50"
+
+# Which update channel to prefer when auto-detecting tws_version -- "stable" or "latest"
+# (env: IBCONTROLLER_TWS_CHANNEL), as labeled by the install itself
+# (.install4j/i4jparams.conf). Ignored when tws_version is set explicitly.
+# Default "stable"
+# tws_channel = "stable"
+
+# Override the install path launcher.py would otherwise infer (env: IBCONTROLLER_TWS_PATH)
+# tws_path = ""
+
+# TWS/Gateway is "live" or "paper" -- defaults to "paper" (the safe, non-monetary mode)
+# when unset (env: IBCONTROLLER_TRADING_MODE)
+# Default "paper"
+# trading_mode = "paper"
+
+# Which ibkr_settings.toml to apply at startup (settings.py's own
+# apply_settings_from_file) -- see ibkr_settings.toml.example. Omit this key (the
+# default) to apply nothing declaratively -- there is no bundled default keyed by
+# trading_mode; paper and live get separate files, named explicitly here, per instance
+# (env: IBCONTROLLER_SETTINGS_FILE)
+# file = "ibkr_settings.toml"
+
+# Where ibcontroller's own log and trace files live (env: IBCONTROLLER_LOG_DIR).
+# Optional: when unset, defaults to the platformdirs user-log dir (or
+# $IBCONTROLLER_APP_DIR/log in docker mode). Every instance's files (log, trace,
+# gateway stdout) land flat in this one directory.
+# log_dir = ""
+
+# IBC: ReadOnlyLogin -- TWS only (IBC disables it on Gateway); NOT YET WIRED to any real
+# behavior in ibcontroller (loaded, but nothing acts on it yet -- see TODO.md).
+# read_only_login = false
+
+# IBC: ReadOnlyApi -- true/false sets it
+# env: IBCONTROLLER_READ_ONLY_API)
+# Default "false"
+# read_only_api = false
+
+# IBC: ExistingSessionDetectedAction -- how ibcontroller itself reacts to Gateway's
+# "existing session detected" dialog: manual/primary/primaryoverride/secondary
+# (env: IBCONTROLLER_EXISTING_SESSION_ACTION)
+# existing_session_action = "manual"
+
+# IBC: AcceptIncomingConnectionAction -- how ibcontroller reacts to TWS/Gateway's
+# "Accept incoming connection" dialog, shown when an API client connects.
+# If set to 'accept', ibcontroller automatically accepts incoming API connection
+# dialogs. If set to 'reject', ibcontroller automatically rejects incoming API
+# connection dialogs. If set to 'manual', the user must decide whether to accept
+# or reject incoming API connection dialogs. The default is 'manual'.
+# (env: IBCONTROLLER_ACCEPT_INCOMING_CONNECTIONS)
+# accept_incoming_connections = "manual"
+
+# --- Login/2FA timeout and retry settings -- ibcontroller's own policy, not written to
+# --- Gateway/TWS itself (though second_factor_authentication_timeout mirrors IBKR's
+# --- real external 2FA window).
+# IBC: LoginDialogDisplayTimeout, default 60
+# login_dialog_display_timeout = 60.0
+# IBC: SecondFactorAuthenticationTimeout, default 180
+# second_factor_authentication_timeout = 180.0
+# IBC: ReloginAfterSecondFactorAuthenticationTimeout, default false
+# relogin_after_2fa_timeout = false
+# IBC: SecondFactorAuthenticationExitInterval, default 60
+# second_factor_authentication_exit_interval = 60.0
+
+# IBC: AutoRestartTime -- same name, same "hh:mm AM/PM" format (e.g. "08:00 AM"), a
+# single space between the two parts. Drives settings.py's "auto_restart_time" action
+# (see ibkr_settings.toml.example) -- omit this key (the default) to leave Gateway's
+# existing Auto Restart setting unchanged (env: IBCONTROLLER_AUTO_RESTART_TIME)
+# auto_restart_time = "08:00 AM"
+
+# IBC: AutoLogoffTime -- same "hh:mm AM/PM" format, same Lock and Exit control as
+# auto_restart_time above (a shared radio-button pair: "Auto restart"/"Auto logoff").
+# If you set BOTH keys, auto_restart_time wins (builtin_settings.toml applies it
+# last, matching IBC's own precedence) -- set only one of the two in practice.
+# Omit this key (the default) to leave the existing setting unchanged
+# (env: IBCONTROLLER_AUTO_LOGOFF_TIME)
+# auto_logoff_time = "08:00 AM"
+
+# --- TWS only (Gateway has no equivalent; set while program="gateway" is logged
+# --- and ignored). Both are ibcontroller's own scheduled actions, not GUI settings
+# --- written to TWS -- see control_loop.py. If both are set, whichever occurs
+# --- first wins.
+# IBC: ColdRestartTime -- "HH:MM", 24-hour, local time. Every Sunday at this time,
+# ibcontroller closes TWS tidily and relaunches with a full fresh login, forcing
+# the weekly reauth IBKR requires around Sunday 01:00 US/Eastern token invalidation
+# (env: IBCONTROLLER_COLD_RESTART_TIME)
+# cold_restart_time = "07:05"
+
+# IBC: ClosedownAt -- "HH:MM" (every day) or "<Weekday> HH:MM" (one day a week,
+# Weekday a full English name, Monday..Sunday). At this time, ibcontroller closes
+# TWS tidily with no relaunch -- you're responsible for restarting it yourself
+# (env: IBCONTROLLER_CLOSEDOWN_AT)
+# closedown_at = "22:00"
+# closedown_at = "Friday 22:00"
