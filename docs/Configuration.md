@@ -28,34 +28,34 @@ accepts a `_FILE`-suffixed variant that reads the value from a file instead
 
 Settings that drive the behaviour of `ibcontroller` itself.
 
-| Config field | TOML key | Env var | Description | Default |
-| --- | --- | --- | --- | --- |
-| `instance` | `instance` | `IBCONTROLLER_INSTANCE` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) |
-| `program` | `program` | `IBCONTROLLER_PROGRAM` | `"gateway"` or `"tws"` | `"gateway"` |
-| `tws_version` | `tws_version` | `IBCONTROLLER_TWS_VERSION` | Installed TWS/Gateway version, e.g. `"10.50"`. Omit to auto-detect from the real install (greatest version wins, narrowed by `tws_channel`) | `None` (auto-detected) |
-| `tws_channel` | `tws_channel` | `IBCONTROLLER_TWS_CHANNEL` | `"stable"`/`"latest"`; narrows auto-detection to installs carrying this update channel. Ignored when `tws_version` is set explicitly | `"stable"` |
-| `tws_path` | `tws_path` | `IBCONTROLLER_TWS_PATH` | Override the install-path inference | `None` |
-| `tws_settings_path` | `tws_settings_path` | `IBCONTROLLER_TWS_SETTINGS_PATH` | Where TWS/Gateway stores its own settings (not the install dir); per instance | `None` (per-instance default) |
-| `settings_file` | `settings_file` | `IBCONTROLLER_SETTINGS_FILE` | Extra declarative settings file, merged on top of the built-in settings -- see "Declarative settings" below | `None` |
-| `userid` | (rejected) | `IBCONTROLLER_USERID` | Login user id; environment-variable-only, never from the config file. Also accepts `IBCONTROLLER_USERID_FILE` | (required) |
-| `password` | (rejected) | `IBCONTROLLER_PASSWORD` | Login password; environment-variable-only, never from the config file. Also accepts `IBCONTROLLER_PASSWORD_FILE` | (required) |
-| `trace_enabled` | `trace_enabled` | `IBCONTROLLER_TRACE_ENABLED` | Verbose raw wire trace (`cmd-{instance}.jsonl` / `events-{instance}.jsonl` next to the log file) | `false` |
-| `log_dir` | (resolved) | `IBCONTROLLER_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default |
-| `log_level` | `log_level` | `IBCONTROLLER_LOG_LEVEL` | Logging level for ibcontroller's own log: `debug`/`info`/`warning`/`error` | `info` |
+| TOML key | Env var | Description | Default |
+| --- | --- | --- | --- |
+| `instance` | `IBCONTROLLER_INSTANCE` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) |
+| `program` | `IBCONTROLLER_PROGRAM` | `"gateway"` or `"tws"` | `"gateway"` |
+| `tws_version` | `IBCONTROLLER_TWS_VERSION` | Installed TWS/Gateway version, e.g. `"10.50"`. Omit to auto-detect from the real install (greatest version wins, narrowed by `tws_channel`) | `None` (auto-detected) |
+| `tws_channel` | `IBCONTROLLER_TWS_CHANNEL` | `"stable"`/`"latest"`; narrows auto-detection to installs carrying this update channel. Ignored when `tws_version` is set explicitly | `"stable"` |
+| `tws_path` | `IBCONTROLLER_TWS_PATH` | Override the install-path inference | `None` |
+| `tws_settings_path` | `IBCONTROLLER_TWS_SETTINGS_PATH` | Where TWS/Gateway stores its own settings (not the install dir); per instance | `None` (per-instance default) |
+| `settings_file` | `IBCONTROLLER_SETTINGS_FILE` | Extra declarative settings file, merged on top of the built-in settings -- see "Declarative settings" below | `None` |
+| (rejected) | `IBCONTROLLER_USERID` | Login user id; environment-variable-only, never from the config file. Also accepts `IBCONTROLLER_USERID_FILE` | (required) |
+| (rejected) | `IBCONTROLLER_PASSWORD` | Login password; environment-variable-only, never from the config file. Also accepts `IBCONTROLLER_PASSWORD_FILE` | (required) |
+| `trace_enabled` | `IBCONTROLLER_TRACE_ENABLED` | Verbose raw wire trace (`cmd-{instance}.jsonl` / `events-{instance}.jsonl` next to the log file) | `false` |
+| (resolved) | `IBCONTROLLER_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default |
+| `log_level` | `IBCONTROLLER_LOG_LEVEL` | Logging level for ibcontroller's own log: `debug`/`info`/`warning`/`error` | `info` |
 
 ## TWS/ibgateway specific settings
 
 Settings related to TWS/ibgateway.
 
-| Config field | TOML key | Env var | Description | Default |
-| --- | --- | --- | --- | --- |
-| `trading_mode` | `trading_mode` | `IBCONTROLLER_TRADING_MODE` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
-| `read_only_login` | `read_only_login` | `IBCONTROLLER_READ_ONLY_LOGIN` | TWS only. Loaded but not yet wired to any behavior -- reserved | `false` |
-| `read_only_api` | `read_only_api` | `IBCONTROLLER_READ_ONLY_API` | `true`/`false` sets it; omit to leave the existing setting unchanged. Applied automatically -- see "Declarative settings" | `None` (unchanged) |
-| `accept_incoming_connections` | `accept_incoming_connections` | `IBCONTROLLER_ACCEPT_INCOMING_CONNECTIONS` | How to handle incoming API connection dialogs -- see below | `"manual"` |
-| `existing_session_action` | `existing_session_action` | `IBCONTROLLER_EXISTING_SESSION_ACTION` | What to do when an existing session is detected -- see below | `"manual"` |
-| `auto_restart_time` | `auto_restart_time` | `IBCONTROLLER_AUTO_RESTART_TIME` | Daily auto-restart time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
-| `auto_logoff_time` | `auto_logoff_time` | `IBCONTROLLER_AUTO_LOGOFF_TIME` | Daily auto-logoff time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
+| TOML key | Env var | Description | Default |
+| --- | --- | --- | --- |
+| `trading_mode` | `IBCONTROLLER_TRADING_MODE` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
+| `read_only_login` | `IBCONTROLLER_READ_ONLY_LOGIN` | TWS only. Loaded but not yet wired to any behavior -- reserved | `false` |
+| `read_only_api` | `IBCONTROLLER_READ_ONLY_API` | `true`/`false` sets it; omit to leave the existing setting unchanged. Applied automatically -- see "Declarative settings" | `None` (unchanged) |
+| `accept_incoming_connections` | `IBCONTROLLER_ACCEPT_INCOMING_CONNECTIONS` | How to handle incoming API connection dialogs -- see below | `"manual"` |
+| `existing_session_action` | `IBCONTROLLER_EXISTING_SESSION_ACTION` | What to do when an existing session is detected -- see below | `"manual"` |
+| `auto_restart_time` | `IBCONTROLLER_AUTO_RESTART_TIME` | Daily auto-restart time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
+| `auto_logoff_time` | `IBCONTROLLER_AUTO_LOGOFF_TIME` | Daily auto-logoff time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
 
 ### Accept Incoming Connection
 
@@ -156,12 +156,12 @@ first wins.
 ibcontroller's own wait policy during login -- these are not written to
 TWS/Gateway itself.
 
-| Config field | TOML key | Env var | Description | Default |
-| --- | --- | --- | --- | --- |
-| `login_dialog_display_timeout` | `login_dialog_display_timeout` | `IBCONTROLLER_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog to appear | `60.0` |
-| `second_factor_authentication_timeout` | `second_factor_authentication_timeout` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_TIMEOUT` | The real 2FA budget in seconds, mirroring IBKR's own external limit | `180.0` |
-| `relogin_after_2fa_timeout` | `relogin_after_2fa_timeout` | `IBCONTROLLER_RELOGIN_AFTER_2FA_TIMEOUT` | Restart the login attempt if 2FA times out (instead of giving up) | `false` |
-| `second_factor_authentication_exit_interval` | `second_factor_authentication_exit_interval` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_EXIT_INTERVAL` | Bounds the wait after a timed-out 2FA when relogin is enabled | `60.0` |
+| TOML key | Env var | Description | Default |
+| --- | --- | --- | --- |
+| `login_dialog_display_timeout` | `IBCONTROLLER_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog to appear | `60.0` |
+| `second_factor_authentication_timeout` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_TIMEOUT` | The real 2FA budget in seconds, mirroring IBKR's own external limit | `180.0` |
+| `relogin_after_2fa_timeout` | `IBCONTROLLER_RELOGIN_AFTER_2FA_TIMEOUT` | Restart the login attempt if 2FA times out (instead of giving up) | `false` |
+| `second_factor_authentication_exit_interval` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_EXIT_INTERVAL` | Bounds the wait after a timed-out 2FA when relogin is enabled | `60.0` |
 
 ## Declarative settings
 
