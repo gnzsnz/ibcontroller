@@ -128,6 +128,17 @@ at once — `tws_channel = "stable"` picks `10.45`; leaving it unset picks `10.5
 greatest overall. The channel itself is read per-install from its own
 `.install4j/i4jparams.conf`, not guessed from the version number.
 
+TWS requests fall back to Gateway installs (gitea #25, ported from IBC's own
+`ibcstart.sh`): when `program = "tws"` and no TWS install matches — no
+`Trader Workstation *` directory at all, or none on the requested `tws_channel` — the
+Gateway installs (`IB Gateway *`) are used instead, launching the TWS front end
+(`jclient.LoginFrame`) from the Gateway jars. `tws_channel` still applies to the
+fallback pool strictly: a Gateway install on the *wrong* channel never satisfies a TWS
+request (that raises a clear error instead, naming `tws_channel`). The reverse
+(Gateway falling back to TWS installs) is deliberately not supported. Applies to a
+pinned `tws_version` too — a pinned version absent from TWS installs resolves against
+Gateway installs of the same version.
+
 #### Scheduled shutdown: `cold_restart_time` / `closedown_at`
 
 Unlike `read_only_api`/`auto_restart_time`/`auto_logoff_time` (real Global Configuration

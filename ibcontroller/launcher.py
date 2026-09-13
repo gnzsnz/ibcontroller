@@ -272,14 +272,15 @@ def _ensure_jts_ini(settings_dir: Path, *, is_gateway: bool) -> None:
         path.write_text("\n".join(lines) + "\n")
 
 
-def _program_path(
-    config: Config, os_name: str, tws_path: Path, tws_version: str
-) -> Path:
-    """`tws_version` is a plain parameter, not read from `config` -- the caller
-    (`build_launch_plan`) has already resolved it, whether pinned (`config.tws_version`)
-    or auto-detected (`_detect_tws_version`). Keeps this function pure/testable against
-    a plain string, same discipline as the rest of this module's pure half."""
-    program = config.program.lower()
+def _program_path(program: str, os_name: str, tws_path: Path, tws_version: str) -> Path:
+    """`program` and `tws_version` are plain parameters, not read from `config` --
+    the caller (`build_launch_plan`) has already resolved both, whether pinned
+    (`config.tws_version`) or auto-detected (`_detect_tws_version`), and a
+    fallback resolution (`_resolve_program_path`) needs to derive the *other*
+    program's path without building a second `Config`. Keeps this function
+    pure/testable against plain strings, same discipline as the rest of this
+    module's pure half."""
+    program = program.lower()
     if os_name == "macos":
         name = _MACOS_PROGRAM_NAMES[program]
         return tws_path / f"{name} {tws_version}"
@@ -288,15 +289,45 @@ def _program_path(
     return tws_path / tws_version
 
 
-def _list_version_candidates(
+def _resolve_program_path(
+    program: str, os_name: str, tws_path: Path, tws_version: str
+) -> tuple[Path, str]:
+    """Ports IBC's own `ibcstart.sh` fallback (the `if [[ ! -e "${program_path}/
+    jars" ]]` block at lines 263-266): a TWS request whose install has no
+    `jars/` directory resolves to the same-version Gateway install instead,
+    with the TWS entry class (`jclient.LoginFrame`) unchanged -- the Gateway
+    distribution's jars carry both entry classes (verified live, the
+    `jts4launch-*.jar` in a Gateway install ships `jclient/LoginFrame.class`
+    alongside `ibgateway/GWClient.class`).
+
+    Returns `(install_dir, resolved_program)` -- the second value is the
+    *actual* program of the resolved install (`"gateway"` when a TWS request
+    fell back), which the caller uses to pick the right `.vmoptions` file
+    (`ibgateway.vmoptions`, not `tws.vmoptions`, in a Gateway dir -- IBC's own
+    `alt_vmoptions_source`). Only the TWS->Gateway direction exists here,
+    per maintainer decision (2026-09-13, gitea #25); a Gateway request never
+    falls back to a TWS install.
+
+    Same `jars/` existence check IBC uses as its fallback trigger, not a
+    different one -- deliberately identical, so a version that exists in TWS
+    form wins even when a same-named Gateway install also exists."""
+    requested_program = program.lower()
+    program_path = _program_path(requested_program, os_name, tws_path, tws_version)
+    if requested_program == "tws" and not (program_path / "jars").is_dir():
+        return _program_path("gateway", os_name, tws_path, tws_version), "gateway"
+    return program_path, requested_program
+
+
+def _scan_install_dirs(
     tws_path: Path, os_name: str, program: str
 ) -> list[tuple[str, Path]]:
-    """Every installed version found under `tws_path`, verified by a `jars/`
-    subdirectory -- the same check `_build_classpath` itself makes, so a candidate
-    this returns is guaranteed launchable. Per-OS layout matches `_program_path`
-    exactly. Returns `(version, program_path)` pairs, sorted by directory name for a
-    deterministic iteration order (not by version -- `_detect_tws_version` does that
-    numerically once it has the final candidate list)."""
+    """The per-program half of `_list_version_candidates`: `program`'s own tree
+    only -- TWS on macOS (`Trader Workstation *`) or Linux (top-level dirs
+    minus `ibgateway/`), Gateway on macOS (`IB Gateway *`) or Linux
+    (`ibgateway/`). `_list_version_candidates` calls this twice for a TWS
+    request (own tree, then the Gateway tree as fallback); splitting the scan
+    out keeps that function's own shape minimal rather than nesting a full
+    second scan beside it."""
     candidates: list[tuple[str, Path]] = []
     if os_name == "macos":
         name = _MACOS_PROGRAM_NAMES[program]
@@ -317,6 +348,31 @@ def _list_version_candidates(
                 and (entry / "jars").is_dir()
             ):
                 candidates.append((entry.name, entry))
+    return candidates
+
+
+def _list_version_candidates(
+    tws_path: Path, os_name: str, program: str
+) -> list[tuple[str, Path]]:
+    """Every installed version found under `tws_path`, verified by a `jars/`
+    subdirectory -- the same check `_build_classpath` itself makes, so a candidate
+    this returns is guaranteed launchable. Returns `(version, program_path)`
+    pairs, sorted by directory name per tree for a deterministic iteration order
+    (not by version -- `_detect_tws_version` does that numerically once it has
+    the final candidate list).
+
+    The TWS->Gateway fallback (gitea #25, 2026-09-13) lives here too, sharing
+    `_resolve_program_path`'s trigger: when a TWS request finds no TWS install at
+    all, the Gateway installs become the candidate pool (mirroring IBC's own
+    ibcstart.sh fallback). `tws_channel`'s filter is applied afterwards, in
+    `_detect_tws_version`, uniformly across whichever pool -- a channel mismatch
+    is a config error surfaced by that filter, never silently relaxed (maintainer
+    decision 2026-09-13)."""
+    candidates = _scan_install_dirs(tws_path, os_name, program)
+    if candidates:
+        return candidates
+    if program == "tws":
+        return _scan_install_dirs(tws_path, os_name, "gateway")
     return candidates
 
 
@@ -342,6 +398,25 @@ def _read_i4j_variable(install4j_dir: Path, name: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _candidates_for_channel(
+    tws_path: Path, os_name: str, program: str, channel: str | None
+) -> list[tuple[str, Path]]:
+    """`_list_version_candidates`'s output, filtered by `channel` -- separated so
+    `_detect_tws_version` can retry a TWS request against the Gateway pool after
+    the TWS pool comes up empty under the filter (gitea #25, live-caught
+    2026-09-13: a TWS install present but on the wrong channel must not short-
+    circuit the fallback -- `tws-latest` with only `Trader Workstation 10.45`
+    (stable) present fell back to nothing instead of `IB Gateway 10.50`)."""
+    candidates = _list_version_candidates(tws_path, os_name, program)
+    if channel is not None:
+        candidates = [
+            (version, path)
+            for version, path in candidates
+            if _read_i4j_variable(path / ".install4j", "channel") == channel
+        ]
+    return candidates
+
+
 def _detect_tws_version(
     tws_path: Path, os_name: str, program: str, channel: str | None
 ) -> str:
@@ -354,22 +429,23 @@ def _detect_tws_version(
     (channel=latest) at once, and `jars/` alone can't tell them apart.
 
     `channel`, if given, filters candidates by their own `_read_i4j_variable(...,
-    "channel")` first. Whatever's left after that (or the unfiltered list, if
-    `channel` is `None`) is resolved by picking the greatest version numerically --
-    per the user's own explicit instruction ("for latest should be easy because is
-    the 'greatest', for stable... the 'greatest with channel=stable'"), not an error:
-    unlike this project's usual "don't guess" default (Appendix D's rejected
-    timeout-guess fallback, `GatewayDialogHandler`'s "leave it for the user"), the
-    "greatest version" tie-break here was given directly by the user as the actual
-    intended semantics of "latest"/"stable", not a guess standing in for missing
-    information -- logged clearly either way so it's never a silent choice."""
-    candidates = _list_version_candidates(tws_path, os_name, program)
-    if channel is not None:
-        candidates = [
-            (version, path)
-            for version, path in candidates
-            if _read_i4j_variable(path / ".install4j", "channel") == channel
-        ]
+    "channel")` first. When the requested-program pool filters down to nothing, a
+    TWS request retries against the Gateway pool -- the TWS->Gateway fallback
+    (gitea #25): the filter still applies uniformly there, so a channel mismatch
+    is still an error (a Gateway install on the *wrong* channel never satisfies a
+    TWS request), but an empty TWS pool is not -- that's exactly when the fallback
+    should engage. Whatever's left (or the unfiltered list, if `channel` is `None`)
+    is resolved by picking the greatest version numerically -- per the user's own
+    explicit instruction ("for latest should be easy because is the 'greatest', for
+    stable... the 'greatest with channel=stable'"), not an error: unlike this
+    project's usual "don't guess" default (Appendix D's rejected timeout-guess
+    fallback, `GatewayDialogHandler`'s "leave it for the user"), the "greatest
+    version" tie-break here was given directly by the user as the actual intended
+    semantics of "latest"/"stable", not a guess standing in for missing information
+    -- logged clearly either way so it's never a silent choice."""
+    candidates = _candidates_for_channel(tws_path, os_name, program, channel)
+    if not candidates and program == "tws":
+        candidates = _candidates_for_channel(tws_path, os_name, "gateway", channel)
 
     if not candidates:
         where = f"channel={channel!r} under {tws_path}" if channel else str(tws_path)
@@ -571,14 +647,28 @@ def build_launch_plan(
     tws_version = config.tws_version or _detect_tws_version(
         tws_path, os_name, config.program.lower(), config.tws_channel
     )
-    program_path = _program_path(config, os_name, tws_path, tws_version)
+    program_path, resolved_program = _resolve_program_path(
+        config.program.lower(), os_name, tws_path, tws_version
+    )
+    if resolved_program != config.program.lower():
+        logger.warning(
+            "IBController > no %s installation found (tws_version=%s, tws_path=%s) -- "
+            "falling back to the %s installation %s and running it as %s "
+            "(IBC's own ibcstart.sh fallback)",
+            config.program,
+            tws_version,
+            tws_path,
+            resolved_program,
+            program_path,
+            config.program,
+        )
     install4j_dir = program_path / ".install4j"
     classpath = _build_classpath(program_path, install4j_dir, Path(agent_jar))
     java_bin = _find_java_bin(os_name, install4j_dir, program_path)
 
     program = config.program.lower()
     vmoptions_file = program_path / (
-        "ibgateway.vmoptions" if program == "gateway" else "tws.vmoptions"
+        "ibgateway.vmoptions" if resolved_program == "gateway" else "tws.vmoptions"
     )
     vm_options = _read_vmoptions_file(vmoptions_file)
     vm_options.extend(_INSTALL4J_DPROPS_STATIC)

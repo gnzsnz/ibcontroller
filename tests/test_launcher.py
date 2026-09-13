@@ -39,6 +39,7 @@ from ibcontroller.launcher import (
     _read_jxbrowser_key,
     _read_macos_vmoptions,
     _read_vmoptions_file,
+    _resolve_program_path,
     _resolve_tws_path,
     _version_sort_key,
     _wait_for_ready,
@@ -179,23 +180,61 @@ def test_resolve_tws_path_explicit_override():
 
 
 def test_program_path_macos_gateway(tmp_path):
-    path = _program_path(_config(program="gateway"), "macos", tmp_path, "10.50")
+    path = _program_path("gateway", "macos", tmp_path, "10.50")
     assert path == tmp_path / "IB Gateway 10.50"
 
 
 def test_program_path_macos_tws(tmp_path):
-    path = _program_path(_config(program="tws"), "macos", tmp_path, "10.50")
+    path = _program_path("tws", "macos", tmp_path, "10.50")
     assert path == tmp_path / "Trader Workstation 10.50"
 
 
 def test_program_path_linux_gateway(tmp_path):
-    path = _program_path(_config(program="gateway"), "linux", tmp_path, "10.50")
+    path = _program_path("gateway", "linux", tmp_path, "10.50")
     assert path == tmp_path / "ibgateway" / "10.50"
 
 
 def test_program_path_linux_tws(tmp_path):
-    path = _program_path(_config(program="tws"), "linux", tmp_path, "10.50")
+    path = _program_path("tws", "linux", tmp_path, "10.50")
     assert path == tmp_path / "10.50"
+
+
+def test_resolve_program_path_macos_prefers_tws_install(tmp_path):
+    """TWS->Gateway fallback (gitea #25): a TWS request resolves to the TWS
+    install whenever its `jars/` exists -- IBC's own ibcstart.sh priority."""
+    _make_version_dir(tmp_path, "Trader Workstation 10.50")
+    _make_version_dir(tmp_path, "IB Gateway 10.50")
+    path, resolved = _resolve_program_path("tws", "macos", tmp_path, "10.50")
+    assert path == tmp_path / "Trader Workstation 10.50"
+    assert resolved == "tws"
+
+
+def test_resolve_program_path_macos_falls_back_to_gateway_install(tmp_path):
+    """No TWS install (no `jars/`), same-version Gateway install present -- the
+    request resolves to the Gateway install running as TWS (entry class stays
+    `jclient.LoginFrame`; this only resolves the install path). Same `jars/`
+    existence check as IBC's `if [[ ! -e .../jars ]]`."""
+    (tmp_path / "Trader Workstation 10.50").mkdir()  # exists, but no jars/
+    _make_version_dir(tmp_path, "IB Gateway 10.50")
+    path, resolved = _resolve_program_path("tws", "macos", tmp_path, "10.50")
+    assert path == tmp_path / "IB Gateway 10.50"
+    assert resolved == "gateway"
+
+
+def test_resolve_program_path_linux_tws_falls_back_to_ibgateway(tmp_path):
+    _make_version_dir(tmp_path / "ibgateway", "10.50")
+    path, resolved = _resolve_program_path("tws", "linux", tmp_path, "10.50")
+    assert path == tmp_path / "ibgateway" / "10.50"
+    assert resolved == "gateway"
+
+
+def test_resolve_program_path_gateway_never_falls_back_to_tws(tmp_path):
+    """Scope decision (2026-09-13, gitea #25): only TWS->Gateway exists. A Gateway
+    request returns the Gateway path even when a TWS install is present instead."""
+    _make_version_dir(tmp_path, "Trader Workstation 10.50")
+    path, resolved = _resolve_program_path("gateway", "macos", tmp_path, "10.50")
+    assert path == tmp_path / "IB Gateway 10.50"
+    assert resolved == "gateway"
 
 
 def test_build_classpath(tmp_path):
@@ -496,6 +535,31 @@ def test_list_version_candidates_linux_tws_excludes_ibgateway_dir(tmp_path):
     assert [version for version, _ in candidates] == ["10.45"]
 
 
+def test_list_version_candidates_macos_tws_prefers_tws_installs(tmp_path):
+    """The fallback only engages when *no* TWS install exists at all -- a TWS
+    install present alongside a Gateway one must win (IBC's priority, gitea #25)."""
+    _make_version_dir(tmp_path, "Trader Workstation 10.45")
+    _make_version_dir(tmp_path, "IB Gateway 10.50")
+    candidates = _list_version_candidates(tmp_path, "macos", "tws")
+    assert [version for version, _ in candidates] == ["10.45"]
+
+
+def test_list_version_candidates_macos_tws_falls_back_to_gateway_installs(tmp_path):
+    """No TWS install under the tree at all -- the Gateway installs become the
+    candidate pool for a TWS request (mirrors IBC's own fallback; `tws_channel`'s
+    filter, applied later in `_detect_tws_version`, still gates them uniformly)."""
+    _make_version_dir(tmp_path, "IB Gateway 10.45", channel="stable")
+    _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
+    candidates = _list_version_candidates(tmp_path, "macos", "tws")
+    assert sorted(version for version, _ in candidates) == ["10.45", "10.50"]
+
+
+def test_list_version_candidates_linux_tws_falls_back_to_ibgateway(tmp_path):
+    _make_version_dir(tmp_path / "ibgateway", "10.50")
+    candidates = _list_version_candidates(tmp_path, "linux", "tws")
+    assert [version for version, _ in candidates] == ["10.50"]
+
+
 def test_detect_tws_version_single_candidate(tmp_path):
     _make_version_dir(tmp_path, "IB Gateway 10.45", channel="stable")
     assert _detect_tws_version(tmp_path, "macos", "gateway", None) == "10.45"
@@ -528,6 +592,43 @@ def test_detect_tws_version_channel_filter_matches_nothing_raises(tmp_path):
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
     with pytest.raises(LauncherError, match="channel='stable'"):
         _detect_tws_version(tmp_path, "macos", "gateway", "stable")
+
+
+def test_detect_tws_version_tws_falls_back_to_gateway_tree(tmp_path):
+    """A TWS request with no TWS install auto-detects against the Gateway
+    installs (gitea #25) -- channel-aware like the primary tree."""
+    _make_version_dir(tmp_path, "IB Gateway 10.50", channel="stable")
+    assert _detect_tws_version(tmp_path, "macos", "tws", "stable") == "10.50"
+
+
+def test_detect_tws_version_tws_falls_back_when_tws_on_wrong_channel(tmp_path):
+    """Regression test for the live-caught break (2026-09-13): a TWS install
+    present but on the wrong channel must NOT short-circuit the fallback.
+    `tws` + `latest` with only `Trader Workstation 10.45` (channel=stable)
+    installed used to raise -- the `[10.45]` TWS pool (present, but filtered to
+    nothing by `stable != latest`) never fell through to `IB Gateway 10.50`
+    (channel=latest). A TWS pool that filters empty is exactly the signal to
+    consult the Gateway pool, not to error."""
+    _make_version_dir(tmp_path, "Trader Workstation 10.45", channel="stable")
+    _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
+    assert _detect_tws_version(tmp_path, "macos", "tws", "latest") == "10.50"
+
+
+def test_detect_tws_version_tws_channel_filter_picks_tws_when_it_matches(tmp_path):
+    """A TWS install on the requested channel wins over a Gateway on the same
+    channel -- the fallback only engages when the TWS pool filters empty."""
+    _make_version_dir(tmp_path, "Trader Workstation 10.45", channel="stable")
+    _make_version_dir(tmp_path, "IB Gateway 10.50", channel="stable")
+    assert _detect_tws_version(tmp_path, "macos", "tws", "stable") == "10.45"
+
+
+def test_detect_tws_version_tws_channel_filter_still_strict_on_fallback_tree(tmp_path):
+    """Per maintainer decision (2026-09-13): the channel filter gate is not
+    relaxed for the fallback tree -- asking `tws` with `stable` while only a
+    `latest` Gateway exists is a config error, surfaced, not silently satisfied."""
+    _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
+    with pytest.raises(LauncherError, match="channel='stable'"):
+        _detect_tws_version(tmp_path, "macos", "tws", "stable")
 
 
 def test_build_launch_plan_macos_gateway(tmp_path):
@@ -747,6 +848,110 @@ def test_build_launch_plan_linux_tws(tmp_path):
     )
     assert "jclient.LoginFrame" in plan.command
     assert "-Xmx768m" in plan.command
+    assert f"-DjtsConfigDir={settings_dir}" in plan.command
+
+
+def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(tmp_path, caplog):
+    """No TWS install, same-version Gateway install present (gitea #25): the
+    plan uses the Gateway install's path, `.install4j`, bundled JRE and
+    `ibgateway.vmoptions` (the Gateway dir has no `tws.vmoptions`), keeps the
+    TWS entry class `jclient.LoginFrame`, and never writes the Gateway-only
+    `[IBGateway] ApiOnly` into jts.ini -- the app genuinely runs as a TWS
+    front-end. Native-restart prevention renames the resolved Gateway bundle,
+    and the fallback is logged (IBC switches silently; this project never does)."""
+    base = _make_synthetic_install(tmp_path, os_name="macos", program="gateway")
+    settings_dir = tmp_path / "settings"
+    config = _config(
+        program="tws",
+        tws_path=str(base),
+        tws_settings_path=str(settings_dir),
+        instance="paper",
+    )
+    with caplog.at_level(logging.WARNING):
+        plan = build_launch_plan(
+            config,
+            tmp_path / "agent.jar",
+            os_name="macos",
+            runtime_dir=tmp_path / "run",
+        )
+
+    assert "jclient.LoginFrame" in plan.command
+    assert "ibgateway.GWClient" not in plan.command
+    assert "-Xmx768m" in plan.command  # from ibgateway.vmoptions
+    assert "--add-opens=x/y=ALL-UNNAMED" in plan.command  # from the Gateway Info.plist
+    assert "Trader Workstation" not in plan.command
+    assert f"-DjtsConfigDir={settings_dir}" in plan.command
+    assert "[IBGateway]" not in (settings_dir / "jts.ini").read_text()
+    assert any(
+        "falling back to the gateway installation" in r.message for r in caplog.records
+    )
+
+    program_path = base / "IB Gateway 10.50"
+    assert not (program_path / "IB Gateway 10.50.app").exists()
+    assert (program_path / "IB Gateway 10.50-1.app").is_dir()
+
+
+def test_build_launch_plan_macos_tws_prefers_tws_install_when_present(tmp_path, caplog):
+    """No fallback when a TWS install exists -- the TWS dir wins, no warning
+    logged (IBC's own priority; gitea #25)."""
+    base = _make_synthetic_install(tmp_path, os_name="macos", program="tws")
+    _make_version_dir(tmp_path / "Applications", "IB Gateway 10.50")
+    settings_dir = tmp_path / "settings"
+    config = _config(
+        program="tws",
+        tws_path=str(base),
+        tws_settings_path=str(settings_dir),
+        instance="paper",
+    )
+    with caplog.at_level(logging.WARNING):
+        plan = build_launch_plan(
+            config,
+            tmp_path / "agent.jar",
+            os_name="macos",
+            runtime_dir=tmp_path / "run",
+        )
+
+    assert "jclient.LoginFrame" in plan.command
+    assert "Trader Workstation 10.50" in str(plan.command)
+    assert not any("falling back" in r.message for r in caplog.records)
+
+
+def test_build_launch_plan_macos_tws_auto_detects_version_in_gateway_tree(tmp_path):
+    """`tws_version` unset + no TWS install at all: version detection itself
+    runs against the Gateway tree (channel-aware), then the plan resolves the
+    Gateway install -- the whole TWS-from-Gateway path end to end."""
+    base = _make_synthetic_install(tmp_path, os_name="macos", program="gateway")
+    (base / "IB Gateway 10.50" / ".install4j" / "i4jparams.conf").write_text(
+        '<variable name="channel" value="stable" />\n'
+    )
+    config = _config(
+        program="tws",
+        tws_path=str(base),
+        tws_settings_path=str(tmp_path / "settings"),
+        instance="paper",
+        tws_version=None,
+    )
+    plan = build_launch_plan(
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+    )
+    assert "IB Gateway 10.50" in str(plan.command)
+    assert "jclient.LoginFrame" in plan.command
+
+
+def test_build_launch_plan_linux_tws_falls_back_to_ibgateway(tmp_path):
+    base = _make_synthetic_install(tmp_path, os_name="linux", program="gateway")
+    settings_dir = tmp_path / "settings"
+    config = _config(
+        program="tws",
+        tws_path=str(base),
+        tws_settings_path=str(settings_dir),
+        instance="paper",
+    )
+    plan = build_launch_plan(
+        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=tmp_path / "run"
+    )
+    assert "jclient.LoginFrame" in plan.command
+    assert "ibgateway" in str(plan.command)
     assert f"-DjtsConfigDir={settings_dir}" in plan.command
 
 
