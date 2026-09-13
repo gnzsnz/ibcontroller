@@ -432,7 +432,7 @@ async def watch_for_unprompted_windows(
             event = await queue.get()
             handled = await handle_window_opened(registry, event, dispatcher)
             if not handled:
-                logger.debug(
+                logger.info(
                     "unhandled unprompted window: %s %r",
                     event.window.class_,
                     event.window.title,

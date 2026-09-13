@@ -153,6 +153,7 @@ async def _apply_declarative_settings(
         else None
     )
     merged = merge_settings_files(builtin_settings, user_settings)
+    # open_settings_dialog -> apply_settings_from_file -> close_settings_dialog
     window_id = await open_settings_dialog(
         launched.dispatcher,
         labels.settings,
