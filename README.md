@@ -96,6 +96,7 @@ added by editing the TOML file alone.
 | `trace_enabled` | `IBCONTROLLER_TRACE_ENABLED` | Enable verbose raw wire trace (`cmd-{instance}.jsonl`/`events-{instance}.jsonl`) | `false` | ibcontroller config |
 | `log_dir` | `IBCONTROLLER_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default | ibcontroller config |
 | `log_level` | `IBCONTROLLER_LOG_LEVEL` | `debug`/`info`/`warning`/`error` | `info` | ibcontroller config |
+| `log_sink` | `IBCONTROLLER_LOG_SINK` | `"std"` (console only) or `"file"` (only, under `log_dir`) — exclusive, not both. Covers `ibcontroller-{instance}.log` and `gateway-{instance}.log` only; the Java agent log and the wire trace are always file, unaffected — see "Logging" below | `"std"` | ibcontroller config |
 | (env only) | `IBCONTROLLER_APP_DIR` | Override file locations (config/log/run) for container mode | (platform default) | ibcontroller config |
 
 TWS/ibgateway settings
@@ -274,13 +275,25 @@ container mode). Every file is named with the `{instance}` name, so two instance
 interleaving — matched by `tail -f` on the right filename, no subdirectory per
 instance.
 
+**`IBCONTROLLER_LOG_SINK`** (`"std"`/`"file"`, default `"std"`) controls where
+ibcontroller's own log and TWS/Gateway's own stdout/stderr go — console
+(`"std"`) or file (`"file"`), exclusive, not both. This is the setting that
+matters for Docker: with the default `"std"`, both streams show up in
+`docker logs` and no file is written inside the container. It does **not**
+cover the Java agent log or the wire trace below — those two are always file,
+regardless of `log_sink`, the same way `trace_enabled`'s files are always
+file when it's on: the Java agent log is JVM-side diagnostic detail (not
+something you'd want interleaved into `docker logs` at `debug`), and the wire
+trace is deliberately verbose NDJSON meant to be tailed, not read as console
+scrollback.
+
 | File | Layer | Enabled by | Level |
 | --- | --- | --- | --- |
-| `ibcontroller-{instance}.log` | ibcontroller app control flow | always | `log_level` (default `info`) |
-| `gateway-{instance}.log` | TWS/Gateway own stdout/stderr | always | TWS/Gateway's own |
-| `ibcontroller-java-agent-{instance}.log` | Java agent (in-process JUL) | always | `log_level` (see mapping below) |
-| `cmd-{instance}.jsonl` | raw wire: commands sent + results, NDJSON | `trace_enabled` | always (DEBUG emit, gated separately) |
-| `events-{instance}.jsonl` | raw wire: every event message received, NDJSON | `trace_enabled` | always (DEBUG emit, gated separately) |
+| `ibcontroller-{instance}.log` | ibcontroller app control flow | `log_sink=file` (else console) | `log_level` (default `info`) |
+| `gateway-{instance}.log` | TWS/Gateway own stdout/stderr | `log_sink=file` (else console) | TWS/Gateway's own |
+| `ibcontroller-java-agent-{instance}.log` | Java agent (in-process JUL) | always file, not affected by `log_sink` | `log_level` (see mapping below) |
+| `cmd-{instance}.jsonl` | raw wire: commands sent + results, NDJSON | `trace_enabled`; always file, not affected by `log_sink` | always (DEBUG emit, gated separately) |
+| `events-{instance}.jsonl` | raw wire: every event message received, NDJSON | `trace_enabled`; always file, not affected by `log_sink` | always (DEBUG emit, gated separately) |
 
 ### Log levels
 
@@ -305,25 +318,31 @@ or both.
 
 ### What gets logged, per stream
 
-- **`ibcontroller-{instance}.log`** — the app's own control flow: launching an
+- **`ibcontroller-{instance}.log`** — only written when `log_sink=file`; with
+  the default `log_sink=std` this same content goes to the console instead, no
+  file is created. The app's own control flow: launching an
   instance, each login state transition (credentials submitted, 2FA in progress, login
   completed/skipped on restart), declarative settings applied (and which entries were
   skipped), and every recogniser action (e.g. `dismissed non-brokerage account
   warning`). Credential *values* are never logged: `Config.userid`/`password` are
   `typed_settings.types.Secret`-wrapped, and a `Secret`'s `__str__`/`__repr__` both
   mask the real value (`*******`), so even a careless `logger.info("login as %s",
-  password)` stays safe. At `debug`
-  this same file gets one line per arriving event message (IBC's always-on
+  password)` stays safe. At `debug` this same file gets one line per arriving
+  event message (IBC's always-on
   `logWindow` posture, mapped to our DEBUG level here) — e.g. `event: window_opened
   class=ibgateway.ax title='IBKR Gateway' seq=1`. Event content is window metadata
   only, never field values.
-- **`gateway-{instance}.log`** — a plain drain of TWS/Gateway's own stdout/stderr,
-  captured for the process's whole life. Used to diagnose issues *inside* Gateway
-  itself (JWPRINT prints, JVM warnings, the occasional `InaccessibleObjectException`
-  and similar). Level/content are entirely TWS/Gateway's own; ibcontroller only pipes
-  it to disk so a run can be audited after the fact.
-- **`ibcontroller-java-agent-{instance}.log`** — the Java agent's `java.util.logging`
-  output, from the JVM that actually hosts TWS/Gateway. It logs connection
+- **`gateway-{instance}.log`** — same `log_sink=file`/`std` split as above; a plain
+  drain of TWS/Gateway's own stdout/stderr, captured for the process's whole life
+  either way. Used to diagnose issues *inside* Gateway itself (JWPRINT prints, JVM
+  warnings, the occasional `InaccessibleObjectException` and similar). Level/content
+  are entirely TWS/Gateway's own; ibcontroller only pipes it to a file or the console.
+- **`ibcontroller-java-agent-{instance}.log`** — **always a file, regardless of
+  `log_sink`** — the Java agent's `java.util.logging` output, from the JVM that
+  actually hosts TWS/Gateway, never routed to the console. At `debug` this is the
+  noisiest stream by far (every processed command, logged from inside the JVM
+  itself); console output at that level would drown out ibcontroller's own log
+  lines, so it stays file-only the same way the wire trace does. It logs connection
   accepts/disconnects, each processed command's name + target/label/path/window_id
   (**never a value** — `set_text`/`set_checkbox` values and therefore credentials can
   never land here, mirroring Python's `Secret` redaction), window register/unregister,
