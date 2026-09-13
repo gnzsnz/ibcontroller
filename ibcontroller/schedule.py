@@ -1,4 +1,4 @@
-"""schedule.py -- pure wall-clock scheduling math for TWS-only self-scheduled
+"""schedule.py -- pure wall-clock scheduling math for the self-scheduled
 shutdown actions (`Config.cold_restart_time`/`closedown_at`), consumed by
 `control_loop.py`. No I/O, no asyncio -- same split discipline as
 `launcher.build_launch_plan` vs `launch_instance`: testable against a
@@ -9,14 +9,16 @@ Both settings come from IBC's own `config.ini` (`ColdRestartTime`/
 settings at all -- IBC implements them itself as a self-scheduled tidy
 close-down (`IbcTws.java`'s own `startShutdownTimerIfRequired`/
 `getColdRestartTime`/`getShutdownTime`), which this module ports the
-scheduling math for. TWS only: confirmed by inspection that neither setting
-(nor `AutoLogoffTime`/`AutoRestartTime`, which *are* shared) appears anywhere
-in `IbcGateway.java` at all (a 38-line near-empty class) -- `IbcTws.java` is
-IBC's one real entry point for both programs, so this really is a TWS-only
-carve-out, not a naming artifact. `control_loop.py` owns actually acting on
-the result: ending the READY wait so the existing `clean_shutdown` call
-performs the real menu-based close, and -- for a cold restart -- forcing a
-fresh relaunch with no restart hash."""
+scheduling math for. Applies to TWS and Gateway alike: `IbcTws.java` is IBC's
+shared base class for both programs, and `IbcGateway.java`'s near-empty (38
+lines: `setupDefaultEnvironment` + `IbcTws.load()`) body is exactly *why*
+Gateway inherits the whole shutdown timer, not proof it's TWS-only.
+`control_loop.py` owns actually acting on the result: ending the READY wait
+so the existing `clean_shutdown` call performs the real menu-based close
+(`File > Exit` on TWS, `File > Close` on Gateway), and -- for a cold restart
+-- forcing a fresh relaunch via `launch_instance` with no restart hash (this
+is ibcontroller's own supervisor-driven relaunch, not IBC's native-launcher
+`File > Restart`/`COLDRESTART`-flag mechanism)."""
 
 from __future__ import annotations
 
@@ -114,20 +116,11 @@ def _next_occurrence(target: time, weekday: int | None, now: datetime) -> dateti
 
 def next_scheduled_shutdown(config: Config, now: datetime) -> ScheduledShutdown | None:
     """Earliest of `Config.cold_restart_time` (every Sunday) and
-    `Config.closedown_at` (daily or weekly) -- both TWS-only. Ignored, with a
-    logged warning, when `config.program != "tws"`. A malformed value is
-    logged and that one field is skipped (matching `settings.py`'s own
-    per-entry error isolation) rather than aborting the other field or
-    raising out of this function. Returns `None` if nothing applies."""
-    if config.program.lower() != "tws":
-        if config.cold_restart_time or config.closedown_at:
-            logger.warning(
-                "IBController > cold_restart_time/closedown_at are TWS-only "
-                "and ignored for program=%s",
-                config.program,
-            )
-        return None
-
+    `Config.closedown_at` (daily or weekly) -- applies to TWS and Gateway
+    alike. A malformed value is logged and that one field is skipped
+    (matching `settings.py`'s own per-entry error isolation) rather than
+    aborting the other field or raising out of this function. Returns `None`
+    if nothing applies."""
     candidates: list[ScheduledShutdown] = []
     if config.cold_restart_time:
         try:

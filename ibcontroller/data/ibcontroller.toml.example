@@ -126,19 +126,20 @@
 # (env: IBCONTROLLER_AUTO_LOGOFF_TIME)
 # auto_logoff_time = "08:00 AM"
 
-# --- TWS only (Gateway has no equivalent; set while program="gateway" is logged
-# --- and ignored). Both are ibcontroller's own scheduled actions, not GUI settings
-# --- written to TWS -- see control_loop.py. If both are set, whichever occurs
-# --- first wins.
+# --- Applies to TWS and Gateway alike (ported from IBC's IbcTws.java, the shared
+# --- base class both programs use). Both are ibcontroller's own scheduled actions,
+# --- not GUI settings written to TWS/Gateway -- see control_loop.py. If both are
+# --- set, whichever occurs first wins.
 # IBC: ColdRestartTime -- "HH:MM", 24-hour, local time. Every Sunday at this time,
-# ibcontroller closes TWS tidily and relaunches with a full fresh login, forcing
-# the weekly reauth IBKR requires around Sunday 01:00 US/Eastern token invalidation
-# (env: IBCONTROLLER_COLD_RESTART_TIME)
+# ibcontroller closes the instance tidily and relaunches with a full fresh login
+# (via ibcontroller's own launch_instance, not IBC's native-launcher File > Restart),
+# forcing the weekly reauth IBKR requires around Sunday 01:00 US/Eastern token
+# invalidation (env: IBCONTROLLER_COLD_RESTART_TIME)
 # cold_restart_time = "07:05"
 
 # IBC: ClosedownAt -- "HH:MM" (every day) or "<Weekday> HH:MM" (one day a week,
 # Weekday a full English name, Monday..Sunday). At this time, ibcontroller closes
-# TWS tidily with no relaunch -- you're responsible for restarting it yourself
-# (env: IBCONTROLLER_CLOSEDOWN_AT)
+# the instance tidily with no relaunch -- you're responsible for restarting it
+# yourself (env: IBCONTROLLER_CLOSEDOWN_AT)
 # closedown_at = "22:00"
 # closedown_at = "Friday 22:00"

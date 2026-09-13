@@ -229,15 +229,15 @@ class Config:
     # wins (applied last, matching builtin_settings.toml's order and IBC itself).
     auto_logoff_time: str | None = None  # None = leave the existing setting unchanged
 
-    # TWS-only scheduled actions (Gateway has no equivalent), consumed by
-    # schedule.py/control_loop.py -- not GUI settings written to TWS.
-    # ColdRestartTime "HH:MM" 24-hour local time; every Sunday, close TWS tidily and
-    # relaunch with a full fresh login (weekly reauth, Sunday 01:00 US/Eastern token
-    # invalidation).
+    # Self-scheduled shutdown actions (applies to TWS and Gateway alike), consumed
+    # by schedule.py/control_loop.py -- not GUI settings written to TWS/Gateway.
+    # ColdRestartTime "HH:MM" 24-hour local time; every Sunday, close the instance
+    # tidily and relaunch with a full fresh login (weekly reauth, Sunday 01:00
+    # US/Eastern token invalidation).
     cold_restart_time: str | None = None  # None = disable
-    # ClosedownAt "HH:MM" (daily) or "<Weekday> HH:MM" (weekly); close TWS tidily,
-    # no relaunch. If both cold_restart_time and closedown_at are set, whichever
-    # occurs first wins.
+    # ClosedownAt "HH:MM" (daily) or "<Weekday> HH:MM" (weekly); close the instance
+    # tidily, no relaunch. If both cold_restart_time and closedown_at are set,
+    # whichever occurs first wins.
     closedown_at: str | None = None  # None = disable
 
     # Credentials -- environment-variable-only. Field name matches the real env var

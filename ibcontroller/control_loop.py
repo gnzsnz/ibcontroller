@@ -27,14 +27,15 @@ return_when=FIRST_COMPLETED)`), all converging on one exit path:
 - **LOGIN_FAILED**: `watch_for_unprompted_windows` raises
   (`recognisers.LoginFailedError`, or `login.LoginError` from the 2FA-timeout
   watchdog).
-- **COLD_RESTART**: `Config.cold_restart_time` reached (TWS only, see
-  `schedule.py`) -- a self-scheduled tidy close-down followed by a full fresh
-  relogin (no restart hash, deliberately not a silent relogin), forcing the
-  weekly full reauth IBKR requires around Sunday 01:00 US/Eastern token
-  invalidation.
-- **TIDY_CLOSEDOWN**: `Config.closedown_at` reached (TWS only) -- a
-  self-scheduled tidy close-down with no relaunch; the control loop stops for
-  good, same as any other terminal cause.
+- **COLD_RESTART**: `Config.cold_restart_time` reached (TWS and Gateway
+  alike, see `schedule.py`) -- a self-scheduled tidy close-down followed by a
+  full fresh relogin via `launch_instance` (no restart hash, deliberately not
+  a silent relogin, and not IBC's native-launcher `File > Restart`
+  mechanism), forcing the weekly full reauth IBKR requires around Sunday
+  01:00 US/Eastern token invalidation.
+- **TIDY_CLOSEDOWN**: `Config.closedown_at` reached (TWS and Gateway alike)
+  -- a self-scheduled tidy close-down with no relaunch; the control loop
+  stops for good, same as any other terminal cause.
 """
 
 from __future__ import annotations
@@ -62,6 +63,7 @@ from ibcontroller.recognisers import (
 )
 from ibcontroller.schedule import ScheduledAction, next_scheduled_shutdown
 from ibcontroller.settings import (
+    SettingsError,
     SettingsFile,
     apply_settings_from_file,
     close_settings_dialog,
@@ -145,13 +147,26 @@ async def _apply_declarative_settings(
     `window_id` (from `open_settings_dialog`'s return value) scopes every
     subsequent action to the exact dialog that opened, and `close_settings_dialog`
     always runs in `finally` -- both entries applying cleanly and one raising
-    still leave the dialog closed."""
+    still leave the dialog closed.
+
+    A `config.settings_file` that fails to load (missing, invalid TOML, bad
+    structure -- `settings.SettingsError`) is logged and treated as absent
+    rather than aborting this whole function -- otherwise a typo'd path or a
+    bad edit would silently take the load-bearing built-in entries
+    (`read_only_api`, `auto_restart_time`) down with it, since this runs
+    before `open_settings_dialog`."""
     builtin_settings = await load_builtin_settings_file()
-    user_settings = (
-        await load_settings_file(config.settings_file)
-        if config.settings_file is not None
-        else None
-    )
+    user_settings = None
+    if config.settings_file is not None:
+        try:
+            user_settings = await load_settings_file(config.settings_file)
+        except SettingsError as exc:
+            logger.error(
+                "IBController > settings: could not load %s -- continuing "
+                "with built-in settings only: %s",
+                config.settings_file,
+                exc,
+            )
     merged = merge_settings_files(builtin_settings, user_settings)
     # open_settings_dialog -> apply_settings_from_file -> close_settings_dialog
     window_id = await open_settings_dialog(
@@ -171,7 +186,7 @@ async def _apply_declarative_settings(
         await close_settings_dialog(
             launched.dispatcher, labels.settings, window_id=window_id
         )
-    if config.settings_file is not None:
+    if user_settings is not None:
         logger.info(
             "IBController > declarative settings applied (built-in + %s)",
             config.settings_file,

@@ -120,12 +120,13 @@ def test_next_scheduled_shutdown_none_when_neither_set():
     assert next_scheduled_shutdown(config, datetime(2026, 9, 12, 6, 0)) is None
 
 
-def test_next_scheduled_shutdown_gateway_ignores_both_with_warning(caplog):
-    config = _config(program="gateway", cold_restart_time="07:05", closedown_at="22:00")
-    with caplog.at_level("WARNING"):
-        result = next_scheduled_shutdown(config, datetime(2026, 9, 12, 6, 0))
-    assert result is None
-    assert "TWS-only" in caplog.text
+def test_next_scheduled_shutdown_gateway_applies_both():
+    config = _config(program="gateway", cold_restart_time="07:05", closedown_at="08:00")
+    now = datetime(2026, 9, 12, 6, 0)  # Saturday
+    result = next_scheduled_shutdown(config, now)
+    assert result is not None
+    assert result.action is ScheduledAction.TIDY_CLOSEDOWN
+    assert result.at == _next_occurrence(time(8, 0), None, now)
 
 
 def test_next_scheduled_shutdown_picks_earliest():
