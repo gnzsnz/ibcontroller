@@ -131,26 +131,29 @@ set, Auto Restart Time wins -- set only one of the two in practice.
 **key:** `cold_restart_time`
 **Environment variable:** `IBCONTROLLER_COLD_RESTART_TIME`
 
-TWS only (no Gateway equivalent). `"HH:MM"`, 24-hour, local system time. Unlike
-the settings above, this is not a Global Configuration GUI setting -- it's a
-self-scheduled action. Every Sunday at this time, ibcontroller closes TWS
-tidily and relaunches it with a full fresh login (no restart hash, deliberately
-not a silent relogin), forcing the weekly full reauth IBKR requires around
-Sunday 01:00 US/Eastern token invalidation. Omit this key (the default) to
-disable it. If `closedown_at` is also set, whichever occurs first wins.
+TWS and Gateway alike (ported from IBC's `IbcTws.java`, the shared base class
+both programs use). `"HH:MM"`, 24-hour, local system time. Unlike the settings
+above, this is not a Global Configuration GUI setting -- it's a self-scheduled
+action. Every Sunday at this time, ibcontroller closes the instance tidily and
+relaunches it with a full fresh login (no restart hash, deliberately not a
+silent relogin, and via ibcontroller's own `launch_instance`, not IBC's
+native-launcher `File > Restart`), forcing the weekly full reauth IBKR
+requires around Sunday 01:00 US/Eastern token invalidation. Omit this key (the
+default) to disable it. If `closedown_at` is also set, whichever occurs first
+wins.
 
 ### Closedown At
 
 **key:** `closedown_at`
 **Environment variable:** `IBCONTROLLER_CLOSEDOWN_AT`
 
-TWS only (no Gateway equivalent). `"HH:MM"` (every day) or `"<Weekday> HH:MM"`
-(one day a week -- `Weekday` a full English name, `Monday`..`Sunday`), 24-hour,
-local system time. Like `cold_restart_time` above, this is a self-scheduled
-action, not a GUI setting: at this time, ibcontroller closes TWS tidily with no
-relaunch -- you're responsible for restarting it yourself. Omit this key (the
-default) to disable it. If `cold_restart_time` is also set, whichever occurs
-first wins.
+TWS and Gateway alike, same reasoning as `cold_restart_time` above. `"HH:MM"`
+(every day) or `"<Weekday> HH:MM"` (one day a week -- `Weekday` a full English
+name, `Monday`..`Sunday`), 24-hour, local system time. Like `cold_restart_time`
+above, this is a self-scheduled action, not a GUI setting: at this time,
+ibcontroller closes the instance tidily with no relaunch -- you're responsible
+for restarting it yourself. Omit this key (the default) to disable it. If
+`cold_restart_time` is also set, whichever occurs first wins.
 
 ## Login / 2FA timeouts
 

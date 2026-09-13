@@ -114,8 +114,8 @@ TWS/ibgateway settings
 | `second_factor_authentication_exit_interval` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_EXIT_INTERVAL` | Bounds the post-2FA wait when relogin enabled | `60.0` | TWS/Gateway setting |
 | `auto_restart_time` | `IBCONTROLLER_AUTO_RESTART_TIME` | `"hh:mm AM/PM"` daily auto-restart time. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` | TWS/Gateway setting |
 | `auto_logoff_time` | `IBCONTROLLER_AUTO_LOGOFF_TIME` | `"hh:mm AM/PM"` daily auto-logoff time; same "Lock and Exit" radio-button pair as `auto_restart_time` -- if both are set, `auto_restart_time` wins | `None` | TWS/Gateway setting |
-| `cold_restart_time` | `IBCONTROLLER_COLD_RESTART_TIME` | TWS only. `"HH:MM"` 24-hour local time; every Sunday, ibcontroller closes TWS tidily and relaunches with a full fresh login, forcing IBKR's weekly Sunday 01:00 US/Eastern token-invalidation reauth -- not a GUI setting, see "Scheduled shutdown" below | `None` | ibcontroller scheduled action |
-| `closedown_at` | `IBCONTROLLER_CLOSEDOWN_AT` | TWS only. `"HH:MM"` (daily) or `"<Weekday> HH:MM"` (weekly); closes TWS tidily at that time, no relaunch -- not a GUI setting, see "Scheduled shutdown" below | `None` | ibcontroller scheduled action |
+| `cold_restart_time` | `IBCONTROLLER_COLD_RESTART_TIME` | TWS and Gateway. `"HH:MM"` 24-hour local time; every Sunday, ibcontroller closes the instance tidily and relaunches with a full fresh login, forcing IBKR's weekly Sunday 01:00 US/Eastern token-invalidation reauth -- not a GUI setting, see "Scheduled shutdown" below | `None` | ibcontroller scheduled action |
+| `closedown_at` | `IBCONTROLLER_CLOSEDOWN_AT` | TWS and Gateway. `"HH:MM"` (daily) or `"<Weekday> HH:MM"` (weekly); closes the instance tidily at that time, no relaunch -- not a GUI setting, see "Scheduled shutdown" below | `None` | ibcontroller scheduled action |
 
 #### `tws_version` auto-detection
 
@@ -128,21 +128,22 @@ at once — `tws_channel = "stable"` picks `10.45`; leaving it unset picks `10.5
 greatest overall. The channel itself is read per-install from its own
 `.install4j/i4jparams.conf`, not guessed from the version number.
 
-#### Scheduled shutdown (TWS only): `cold_restart_time` / `closedown_at`
+#### Scheduled shutdown: `cold_restart_time` / `closedown_at`
 
 Unlike `read_only_api`/`auto_restart_time`/`auto_logoff_time` (real Global Configuration
-GUI settings), these two aren't written to TWS at all -- ibcontroller schedules the
-action itself, ported from IBC's own `IbcTws.java`. Both are TWS-only (`IbcGateway.java`
-has no equivalent). If both are set, whichever occurs first wins; a malformed value is
-logged and skipped rather than aborting the other one.
+GUI settings), these two aren't written to TWS/Gateway at all -- ibcontroller schedules
+the action itself, ported from IBC's own `IbcTws.java` (the shared base class both
+programs use, so both apply here too). If both are set, whichever occurs first wins; a
+malformed value is logged and skipped rather than aborting the other one.
 
 - `cold_restart_time` -- `"HH:MM"`, 24-hour, local time. Every **Sunday** at this time,
-  ibcontroller closes TWS tidily and relaunches with a full fresh login (no restart
-  hash, deliberately not a silent relogin) -- forcing the weekly reauth IBKR requires
-  around Sunday 01:00 US/Eastern token invalidation.
+  ibcontroller closes the instance tidily and relaunches with a full fresh login (no
+  restart hash, deliberately not a silent relogin, and via ibcontroller's own
+  `launch_instance`, not IBC's native-launcher `File > Restart`) -- forcing the weekly
+  reauth IBKR requires around Sunday 01:00 US/Eastern token invalidation.
 - `closedown_at` -- `"HH:MM"` (every day) or `"<Weekday> HH:MM"` (one day a week,
-  `Weekday` a full English name, `Monday`..`Sunday`). Closes TWS tidily at that time,
-  with no relaunch -- you're responsible for restarting it yourself.
+  `Weekday` a full English name, `Monday`..`Sunday`). Closes the instance tidily at that
+  time, with no relaunch -- you're responsible for restarting it yourself.
 
 Both use the local system clock, matching IBC's own `Calendar.getInstance()` -- not
 converted to US/Eastern, so pick a local time that lands after the Sunday 01:00
