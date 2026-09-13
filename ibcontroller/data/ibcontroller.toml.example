@@ -61,16 +61,21 @@
 
 # Which ibkr_settings.toml to apply at startup (settings.py's own
 # apply_settings_from_file) -- see ibkr_settings.toml.example. Omit this key (the
-# default) to apply nothing declaratively -- there is no bundled default keyed by
-# trading_mode; paper and live get separate files, named explicitly here, per instance
+# default) to apply nothing declaratively.
 # (env: IBCONTROLLER_SETTINGS_FILE)
-# file = "ibkr_settings.toml"
+# settings_file = "ibkr_settings.toml"
 
 # Where ibcontroller's own log and trace files live (env: IBCONTROLLER_LOG_DIR).
 # Optional: when unset, defaults to the platformdirs user-log dir (or
 # $IBCONTROLLER_APP_DIR/log in docker mode). Every instance's files (log, trace,
 # gateway stdout) land flat in this one directory.
 # log_dir = ""
+
+# Where ibcontroller's own log and Gateway/TWS's own console output go: "std"
+# (console only) or "file" (only, under log_dir) -- exclusive, not both. Doesn't
+# affect the wire trace above, which stays file-only regardless of this setting.
+# (env: IBCONTROLLER_LOG_SINK)
+# log_sink = "std"
 
 # IBC: ReadOnlyLogin -- TWS only (IBC disables it on Gateway); NOT YET WIRED to any real
 # behavior in ibcontroller (loaded, but nothing acts on it yet -- see TODO.md).
