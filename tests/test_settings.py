@@ -237,7 +237,7 @@ async def test_apply_settings_logs_each_entry_applied_and_skipped(
     live dialog. File-based, not `caplog`, matching `test_recognisers.py`'s own
     pattern -- `configure_logging` disables propagation to the root logger on
     purpose."""
-    configure_logging(log_dir=tmp_path, filename="test.log")
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     responder = _tracking_responder([])
     async with (
         FakeCommandServer(sock_path, responder),
@@ -560,7 +560,7 @@ async def test_apply_settings_auto_restart_time_bad_value_is_logged_and_skipped(
     """Per-entry isolation (2026-09-12, issue #1): a malformed entry no longer
     aborts the whole file -- it's logged and skipped, matching every other
     `SettingsError`/`ElementNotFoundError` case below."""
-    configure_logging(log_dir=tmp_path, filename="test.log")
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -695,7 +695,7 @@ async def test_apply_settings_auto_logoff_time_none_skips_entry(
 async def test_apply_settings_auto_logoff_time_bad_value_is_logged_and_skipped(
     sock_path, event_sock_path, tmp_path
 ):
-    configure_logging(log_dir=tmp_path, filename="test.log")
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -764,7 +764,7 @@ async def test_apply_settings_multiple_entries_across_different_tree_paths(
 async def test_apply_settings_unresolvable_label_ref_is_logged_and_skipped(
     sock_path, event_sock_path, tmp_path
 ):
-    configure_logging(log_dir=tmp_path, filename="test.log")
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -792,7 +792,7 @@ async def test_apply_settings_unresolvable_label_ref_is_logged_and_skipped(
 async def test_apply_settings_unresolvable_value_from_config_is_logged_and_skipped(
     sock_path, event_sock_path, tmp_path
 ):
-    configure_logging(log_dir=tmp_path, filename="test.log")
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -825,7 +825,7 @@ async def test_apply_settings_value_from_config_cannot_reach_credentials(
     `Config` field (`userid`/`password`, `Secret`-wrapped) is rejected the same
     way as any other non-eligible field, by design, not by `Secret` merely
     failing a later `isinstance` check."""
-    configure_logging(log_dir=tmp_path, filename="test.log")
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -853,7 +853,7 @@ async def test_apply_settings_value_from_config_cannot_reach_credentials(
 async def test_apply_settings_unsupported_action_is_logged_and_skipped(
     sock_path, event_sock_path, tmp_path
 ):
-    configure_logging(log_dir=tmp_path, filename="test.log")
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -881,7 +881,7 @@ async def test_apply_settings_unsupported_action_is_logged_and_skipped(
 async def test_apply_settings_entry_needs_label_or_label_ref_is_logged_and_skipped(
     sock_path, event_sock_path, tmp_path
 ):
-    configure_logging(log_dir=tmp_path, filename="test.log")
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -909,7 +909,7 @@ async def test_apply_settings_entry_failure_does_not_block_later_entries(
     after it in the same file (see the module docstring's own note on this).
     Here the first entry is exactly that shape; the second entry's action
     must still run."""
-    configure_logging(log_dir=tmp_path, filename="test.log")
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     calls: list[dict] = []
     responder = _tracking_responder(calls)
     async with (

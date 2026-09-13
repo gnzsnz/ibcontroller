@@ -10,12 +10,24 @@ per-stream `QueueListener` threads. This is the stdlib's canonical answer to
 write happens on the listener thread. (There is no `asyncio` logging handler in
 the stdlib -- `QueueHandler`/`QueueListener` is the documented replacement, and
 it is what `dispatch.py`'s trace path and `launcher.py`'s stdout-drain both rely
-on to keep their per-line writes off the event loop.) The console
-`StreamHandler` deliberately stays attached directly (synchronous): a tty write
-is the cheap case, and keeping it sync means console output can't be lost in a
-dying process. `stop_logging()` drains and joins the listener threads; call it
-at the final shutdown path (control_loop) and in any test that needs to read a
-file it wrote.
+on to keep their per-line writes off the event loop.) Whichever console
+`StreamHandler`s are attached (gated by `sink`, see below) deliberately stay
+attached directly (synchronous): a tty write is the cheap case, and keeping it
+sync means console output can't be lost in a dying process. `stop_logging()`
+drains and joins the listener threads; call it at the final shutdown path
+(control_loop) and in any test that needs to read a file it wrote.
+
+**`sink` ("std" or "file") is exclusive, not additive (gitea #26).** Both
+`configure_logging` and `configure_gateway_stdout` take a `sink` parameter:
+`"std"` attaches only a console `StreamHandler`, `"file"` attaches only the
+queued file handler -- never both. This exists for Docker deployments, where
+output belongs on stdout/stderr (`docker logs`) rather than inside the
+container's filesystem; `configure_gateway_stdout` in particular used to be
+file-only unconditionally, meaning Gateway/TWS's own log lines were invisible
+outside a file no `docker logs` call would ever show. `configure_trace`'s
+NDJSON wire trace is deliberately untouched by this -- it stays file-only
+regardless of `sink`, since it's meant to be tailed as two per-instance files,
+not mixed into a formatted stdout stream.
 
 **Sanitization is a separate concern, already solved elsewhere, not this module's
 job.** `secret.py`'s `Secret` protects a value at its own origin (`config.py`'s
@@ -117,19 +129,20 @@ def configure_logging(
     level: int = logging.INFO,
     log_dir: str | Path | None = None,
     filename: str = "ibcontroller.log",
+    sink: str = "std",
 ) -> None:
     """Configures the `ibcontroller` logger hierarchy (every submodule's
     `logging.getLogger(__name__)` is a child of it, e.g. `ibcontroller.dispatch`)
-    -- console always (synchronous `StreamHandler`), plus a file handler under
-    `log_dir` if given (`ibcontroller.log` by default, alongside `dispatch.py`'s
-    own `cmd-{instance}.jsonl`/`events-{instance}.jsonl` under the same flat
-    directory convention -- app_dirs.py's log dir, typically). The file handler
-    is queued: the logger sees a `QueueHandler`, and the real `FileHandler`
-    lives on a listener thread (see the module docstring). `propagate = False`
-    so nothing double-logs through the root logger if something else ever
-    configures that too. Safe to call more than once -- replaces this logger's
-    handlers each time rather than accumulating them (previous "app" listeners
-    are stopped first).
+    -- either a console handler (`sink="std"`, synchronous `StreamHandler`) or a
+    file handler under `log_dir` (`sink="file"`; `ibcontroller.log` by default,
+    alongside `dispatch.py`'s own `cmd-{instance}.jsonl`/`events-{instance}.jsonl`
+    under the same flat directory convention -- app_dirs.py's log dir, typically),
+    never both (see module docstring). The file handler is queued: the logger
+    sees a `QueueHandler`, and the real `FileHandler` lives on a listener thread
+    (see the module docstring). `propagate = False` so nothing double-logs
+    through the root logger if something else ever configures that too. Safe to
+    call more than once -- replaces this logger's handlers each time rather than
+    accumulating them (previous "app" listeners are stopped first).
 
     **`filename` exists for the instance-isolation design principle.**
     All of ibcontroller's files live flat in one shared `log_dir` (2026-09-08:
@@ -149,16 +162,19 @@ def configure_logging(
     logger.propagate = False
     logger.handlers = []
 
-    console = logging.StreamHandler()
-    console.setFormatter(logging.Formatter(_FORMAT))
-    logger.addHandler(console)
-
-    if log_dir is not None:
-        path = Path(log_dir)
-        path.mkdir(parents=True, exist_ok=True)
-        logger.addHandler(
-            _queued_file_handler(path / filename, key="app", mode="a", fmt=_FORMAT)
-        )
+    if sink == "std":
+        console = logging.StreamHandler()
+        console.setFormatter(logging.Formatter(_FORMAT))
+        logger.addHandler(console)
+    elif sink == "file":
+        if log_dir is not None:
+            path = Path(log_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            logger.addHandler(
+                _queued_file_handler(path / filename, key="app", mode="a", fmt=_FORMAT)
+            )
+    else:
+        raise ValueError(f"sink: expected 'std' or 'file', got {sink!r}")
 
 
 def configure_trace(
@@ -217,16 +233,19 @@ def configure_trace(
     )
 
 
-def configure_gateway_stdout(instance: str, log_dir: str | Path) -> logging.Logger:
-    """Configures one instance's queued logger for the launched process's raw
-    stdout (Gateway/TWS's own console/log4j output) -- `gateway-{instance}.log`
-    under `log_dir`. Appended across the process's whole life (unlike
-    `configure_trace`'s per-session truncate: a restarted process should keep
-    adding to the same file, not lose the prior run's lines). Message-only
-    formatter, since each line is already Gateway/TWS's own formatted output;
-    behind the same QueueHandler/QueueListener pattern as `configure_logging`/
-    `configure_trace`, so a caller feeding lines into the returned logger never
-    blocks on the write.
+def configure_gateway_stdout(
+    instance: str, log_dir: str | Path, *, sink: str = "std"
+) -> logging.Logger:
+    """Configures one instance's logger for the launched process's raw stdout
+    (Gateway/TWS's own console/log4j output). `sink="file"` writes it, queued,
+    to `gateway-{instance}.log` under `log_dir` -- appended across the process's
+    whole life (unlike `configure_trace`'s per-session truncate: a restarted
+    process should keep adding to the same file, not lose the prior run's
+    lines). `sink="std"` (the default) instead attaches a synchronous console
+    `StreamHandler`, so Gateway/TWS's own log lines reach `docker logs` the same
+    way ibcontroller's own do (see module docstring) -- `log_dir` is unused in
+    this case. Either way, message-only formatter, since each line is already
+    Gateway/TWS's own formatted output.
 
     Safe to call more than once for the same instance -- previous listeners for
     that instance are stopped first, matching `configure_trace`'s own contract.
@@ -238,14 +257,21 @@ def configure_gateway_stdout(instance: str, log_dir: str | Path) -> logging.Logg
     logger.propagate = False
     logger.setLevel(logging.INFO)
 
-    path = Path(log_dir)
-    path.mkdir(parents=True, exist_ok=True)
-    logger.addHandler(
-        _queued_file_handler(
-            path / f"gateway-{instance}.log",
-            key=key,
-            mode="a",
-            fmt=_MESSAGE_ONLY_FORMAT,
+    if sink == "std":
+        console = logging.StreamHandler()
+        console.setFormatter(logging.Formatter(_MESSAGE_ONLY_FORMAT))
+        logger.addHandler(console)
+    elif sink == "file":
+        path = Path(log_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        logger.addHandler(
+            _queued_file_handler(
+                path / f"gateway-{instance}.log",
+                key=key,
+                mode="a",
+                fmt=_MESSAGE_ONLY_FORMAT,
+            )
         )
-    )
+    else:
+        raise ValueError(f"sink: expected 'std' or 'file', got {sink!r}")
     return logger

@@ -42,6 +42,7 @@ Settings that drive the behaviour of `ibcontroller` itself.
 | `trace_enabled` | `IBCONTROLLER_TRACE_ENABLED` | Verbose raw wire trace (`cmd-{instance}.jsonl` / `events-{instance}.jsonl` next to the log file) | `false` |
 | (resolved) | `IBCONTROLLER_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default |
 | `log_level` | `IBCONTROLLER_LOG_LEVEL` | Logging level for ibcontroller's own log: `debug`/`info`/`warning`/`error` | `info` |
+| `log_sink` | `IBCONTROLLER_LOG_SINK` | `"std"` (console only) or `"file"` (only `ibcontroller-{instance}.log`/`gateway-{instance}.log`, under `log_dir`) -- exclusive, not both. Also covers Gateway/TWS's own console output, not just ibcontroller's own log. Doesn't affect the wire trace above, which stays file-only regardless | `"std"` |
 
 ## TWS/ibgateway specific settings
 

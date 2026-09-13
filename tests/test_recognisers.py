@@ -218,7 +218,7 @@ async def test_declarative_dismiss_handle_logs_with_rule_name(
     file, not just that the call site exists -- same file-based pattern as
     test_logging_setup.py (caplog can't see it: configure_logging disables
     propagation to the root logger on purpose)."""
-    configure_logging(log_dir=tmp_path, filename="test.log")
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),

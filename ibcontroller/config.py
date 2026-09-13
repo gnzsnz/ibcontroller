@@ -151,6 +151,17 @@ class ExistingSessionAction(StrEnum):
     SECONDARY = "secondary"
 
 
+class LogSink(StrEnum):
+    """Where `configure_logging`/`configure_gateway_stdout` send their output --
+    exclusive, not additive: FILE is file-only (no console), STD is console-only
+    (no file). Deliberately excludes `configure_trace`'s NDJSON wire trace, which
+    stays file-only regardless (meant to be tailed, not mixed into a formatted
+    stdout stream). Default is STD (see `log_sink` field below for why)."""
+
+    FILE = "file"
+    STD = "std"
+
+
 class AcceptIncomingConnections(StrEnum):
     """AcceptIncomingConnections is the user's choice for what to do when ibcontroller
     detects incoming API connections (see `AcceptIncomingConnectionsRecognizer` in
@@ -250,6 +261,17 @@ class Config:
     # never turned it into a real field at all -- not configurable, silently fixed
     # at INFO, confirmed live via attrs.fields(Config).
     log_level: int = ts.option(default=logging.INFO, converter=_log_level_converter)
+    # Where ibcontroller's own log (configure_logging) and Gateway/TWS's raw console
+    # output (configure_gateway_stdout) go -- "std" (console only) or "file" (only
+    # gateway-{instance}.log/ibcontroller-{instance}.log under log_dir), never both.
+    # Default is "std", not "file": this project's live-testing workflow relies on
+    # seeing logger output in the terminal during real login/restart sessions, and
+    # "std" is also what a Docker deployment wants with zero configuration (`docker
+    # logs` captures stdout/stderr, not files written inside the container). "file"
+    # is the explicit opt-in for a headless/service deployment that wants a
+    # persistent log file instead. Does not affect configure_trace's NDJSON wire
+    # trace, which stays file-only regardless (gitea #26).
+    log_sink: LogSink = LogSink.STD
 
 
 def load_config(

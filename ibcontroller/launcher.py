@@ -727,13 +727,16 @@ async def launch_instance(
         level=config.log_level,
         log_dir=config.log_dir,
         filename=f"ibcontroller-{config.instance}.log",
+        sink=config.log_sink,
     )
     configure_trace(
         instance=config.instance,
         enabled=config.trace_enabled,
         trace_dir=config.log_dir,
     )
-    stdout_logger = configure_gateway_stdout(config.instance, config.log_dir)
+    stdout_logger = configure_gateway_stdout(
+        config.instance, config.log_dir, sink=config.log_sink
+    )
     plan = await anyio.to_thread.run_sync(
         functools.partial(
             build_launch_plan, config, agent_jar, restart_hash=restart_hash

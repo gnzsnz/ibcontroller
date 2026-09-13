@@ -867,7 +867,7 @@ async def test_drain_stdout_writes_lines_through_the_queued_stdout_logger(tmp_pa
     logger instead of writing/flushing a file itself -- the real write
     happens on that logger's own listener thread. The resulting file still
     ends up with the same content a direct write would have produced."""
-    stdout_logger = configure_gateway_stdout("paper", tmp_path)
+    stdout_logger = configure_gateway_stdout("paper", tmp_path, sink="file")
     process = _FakeProcessWithStdout([b"line one\n", b"line two\n"])
 
     # pyrefly: ignore [bad-argument-type]
@@ -875,6 +875,21 @@ async def test_drain_stdout_writes_lines_through_the_queued_stdout_logger(tmp_pa
     stop_logging()
 
     assert (tmp_path / "gateway-paper.log").read_text() == "line one\nline two\n"
+
+
+async def test_drain_stdout_std_sink_reaches_console_not_a_file(tmp_path, capsys):
+    """sink="std" (the default, gitea #26) routes Gateway/TWS's own console
+    output through a `StreamHandler` instead of `gateway-{instance}.log`, so it
+    reaches `docker logs` -- no file is ever created."""
+    stdout_logger = configure_gateway_stdout("paper", tmp_path)
+    process = _FakeProcessWithStdout([b"line one\n", b"line two\n"])
+
+    # pyrefly: ignore [bad-argument-type]
+    await _drain_stdout(process, stdout_logger)
+    stop_logging()
+
+    assert not (tmp_path / "gateway-paper.log").exists()
+    assert "line one\nline two\n" in capsys.readouterr().err
 
 
 # --- clean_shutdown (async, needs a real socket -- fake server, no Gateway) ---------

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 
+import pytest
 from typed_settings.types import Secret
 
 from ibcontroller.logging_setup import (
@@ -24,12 +25,18 @@ def test_configure_logging_sets_up_console_handler():
 
 
 def test_configure_logging_adds_queued_file_handler_when_log_dir_given(tmp_path):
-    configure_logging(log_dir=tmp_path)
+    configure_logging(log_dir=tmp_path, sink="file")
     logger = logging.getLogger("ibcontroller")
     # The file handler is behind a QueueHandler (module docstring, 2026-09-08):
     # the logger itself sees no FileHandler -- that lives on the listener thread.
     assert any(isinstance(h, logging.handlers.QueueHandler) for h in logger.handlers)
     assert not any(isinstance(h, logging.FileHandler) for h in logger.handlers)
+    # sink="file" is exclusive -- no console handler either (gitea #26).
+    assert not any(
+        isinstance(h, logging.StreamHandler)
+        and not isinstance(h, logging.handlers.QueueHandler)
+        for h in logger.handlers
+    )
 
     child = logging.getLogger("ibcontroller.dispatch")
     child.info("test message, no secret involved")
@@ -43,8 +50,27 @@ def test_configure_logging_adds_queued_file_handler_when_log_dir_given(tmp_path)
     assert "test message" in log_file.read_text()
 
 
+def test_configure_logging_std_sink_creates_no_file_even_with_log_dir(tmp_path):
+    """sink="std" (the default) is exclusive -- log_dir is ignored, no file is
+    ever created, only the console handler (gitea #26)."""
+    configure_logging(log_dir=tmp_path)
+    logger = logging.getLogger("ibcontroller")
+    assert any(isinstance(h, logging.StreamHandler) for h in logger.handlers)
+    assert not any(
+        isinstance(h, logging.handlers.QueueHandler) for h in logger.handlers
+    )
+    stop_logging()
+
+    assert not (tmp_path / "ibcontroller.log").exists()
+
+
+def test_configure_logging_rejects_unknown_sink():
+    with pytest.raises(ValueError, match="sink"):
+        configure_logging(sink="bogus")
+
+
 def test_configure_logging_filename_carries_the_instance_name(tmp_path):
-    configure_logging(log_dir=tmp_path, filename="ibcontroller-paper.log")
+    configure_logging(log_dir=tmp_path, filename="ibcontroller-paper.log", sink="file")
     logger = logging.getLogger("ibcontroller")
     logger.info("instance-qualified log file")
     stop_logging()
@@ -54,10 +80,10 @@ def test_configure_logging_filename_carries_the_instance_name(tmp_path):
 
 
 def test_configure_logging_is_idempotent(tmp_path):
-    configure_logging(log_dir=tmp_path)
-    configure_logging(log_dir=tmp_path)
+    configure_logging(log_dir=tmp_path, sink="file")
+    configure_logging(log_dir=tmp_path, sink="file")
     logger = logging.getLogger("ibcontroller")
-    assert len(logger.handlers) == 2  # console + queue handler, not accumulated
+    assert len(logger.handlers) == 1  # queue handler only, not accumulated
     stop_logging()
 
 
@@ -70,7 +96,7 @@ def test_secret_is_already_safe_through_ordinary_logging(tmp_path):
     logger, which `configure_logging` deliberately disables (its own module
     docstring), so it can't see records from an `ibcontroller.*` child logger
     without extra wiring caplog itself doesn't do automatically."""
-    configure_logging(log_dir=tmp_path)
+    configure_logging(log_dir=tmp_path, sink="file")
     logger = logging.getLogger("ibcontroller.somewhere")
     secret = Secret("super-secret-value")
 
