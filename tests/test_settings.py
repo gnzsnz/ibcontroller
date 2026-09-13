@@ -117,6 +117,26 @@ async def test_load_settings_file_missing_settings_key_is_empty(tmp_path):
     assert settings_file.settings == []
 
 
+async def test_load_settings_file_missing_file_raises_settings_error(tmp_path):
+    missing_path = tmp_path / "does_not_exist.toml"
+    with pytest.raises(SettingsError, match="could not read"):
+        await load_settings_file(missing_path)
+
+
+async def test_load_settings_file_malformed_toml_raises_settings_error(tmp_path):
+    toml_path = tmp_path / "ibkr_settings.toml"
+    toml_path.write_text("[[settings]\nthis is not valid toml")
+    with pytest.raises(SettingsError, match="not valid TOML"):
+        await load_settings_file(toml_path)
+
+
+async def test_load_settings_file_invalid_structure_raises_settings_error(tmp_path):
+    toml_path = tmp_path / "ibkr_settings.toml"
+    toml_path.write_text('settings = "not a list of tables"')
+    with pytest.raises(SettingsError, match="invalid structure"):
+        await load_settings_file(toml_path)
+
+
 async def test_load_settings_file_warns_eagerly_on_non_eligible_value_from_config(
     tmp_path, caplog
 ):

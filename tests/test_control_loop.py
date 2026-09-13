@@ -292,6 +292,65 @@ async def test_apply_declarative_settings_applies_builtin_with_no_settings_file(
     } in calls
 
 
+async def test_apply_declarative_settings_applies_builtin_when_user_file_missing(
+    sock_path, event_sock_path, caplog
+):
+    """Issues #27/#30: a `Config.settings_file` that fails to load (missing
+    here) used to abort the whole function before `open_settings_dialog` ever
+    ran, silently skipping the built-in `read_only_api` entry too. Now the
+    load failure is isolated and the built-in entry still applies."""
+    calls: list[dict] = []
+    responder = _tracking_responder(calls)
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = Dispatcher(
+            AgentCommandConnection(sock_path), AgentEventConnection(event_sock_path)
+        )
+        await dispatcher.start()
+        launched = types.SimpleNamespace(dispatcher=dispatcher)
+        config = _config(
+            settings_file="/nonexistent/ibkr_settings.toml", read_only_api=False
+        )
+        try:
+            with caplog.at_level(logging.ERROR, logger="ibcontroller.control_loop"):
+                task = asyncio.ensure_future(
+                    _apply_declarative_settings(
+                        launched,  # type: ignore[arg-type]
+                        LABELS,
+                        config,
+                    )
+                )
+                await asyncio.sleep(0.02)
+                dispatcher.window_events.emit(
+                    WindowEvent(
+                        seq=1,
+                        kind="window_opened",
+                        window=WindowInfo(
+                            class_="feature.configure.ai",
+                            title="DU123 Trader Workstation Configuration "
+                            "(Simulated Trading)",
+                            window_id="w9",
+                        ),
+                    )
+                )
+                await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert {
+        "cmd": "set_checkbox",
+        "target": "Read-Only API",
+        "checked": False,
+        "window_id": "w9",
+    } in calls
+    assert any(
+        "could not load" in message and "nonexistent" in message
+        for message in caplog.messages
+    )
+
+
 async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
     sock_path, event_sock_path, monkeypatch
 ):

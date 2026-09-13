@@ -144,10 +144,27 @@ async def load_settings_file(path: str | Path) -> SettingsFile:
     Read via `anyio.Path`, off the event loop -- called once per launch/
     restart from `control_loop._apply_declarative_settings`, concurrently
     with the Dispatcher's own event/command tasks while the Configuration
-    dialog is open on the live Gateway."""
-    raw = await AsyncPath(path).read_bytes()
-    data = tomllib.loads(raw.decode("utf-8"))
-    settings_file = converter.structure(data, SettingsFile)
+    dialog is open on the live Gateway.
+
+    Raises `SettingsError` (never a raw `OSError`/`tomllib.TOMLDecodeError`/
+    cattrs error) for a missing/unreadable file, invalid TOML, or a
+    structure that doesn't match `SettingsFile` -- `control_loop` catches
+    this specifically to fall back to built-in-only settings rather than
+    losing the whole settings step to one bad user file."""
+    try:
+        raw = await AsyncPath(path).read_bytes()
+    except OSError as exc:
+        raise SettingsError(f"could not read settings file {path}: {exc}") from exc
+    try:
+        data = tomllib.loads(raw.decode("utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise SettingsError(f"settings file {path} is not valid TOML: {exc}") from exc
+    try:
+        settings_file = converter.structure(data, SettingsFile)
+    except cattrs.errors.ClassValidationError as exc:
+        raise SettingsError(
+            f"settings file {path} has an invalid structure: {exc}"
+        ) from exc
     for entry in settings_file.settings:
         if (
             entry.value_from_config is not None
