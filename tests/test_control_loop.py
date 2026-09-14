@@ -9,6 +9,7 @@ around a monkeypatched `_run_one_cycle`, so it is."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import types
 from datetime import datetime, timedelta
@@ -33,6 +34,7 @@ from ibcontroller.control_loop import (
     _build_registry,
     _log_transition,
     _sleep_until_scheduled_shutdown,
+    _wait_for_first_completion,
     run_control_loop,
 )
 from ibcontroller.dispatch import Dispatcher
@@ -181,6 +183,143 @@ async def test_sleep_until_scheduled_shutdown_sleeps_forever_when_unconfigured()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def _never_completing_task():
+    return asyncio.ensure_future(asyncio.sleep(3600))
+
+
+async def _delayed_process_exit(process, *, delay: float, returncode: int = 0) -> int:
+    """Stand-in for `launched.process.wait()` -- like the real coroutine, only
+    returns once `returncode` is already set, so callers can't observe one
+    without the other."""
+    await asyncio.sleep(delay)
+    process.returncode = returncode
+    return returncode
+
+
+async def test_wait_for_first_completion_returns_process_done_immediately():
+    """The common case: the process actually exits and gets reaped before any
+    dispatcher task notices -- no grace-period wait needed."""
+    process = types.SimpleNamespace(returncode=None)
+    process_done = asyncio.ensure_future(_delayed_process_exit(process, delay=0.01))
+    watcher = await _never_completing_task()
+    scheduled_shutdown = await _never_completing_task()
+    try:
+        finished = await asyncio.wait_for(
+            _wait_for_first_completion(
+                watcher=watcher,
+                process_done=process_done,
+                scheduled_shutdown=scheduled_shutdown,
+                dispatcher_tasks=[],
+                process=process,
+                grace_period=5.0,
+            ),
+            timeout=2.0,
+        )
+    finally:
+        watcher.cancel()
+        scheduled_shutdown.cancel()
+
+    assert finished is process_done
+    assert process.returncode == 0
+
+
+async def test_wait_for_first_completion_grace_period_catches_a_delayed_reap():
+    """The bug this guards against (confirmed live, 2026-09-14): a dispatcher
+    task notices TWS's socket close and finishes before asyncio has reaped the
+    already-exiting process. A real scheduled restart was misclassified
+    `CONNECTION_LOST` this way. As long as the process is actually reaped
+    within the grace period, `process.returncode` must be set by the time
+    this returns -- regardless of which task it reports as `finished` --
+    since `_run_one_cycle`'s own classification falls back to checking
+    `returncode` directly."""
+    process = types.SimpleNamespace(returncode=None)
+    process_done = asyncio.ensure_future(_delayed_process_exit(process, delay=0.05))
+    dispatcher_task = asyncio.ensure_future(asyncio.sleep(0))
+    watcher = await _never_completing_task()
+    scheduled_shutdown = await _never_completing_task()
+    try:
+        finished = await asyncio.wait_for(
+            _wait_for_first_completion(
+                watcher=watcher,
+                process_done=process_done,
+                scheduled_shutdown=scheduled_shutdown,
+                dispatcher_tasks=[dispatcher_task],
+                process=process,
+                grace_period=2.0,
+            ),
+            timeout=2.0,
+        )
+    finally:
+        watcher.cancel()
+        scheduled_shutdown.cancel()
+
+    assert finished is dispatcher_task
+    assert process.returncode == 0
+
+
+async def test_wait_for_first_completion_gives_up_after_grace_period(caplog):
+    """The process never actually exits (a genuine `CONNECTION_LOST`) -- the
+    grace-period wait must not block indefinitely."""
+    process = types.SimpleNamespace(returncode=None)
+    process_done = asyncio.ensure_future(asyncio.sleep(3600))
+    dispatcher_task = asyncio.ensure_future(asyncio.sleep(0))
+    watcher = await _never_completing_task()
+    scheduled_shutdown = await _never_completing_task()
+    try:
+        finished = await asyncio.wait_for(
+            _wait_for_first_completion(
+                watcher=watcher,
+                process_done=process_done,
+                scheduled_shutdown=scheduled_shutdown,
+                dispatcher_tasks=[dispatcher_task],
+                process=process,
+                grace_period=0.05,
+            ),
+            timeout=2.0,
+        )
+    finally:
+        watcher.cancel()
+        scheduled_shutdown.cancel()
+        process_done.cancel()
+
+    assert finished is dispatcher_task
+    assert process.returncode is None
+
+
+async def test_wait_for_first_completion_returns_watcher_without_grace_delay():
+    """`watcher`/`scheduled_shutdown` finishing is never a process-exit
+    candidate -- no grace-period wait should apply, so this returns promptly
+    even with a long grace period and a process that never exits."""
+    process = types.SimpleNamespace(returncode=None)
+    process_done = asyncio.ensure_future(asyncio.sleep(3600))
+    scheduled_shutdown = await _never_completing_task()
+
+    async def _watcher_raises():
+        raise RuntimeError("boom")
+
+    watcher = asyncio.ensure_future(_watcher_raises())
+    try:
+        finished = await asyncio.wait_for(
+            _wait_for_first_completion(
+                watcher=watcher,
+                process_done=process_done,
+                scheduled_shutdown=scheduled_shutdown,
+                dispatcher_tasks=[],
+                process=process,
+                grace_period=5.0,
+            ),
+            timeout=1.0,
+        )
+    finally:
+        scheduled_shutdown.cancel()
+        process_done.cancel()
+        with contextlib.suppress(RuntimeError):
+            await watcher
+
+    assert finished is watcher
+    assert process.returncode is None
 
 
 async def test_run_control_loop_cold_restart_relaunches_with_no_restart_hash(

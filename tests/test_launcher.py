@@ -34,9 +34,11 @@ from ibcontroller.launcher import (
     _find_java_bin,
     _list_version_candidates,
     _prevent_native_restart,
+    _prevent_native_restart_linux,
     _program_path,
     _read_i4j_variable,
     _read_jxbrowser_key,
+    _read_linux_vmoptions,
     _read_macos_vmoptions,
     _read_vmoptions_file,
     _resolve_program_path,
@@ -396,6 +398,27 @@ def test_read_macos_vmoptions_missing_plist_returns_empty(tmp_path):
     assert _read_macos_vmoptions(tmp_path / "IB Gateway 10.50.app") == []
 
 
+def test_read_linux_vmoptions_keeps_dprops_filters_templates(tmp_path):
+    install4j_dir = tmp_path / ".install4j"
+    install4j_dir.mkdir()
+    (install4j_dir / "i4jparams.conf").write_text(
+        '<variable name="javaOptions" value="--add-opens=java.desktop/'
+        "javax.swing=ALL-UNNAMED -Djdk.xml.elementAttributeLimit=10000 "
+        '${SOME_TEMPLATE_VAR}" />'
+    )
+
+    options = _read_linux_vmoptions(install4j_dir)
+
+    assert options == [
+        "--add-opens=java.desktop/javax.swing=ALL-UNNAMED",
+        "-Djdk.xml.elementAttributeLimit=10000",
+    ]
+
+
+def test_read_linux_vmoptions_missing_file_returns_empty(tmp_path):
+    assert _read_linux_vmoptions(tmp_path / ".install4j") == []
+
+
 def test_prevent_native_restart_renames_the_app_bundle(tmp_path):
     program_path = tmp_path / "IB Gateway 10.50"
     original = program_path / "IB Gateway 10.50.app"
@@ -425,6 +448,39 @@ def test_prevent_native_restart_missing_bundle_returns_original_path(tmp_path):
     program_path = tmp_path / "IB Gateway 10.50"
     result = _prevent_native_restart(program_path)
     assert result == program_path / "IB Gateway 10.50.app"
+
+
+def test_prevent_native_restart_linux_renames_the_script(tmp_path):
+    program_path = tmp_path / "ibgateway" / "10.50"
+    program_path.mkdir(parents=True)
+    original = program_path / "ibgateway"
+    original.write_text("#!/bin/sh\nexec true\n")
+
+    result = _prevent_native_restart_linux(program_path, "ibgateway")
+
+    renamed = program_path / "ibgateway-1"
+    assert result == renamed
+    assert renamed.is_file()
+    assert not original.exists()
+
+
+def test_prevent_native_restart_linux_is_idempotent(tmp_path):
+    program_path = tmp_path / "ibgateway" / "10.50"
+    program_path.mkdir(parents=True)
+    (program_path / "ibgateway").write_text("#!/bin/sh\nexec true\n")
+
+    first = _prevent_native_restart_linux(program_path, "ibgateway")
+    second = _prevent_native_restart_linux(program_path, "ibgateway")
+
+    assert first == second
+    assert second.is_file()
+
+
+def test_prevent_native_restart_linux_missing_script_returns_original_path(tmp_path):
+    program_path = tmp_path / "ibgateway" / "10.50"
+    program_path.mkdir(parents=True)
+    result = _prevent_native_restart_linux(program_path, "ibgateway")
+    assert result == program_path / "ibgateway"
 
 
 def _make_synthetic_install(tmp_path, *, os_name: str, program: str = "gateway"):
@@ -461,6 +517,8 @@ def _make_synthetic_install(tmp_path, *, os_name: str, program: str = "gateway")
         java = program_path / "jre" / "bin" / "java"
         java.parent.mkdir(parents=True)
         java.write_text("")
+        script_name = "ibgateway" if program == "gateway" else "tws"
+        (program_path / script_name).write_text("#!/bin/sh\nexec true\n")
     return base
 
 
@@ -849,6 +907,40 @@ def test_build_launch_plan_linux_tws(tmp_path):
     assert "jclient.LoginFrame" in plan.command
     assert "-Xmx768m" in plan.command
     assert f"-DjtsConfigDir={settings_dir}" in plan.command
+
+    # The native launch script must be renamed -- otherwise TWS/Gateway's own
+    # restart logic can invoke it directly, with no agent attached, bypassing
+    # launcher.py entirely (confirmed live, 2026-09-14: a real scheduled
+    # restart on Linux left ibcontroller unable to detect PROCESS_EXITED and
+    # relaunch/relogin).
+    program_path = base / "10.50"
+    assert not (program_path / "tws").exists()
+    assert (program_path / "tws-1").is_file()
+
+
+def test_build_launch_plan_linux_reads_add_opens_from_i4jparams(tmp_path):
+    """The bug this guards against: a real TWS-on-Linux launch crashed with
+    `InaccessibleObjectException` because `tws.vmoptions` never carries
+    `--add-opens`/`--add-exports` -- only install4j's own `javaOptions`
+    variable in `i4jparams.conf` does (confirmed live, 2026-09-14)."""
+    base = _make_synthetic_install(tmp_path, os_name="linux", program="tws")
+    program_path = base / "10.50"
+    (program_path / ".install4j" / "i4jparams.conf").write_text(
+        '<variable name="javaOptions" value="--add-opens=java.desktop/'
+        'javax.swing=ALL-UNNAMED" />\n'
+    )
+    settings_dir = tmp_path / "settings"
+    config = _config(
+        program="tws",
+        tws_path=str(base),
+        tws_settings_path=str(settings_dir),
+        instance="live",
+    )
+    plan = build_launch_plan(
+        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=tmp_path / "run"
+    )
+
+    assert "--add-opens=java.desktop/javax.swing=ALL-UNNAMED" in plan.command
 
 
 def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(tmp_path, caplog):

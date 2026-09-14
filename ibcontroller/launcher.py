@@ -562,6 +562,28 @@ def _read_macos_vmoptions(app_bundle: Path) -> list[str]:
     return [opt for opt in raw_options if "${" not in opt and not opt.startswith("-D")]
 
 
+def _read_linux_vmoptions(install4j_dir: Path) -> list[str]:
+    """`--add-opens`/`--add-exports` (JPMS strong encapsulation) live in
+    install4j's own `javaOptions` variable inside `i4jparams.conf` on Linux,
+    not in `tws.vmoptions`/`ibgateway.vmoptions` -- confirmed live
+    (2026-09-14, a real TWS launch crashing with `InaccessibleObjectException`
+    on `javax.swing`): a real install's `tws.vmoptions` was empty, while its
+    install4j-generated native launch script hardcoded the exact same flags
+    straight from this variable's value. Mirrors `_read_macos_vmoptions`'s
+    role for `Info.plist` on macOS, just a different source file for the same
+    install4j mechanism.
+
+    Unlike the macOS version, `-D` tokens are kept here rather than filtered:
+    on Linux this same variable is also the only place some installs carry
+    real `-D` fixes (e.g. Gateway's `-Djdk.xml.elementAttributeLimit`) and a
+    `-DjxBrowserKey`. A harmless duplicate of `_read_jxbrowser_key`'s own
+    value when both fire -- the JVM just takes the last one."""
+    raw = _read_i4j_variable(install4j_dir, "javaOptions")
+    if not raw:
+        return []
+    return [opt for opt in raw.split() if "${" not in opt]
+
+
 def _prevent_native_restart(program_path: Path) -> Path:
     """Ports IBC's own `ibcstart.sh` step ("Renaming IB's TWS or Gateway start
     script to prevent restart without IBC") -- confirmed live necessary,
@@ -586,9 +608,8 @@ def _prevent_native_restart(program_path: Path) -> Path:
     actually lives now, renamed or not.
 
     macOS only, called only under `os_name == "macos"` in `build_launch_plan`
-    -- IBC's own Linux branch renames the `tws`/`ibgateway` launch *scripts*
-    instead, a different mechanism this project hasn't needed yet (no live
-    Linux install to verify against, per CLAUDE.md's own platform note)."""
+    -- see `_prevent_native_restart_linux` for the Linux equivalent, called
+    under the `else` branch there."""
     original = program_path / f"{program_path.name}.app"
     renamed = program_path / f"{program_path.name}-1.app"
     if renamed.is_dir():
@@ -600,6 +621,47 @@ def _prevent_native_restart(program_path: Path) -> Path:
             "relaunching itself outside ibcontroller's control",
             original,
             renamed,
+        )
+        return renamed
+    return original
+
+
+def _prevent_native_restart_linux(program_path: Path, script_name: str) -> Path:
+    """`_prevent_native_restart`'s Linux equivalent -- renames the
+    install4j-generated native launch script (`ibgateway`/`tws`, a plain shell
+    script sitting directly in `program_path`) instead of a `.app` bundle, for
+    the same reason: left alone, Gateway/TWS's own scheduled-restart logic
+    invokes that script directly to relaunch itself, completely outside
+    `launcher.py`, with no agent embedded -- ibcontroller loses control of the
+    instance on every restart (confirmed live, 2026-09-14: a real IB Gateway
+    restart on Linux was classified `CONNECTION_LOST` rather than
+    `PROCESS_EXITED`, because the agent-embedded JVM tore itself down as part
+    of triggering that native relaunch rather than via a clean process exit
+    `launcher.py`/`control_loop.py` could see coming). Renaming the script
+    breaks whatever internal reference that restart logic uses to find and
+    re-invoke it, so only an explicit relaunch through this module can bring
+    the instance back -- matching IBC's own `ibcstart.sh` Linux behavior
+    ("Renaming IB's TWS or Gateway start script to prevent restart without
+    IBC").
+
+    Idempotent, matching `_prevent_native_restart`: a second call after the
+    rename already happened is a no-op, returning the same renamed path.
+    Unlike the macOS version, the return value doesn't need to be read back by
+    a vmoptions reader -- `_read_linux_vmoptions` reads from
+    `.install4j/i4jparams.conf`, which doesn't move when this script is
+    renamed -- so callers only need this for its side effect."""
+    original = program_path / script_name
+    renamed = program_path / f"{script_name}-1"
+    if renamed.exists():
+        return renamed
+    if original.exists():
+        original.rename(renamed)
+        logger.warning(
+            "renamed %s -> %s to prevent %s's own restart logic from "
+            "relaunching itself outside ibcontroller's control",
+            original,
+            renamed,
+            script_name,
         )
         return renamed
     return original
@@ -682,6 +744,10 @@ def build_launch_plan(
     if os_name == "macos":
         app_bundle = _prevent_native_restart(program_path)
         vm_options.extend(_read_macos_vmoptions(app_bundle))
+    else:
+        script_name = "ibgateway" if resolved_program == "gateway" else "tws"
+        _prevent_native_restart_linux(program_path, script_name)
+        vm_options.extend(_read_linux_vmoptions(install4j_dir))
 
     # Agent-side logging (java.util.logging, AgentMain.configureLogging, 2026-09-08):
     # its own per-instance file under the same shared log dir Python uses, so the

@@ -272,6 +272,49 @@ async def run_control_loop(
         stop_logging()
 
 
+async def _wait_for_first_completion(
+    *,
+    watcher: asyncio.Task,
+    process_done: asyncio.Task,
+    scheduled_shutdown: asyncio.Task,
+    dispatcher_tasks: list[asyncio.Task],
+    process: asyncio.subprocess.Process,
+    grace_period: float = 2.0,
+) -> asyncio.Task:
+    """Races the four background waits `_run_one_cycle` cares about and
+    returns whichever finished first. A JVM closes its own sockets early in
+    its shutdown sequence -- well before the OS reaps the process and
+    asyncio's child watcher sets `process.returncode` -- so on a real process
+    exit, a dispatcher task noticing the dropped connection can be the one
+    `asyncio.wait` reports as first-completed, moments ahead of `process_done`
+    itself (confirmed live, 2026-09-14: a real scheduled restart was
+    misclassified `CONNECTION_LOST` this way even after the Linux
+    native-relaunch path was independently closed off, i.e. the process
+    really was exiting -- this race, not a bypassed relaunch, was the cause).
+
+    When that happens (some other task finished first and `returncode` isn't
+    set yet), gives `process_done` a short bounded window to catch up before
+    returning -- same shape as `_is_restart_with_grace`'s own poll: bound the
+    race statistically rather than trusting an instant check or waiting
+    forever. Deliberately still returns the *original* first-finished task
+    (not `process_done`) either way -- `_run_one_cycle`'s own classification
+    already falls back to checking `process.returncode` directly, so it picks
+    up a `PROCESS_EXITED` classification correctly regardless of which task
+    object this returns, as long as `returncode` itself is now set."""
+    done, _pending = await asyncio.wait(
+        [watcher, process_done, scheduled_shutdown, *dispatcher_tasks],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    finished = next(iter(done))
+    if (
+        finished not in (watcher, scheduled_shutdown, process_done)
+        and process.returncode is None
+    ):
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(process_done), timeout=grace_period)
+    return finished
+
+
 async def _is_restart_with_grace(
     settings_dir: str, *, grace_period: float = 5.0, poll_interval: float = 0.2
 ) -> bool:
@@ -373,14 +416,12 @@ async def _run_one_cycle(  # noqa: PLR0915
             _sleep_until_scheduled_shutdown(config)
         )
         try:
-            done, _pending = await asyncio.wait(
-                [
-                    watcher,
-                    process_done,
-                    scheduled_shutdown,
-                    *launched.dispatcher.tasks,
-                ],
-                return_when=asyncio.FIRST_COMPLETED,
+            finished = await _wait_for_first_completion(
+                watcher=watcher,
+                process_done=process_done,
+                scheduled_shutdown=scheduled_shutdown,
+                dispatcher_tasks=launched.dispatcher.tasks,
+                process=launched.process,
             )
         finally:
             process_done.cancel()
@@ -390,7 +431,6 @@ async def _run_one_cycle(  # noqa: PLR0915
             with contextlib.suppress(asyncio.CancelledError):
                 await scheduled_shutdown
 
-        finished = next(iter(done))
         if finished is watcher:
             exc = watcher.exception()
             cause = ShutdownCause.LOGIN_FAILED
@@ -402,7 +442,9 @@ async def _run_one_cycle(  # noqa: PLR0915
             # A restart kills the process and every socket it held at once, so
             # `asyncio.wait`'s FIRST_COMPLETED race between `process_done` and
             # the event-reader noticing EOF isn't a reliable "process died" vs
-            # "connection dropped" signal. `returncode` is ground truth.
+            # "connection dropped" signal on its own -- `returncode` is ground
+            # truth, and `_wait_for_first_completion` already gave it a short
+            # grace period to catch up before returning.
             cause = ShutdownCause.PROCESS_EXITED
             logger.warning(
                 "agent process exited on its own (returncode=%s)",
