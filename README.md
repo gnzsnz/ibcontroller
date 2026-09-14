@@ -67,6 +67,26 @@ until renamed -- neither auto-applies just by existing. The templates themselves
 bundled inside the installed package (`ibcontroller/data/`), not kept in this
 repository.
 
+### File location
+
+When environment variable `IBCONTROLLER_APP_DIR` is not set, then `ibcontroller` will use the standard platform directories.
+
+| Location | Directory| Platform |
+| -- | -- | -- |
+| `config_dir` | `~/.config/ibcontroller` | Linux |
+| `config_dir` | `~/Library/Application Support/ibcontroller` | macOS |
+| `log_dir` | `~/.local/share/ibcontroller` | Linux |
+| `log_dir` | `~/Library/Application Support/ibcontroller` | macOS |
+| `socket_dir` | `/run/user/<uid>/SuperApp` | Linux |
+| `socket_dir` | `~/Library/Caches/TemporaryItems/SuperApp` | macOS |
+
+When `IBCONTROLLER_APP_DIR` is set then:
+
+- `config_dir`-> `IBCONTROLLER_APP_DIR/config`
+- `log_dir`-> `IBCONTROLLER_APP_DIR/log`
+- `socket_dir` -> `IBCONTROLLER_APP_DIR/run`
+
+
 ### Settings
 
 **Category** column says whether a field configures the real TWS/Gateway application itself
