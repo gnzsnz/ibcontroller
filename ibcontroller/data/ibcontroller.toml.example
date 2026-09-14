@@ -75,10 +75,12 @@
 # (console only) or "file" (only, under log_dir) -- exclusive, not both. Doesn't
 # affect the wire trace above, which stays file-only regardless of this setting.
 # (env: IBCONTROLLER_LOG_SINK)
+# Default "std"
 # log_sink = "std"
 
 # IBC: ReadOnlyLogin -- TWS only (IBC disables it on Gateway); NOT YET WIRED to any real
 # behavior in ibcontroller (loaded, but nothing acts on it yet -- see TODO.md).
+# Default false
 # read_only_login = false
 
 # IBC: ReadOnlyApi -- true/false sets it
@@ -89,6 +91,7 @@
 # IBC: ExistingSessionDetectedAction -- how ibcontroller itself reacts to Gateway's
 # "existing session detected" dialog: manual/primary/primaryoverride/secondary
 # (env: IBCONTROLLER_EXISTING_SESSION_ACTION)
+# Default "manual"
 # existing_session_action = "manual"
 
 # IBC: AcceptIncomingConnectionAction -- how ibcontroller reacts to TWS/Gateway's
@@ -116,6 +119,7 @@
 # single space between the two parts. Drives settings.py's "auto_restart_time" action
 # (see ibkr_settings.toml.example) -- omit this key (the default) to leave Gateway's
 # existing Auto Restart setting unchanged (env: IBCONTROLLER_AUTO_RESTART_TIME)
+# Default None - not set
 # auto_restart_time = "08:00 AM"
 
 # IBC: AutoLogoffTime -- same "hh:mm AM/PM" format, same Lock and Exit control as
@@ -124,6 +128,7 @@
 # last, matching IBC's own precedence) -- set only one of the two in practice.
 # Omit this key (the default) to leave the existing setting unchanged
 # (env: IBCONTROLLER_AUTO_LOGOFF_TIME)
+# Default None - not set
 # auto_logoff_time = "08:00 AM"
 
 # --- Applies to TWS and Gateway alike (ported from IBC's IbcTws.java, the shared
@@ -135,11 +140,13 @@
 # (via ibcontroller's own launch_instance, not IBC's native-launcher File > Restart),
 # forcing the weekly reauth IBKR requires around Sunday 01:00 US/Eastern token
 # invalidation (env: IBCONTROLLER_COLD_RESTART_TIME)
+# Default None - not set
 # cold_restart_time = "07:05"
 
 # IBC: ClosedownAt -- "HH:MM" (every day) or "<Weekday> HH:MM" (one day a week,
 # Weekday a full English name, Monday..Sunday). At this time, ibcontroller closes
 # the instance tidily with no relaunch -- you're responsible for restarting it
 # yourself (env: IBCONTROLLER_CLOSEDOWN_AT)
+# Default None - not set
 # closedown_at = "22:00"
 # closedown_at = "Friday 22:00"
