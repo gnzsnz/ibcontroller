@@ -2,14 +2,13 @@
 # the agent is small and Java is the stated weak spot here, so the build stays as plain as
 # possible; reach for a real build tool only if this genuinely stops scaling).
 #
-# Uses the project-local jdk/ (Azul Zulu) to compile, but --release targets Java 17: confirmed
-# via a real local install that Gateway 10.50 bundles Zulu 17 (Zulu17.57+18-SA), not Java 25 --
-# that number was from a different install's thread dump and isn't universal. The agent runs
-# under whatever JRE Gateway/TWS actually bundles (scripts/launch-agent.sh finds it), so this
-# targets the oldest confirmed version, not the newest. Revisit if a newer/older Gateway version
-# is confirmed to need something different.
+# Expects JAVA_HOME to point to a JDK (set by SDKMAN locally, actions/setup-java in CI).
+# --release targets Java 17: confirmed via a real local install that Gateway 10.50 bundles
+# Zulu 17 (Zulu17.57+18-SA). The agent runs under whatever JRE Gateway/TWS actually bundles
+# (scripts/launch-agent.sh finds it), so this targets the oldest confirmed version, not the
+# newest. Revisit if a newer/older Gateway version is confirmed to need something different.
 
-JDK := jdk
+JDK ?= $(JAVA_HOME)
 JAVAC := $(JDK)/bin/javac --release 17
 JAR := $(JDK)/bin/jar
 JAVA := $(JDK)/bin/java
@@ -21,6 +20,9 @@ build/ibcontroller-agent.jar: $(SRC)
 	$(JAVAC) -d build/classes $(SRC)
 	$(JAR) cfe $@ ibcontroller.agent.AgentMain -C build/classes .
 	cp build/ibcontroller-agent.jar ibcontroller/
+
+.PHONY: build
+build: build/ibcontroller-agent.jar
 
 .PHONY: run
 run: build/ibcontroller-agent.jar
