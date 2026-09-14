@@ -31,7 +31,6 @@ dependencies = [
     "attrs",
     "cattrs",
     "python-dotenv>=1.2.3",
-    "environ-config>=26.1.0",
     "platformdirs>=4.11.7",
     "typer>=0.15.1",
     "typed-settings",
