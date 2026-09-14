@@ -1,0 +1,78 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Restore environment
+        run: uv sync --all-groups
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Build Java agent jar
+        run: make build
+
+      - name: Pre-commit checks
+        run: uv run pre-commit run --all-files
+
+      - name: Test
+        run: uv run pytest
+
+      - name: Build
+        run: uv build
+
+      - name: Verify jar is packaged in wheel
+        run: python -m zipfile -l dist/*.whl | grep -q ibcontroller-agent.jar
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # trusted publishing to PyPI -- no API token in secrets
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          # setuptools-scm derives the package version from git tags
+          # (pyproject.toml: dynamic = ["version"]); a shallow clone
+          # would silently produce a fallback/dev version.
+          fetch-depth: 0
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Restore environment
+        run: uv sync --all-groups
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Build jar and Python distribution
+        run: make dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
