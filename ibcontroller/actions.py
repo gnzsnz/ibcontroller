@@ -37,6 +37,10 @@ from ibcontroller.dispatch import Dispatcher
 
 _DEFAULT_DISMISS_LABELS = ("OK", "Close", "Dismiss")
 
+_MENU_RETRY_INTERVAL = 0.25
+"""Delay, in seconds, between `navigate_menu` retries while the resolved
+menu item is disabled."""
+
 
 async def _forward(dispatcher: Dispatcher, method: str, *args: object) -> Any:
     """Runs one `AgentCommandConnection` method (named by `method`) through
@@ -137,11 +141,6 @@ async def type_text_near_label(
     plain string, same contract as `type_text`. `window_id`, if given,
     scopes the action to one window."""
     await _forward(dispatcher, "set_text_near_label", label, index, value, window_id)
-
-
-_MENU_RETRY_INTERVAL = 0.25
-"""Delay, in seconds, between `navigate_menu` retries while the resolved
-menu item is disabled."""
 
 
 async def navigate_menu(
