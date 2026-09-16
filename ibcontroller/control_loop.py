@@ -43,9 +43,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
+from typing import Protocol
 
 from ibcontroller.config import Config
 from ibcontroller.labels import Labels, load_labels
@@ -173,6 +175,7 @@ async def _apply_declarative_settings(
         launched.dispatcher,
         labels.settings,
         program=config.program,
+        timeout=config.second_factor_authentication_timeout,
     )
     try:
         await apply_settings_from_file(
@@ -272,13 +275,23 @@ async def run_control_loop(
         stop_logging()
 
 
+class _HasReturncode(Protocol):
+    """The only slice of `asyncio.subprocess.Process` this function actually
+    reads -- narrowed so tests can pass a lightweight stand-in instead of a
+    real subprocess. A property, not a plain attribute, to structurally match
+    `asyncio.subprocess.Process.returncode`, which is itself a property."""
+
+    @property
+    def returncode(self) -> int | None: ...
+
+
 async def _wait_for_first_completion(
     *,
     watcher: asyncio.Task,
     process_done: asyncio.Task,
     scheduled_shutdown: asyncio.Task,
-    dispatcher_tasks: list[asyncio.Task],
-    process: asyncio.subprocess.Process,
+    dispatcher_tasks: Sequence[asyncio.Task],
+    process: _HasReturncode,
     grace_period: float = 2.0,
 ) -> asyncio.Task:
     """Races the four background waits `_run_one_cycle` cares about and

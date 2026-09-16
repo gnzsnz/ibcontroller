@@ -52,6 +52,7 @@
   "settings": {
     "gateway_menu_path": "Configure/Settings",
     "tws_menu_path": "File/Global Configuration...",
+    "tws_menu_path_classic": "Edit/Global Configuration...",
     "dialog_title_marker": "Configuration",
     "apply_button": "Apply",
     "cancel_button": "Cancel",

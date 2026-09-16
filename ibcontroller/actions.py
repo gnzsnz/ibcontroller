@@ -154,14 +154,26 @@ async def navigate_menu(
     ordinary component tree, not menu dropdowns.
 
     Retries every `_MENU_RETRY_INTERVAL` seconds while the resolved item is
-    disabled (e.g. a blocking dialog is still open), up to `timeout` seconds,
-    then raises `TimeoutError`."""
+    disabled (e.g. a blocking dialog is still open) or not yet resolvable at
+    all (e.g. TWS is still populating its menubar right after login -- a
+    real race, not a wrong path: IBC avoids it upstream by gating the whole
+    config-dialog step on `MainWindowManager.getMainWindow()`/
+    `SessionManager.awaitReady()` before ever touching the menu, which this
+    project doesn't have an equivalent readiness signal for yet, so this
+    retry is the bounded-poll substitute), up to `timeout` seconds, then
+    re-raises the last failure (`ElementNotFoundError` or `TimeoutError`)."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
-        clicked = await dispatcher.send_command(
-            functools.partial(dispatcher.command_conn.navigate_menu, path)
-        )
+        try:
+            clicked = await dispatcher.send_command(
+                functools.partial(dispatcher.command_conn.navigate_menu, path)
+            )
+        except ElementNotFoundError:
+            if loop.time() >= deadline:
+                raise
+            await asyncio.sleep(_MENU_RETRY_INTERVAL)
+            continue
         if clicked:
             return
         if loop.time() >= deadline:

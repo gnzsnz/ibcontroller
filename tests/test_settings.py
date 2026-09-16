@@ -14,6 +14,7 @@ from typed_settings.types import Secret
 from ibcontroller.agent_client import (
     AgentCommandConnection,
     AgentEventConnection,
+    ElementNotFoundError,
     WindowEvent,
     WindowInfo,
 )
@@ -1005,14 +1006,15 @@ async def test_open_settings_dialog_navigates_and_waits_for_configuration_window
     assert window_id == "w9"
 
 
-async def test_open_settings_dialog_uses_tws_menu_path_for_tws(
+async def test_open_settings_dialog_uses_tws_classic_menu_path_first(
     sock_path, event_sock_path
 ):
     """Real, live-caught bug (2026-09-09): TWS has no `Configure` menu at all --
     `navigate_menu("Configure/Settings")` (Gateway's own path) fails with
-    `not_found` on a real TWS install. `program="tws"` must select `labels.
-    settings.tws_menu_path` instead (`"File/Global Configuration..."`, ported
-    from IBC's own `GetConfigDialogTask.java` Mosaic-layout branch)."""
+    `not_found` on a real TWS install. `program="tws"` must select a TWS path
+    instead. `labels.settings.tws_menu_path_classic`
+    (`"Edit/Global Configuration..."`) is tried first, matching IBC's own
+    `GetConfigDialogTask.java` try-Classic-then-Mosaic order (#37)."""
     calls: list[dict] = []
     responder = _tracking_responder(calls)
     async with (
@@ -1045,10 +1047,160 @@ async def test_open_settings_dialog_uses_tws_menu_path_for_tws(
 
     assert {
         "cmd": "navigate_menu",
-        "path": "File/Global Configuration...",
+        "path": "Edit/Global Configuration...",
     } in calls
+    assert {"cmd": "navigate_menu", "path": "File/Global Configuration..."} not in calls
     assert {"cmd": "navigate_menu", "path": "Configure/Settings"} not in calls
     assert window_id == "w9"
+
+
+async def test_open_settings_dialog_falls_back_to_tws_mosaic_menu_path(
+    sock_path, event_sock_path
+):
+    """#37: when the Classic-layout path doesn't resolve at all (a real
+    Mosaic-only TWS install, the common case), `open_settings_dialog` must
+    fall back to `labels.settings.tws_menu_path`
+    (`"File/Global Configuration..."`) instead of raising
+    `ElementNotFoundError` straight out of the Classic attempt."""
+    calls: list[dict] = []
+
+    def responder(request):
+        calls.append(request)
+        if request.get("cmd") == "dump":
+            return {"ok": True, "components": []}
+        if (
+            request.get("cmd") == "navigate_menu"
+            and request.get("path") == "Edit/Global Configuration..."
+        ):
+            return {"ok": False, "error": "not_found", "detail": "boom"}
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            task = asyncio.ensure_future(
+                open_settings_dialog(
+                    dispatcher,
+                    LABELS.settings,
+                    program="tws",
+                    timeout=5.0,
+                )
+            )
+            await asyncio.sleep(0.02)
+            dispatcher.window_events.emit(
+                _window_event(
+                    1,
+                    "window_opened",
+                    "feature.configure.ai",
+                    "DU123 Trader Workstation Configuration (Simulated Trading)",
+                    window_id="w9",
+                )
+            )
+            window_id = await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert {
+        "cmd": "navigate_menu",
+        "path": "Edit/Global Configuration...",
+    } in calls
+    assert {
+        "cmd": "navigate_menu",
+        "path": "File/Global Configuration...",
+    } in calls
+    assert window_id == "w9"
+
+
+async def test_open_settings_dialog_retries_missing_menu_item_before_failing(
+    sock_path, event_sock_path
+):
+    """#37: a menu item missing because TWS hasn't finished populating its
+    menubar yet (not because the path is wrong) must be retried, not raised
+    immediately -- `navigate_menu` (actions.py) now treats
+    `ElementNotFoundError` as retriable, same as a disabled item."""
+    calls: list[dict] = []
+    attempts = {"n": 0}
+
+    def responder(request):
+        calls.append(request)
+        if request.get("cmd") == "dump":
+            return {"ok": True, "components": []}
+        if (
+            request.get("cmd") == "navigate_menu"
+            and request.get("path") == "Configure/Settings"
+        ):
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                return {"ok": False, "error": "not_found", "detail": "boom"}
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            task = asyncio.ensure_future(
+                open_settings_dialog(dispatcher, LABELS.settings, timeout=5.0)
+            )
+            await asyncio.sleep(0.02)
+            dispatcher.window_events.emit(
+                _window_event(
+                    1,
+                    "window_opened",
+                    "feature.configure.ai",
+                    "DU123 Trader Workstation Configuration (Simulated Trading)",
+                    window_id="w9",
+                )
+            )
+            window_id = await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert attempts["n"] == 3
+    assert window_id == "w9"
+
+
+async def test_open_settings_dialog_cleans_up_armed_wait_on_navigate_failure(
+    sock_path, event_sock_path
+):
+    """#38: when `navigate_menu` ultimately raises (both TWS paths exhausted
+    here), the dialog-open `wait_for_event` future armed earlier must be
+    cancelled and drained, not left running to its own `timeout` -- that
+    leak is what produced #38's "Task exception was never retrieved"
+    warning. Confirmed here by asserting no task from this call is still
+    pending immediately after it raises."""
+    calls: list[dict] = []
+
+    def responder(request):
+        calls.append(request)
+        if request.get("cmd") == "dump":
+            return {"ok": True, "components": []}
+        if request.get("cmd") == "navigate_menu":
+            return {"ok": False, "error": "not_found", "detail": "boom"}
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        before = asyncio.all_tasks()
+        try:
+            with pytest.raises(ElementNotFoundError):
+                await open_settings_dialog(
+                    dispatcher,
+                    LABELS.settings,
+                    program="tws",
+                    timeout=0.6,
+                )
+        finally:
+            await dispatcher.stop()
+
+    assert asyncio.all_tasks() - before == set()
 
 
 async def test_open_settings_dialog_waits_for_splash_screen_to_close_first(

@@ -189,6 +189,15 @@ async def _never_completing_task():
     return asyncio.ensure_future(asyncio.sleep(3600))
 
 
+@attrs.define
+class _FakeProcess:
+    """Stand-in for `asyncio.subprocess.Process` in `_wait_for_first_completion`
+    tests -- an explicit attribute, not `SimpleNamespace`'s `__getattr__`, so it
+    structurally satisfies `control_loop._HasReturncode` for pyrefly."""
+
+    returncode: int | None = None
+
+
 async def _delayed_process_exit(process, *, delay: float, returncode: int = 0) -> int:
     """Stand-in for `launched.process.wait()` -- like the real coroutine, only
     returns once `returncode` is already set, so callers can't observe one
@@ -201,7 +210,7 @@ async def _delayed_process_exit(process, *, delay: float, returncode: int = 0) -
 async def test_wait_for_first_completion_returns_process_done_immediately():
     """The common case: the process actually exits and gets reaped before any
     dispatcher task notices -- no grace-period wait needed."""
-    process = types.SimpleNamespace(returncode=None)
+    process = _FakeProcess()
     process_done = asyncio.ensure_future(_delayed_process_exit(process, delay=0.01))
     watcher = await _never_completing_task()
     scheduled_shutdown = await _never_completing_task()
@@ -234,7 +243,7 @@ async def test_wait_for_first_completion_grace_period_catches_a_delayed_reap():
     this returns -- regardless of which task it reports as `finished` --
     since `_run_one_cycle`'s own classification falls back to checking
     `returncode` directly."""
-    process = types.SimpleNamespace(returncode=None)
+    process = _FakeProcess()
     process_done = asyncio.ensure_future(_delayed_process_exit(process, delay=0.05))
     dispatcher_task = asyncio.ensure_future(asyncio.sleep(0))
     watcher = await _never_completing_task()
@@ -262,7 +271,7 @@ async def test_wait_for_first_completion_grace_period_catches_a_delayed_reap():
 async def test_wait_for_first_completion_gives_up_after_grace_period(caplog):
     """The process never actually exits (a genuine `CONNECTION_LOST`) -- the
     grace-period wait must not block indefinitely."""
-    process = types.SimpleNamespace(returncode=None)
+    process = _FakeProcess()
     process_done = asyncio.ensure_future(asyncio.sleep(3600))
     dispatcher_task = asyncio.ensure_future(asyncio.sleep(0))
     watcher = await _never_completing_task()
@@ -292,7 +301,7 @@ async def test_wait_for_first_completion_returns_watcher_without_grace_delay():
     """`watcher`/`scheduled_shutdown` finishing is never a process-exit
     candidate -- no grace-period wait should apply, so this returns promptly
     even with a long grace period and a process that never exits."""
-    process = types.SimpleNamespace(returncode=None)
+    process = _FakeProcess()
     process_done = asyncio.ensure_future(asyncio.sleep(3600))
     scheduled_shutdown = await _never_completing_task()
 
@@ -546,3 +555,37 @@ async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
             await dispatcher.stop()
 
     assert {"cmd": "click", "target": "OK", "window_id": "w9"} in calls
+
+
+async def test_apply_declarative_settings_passes_second_factor_timeout(
+    monkeypatch,
+):
+    """#37 follow-up: `open_settings_dialog`'s own `timeout` default (180.0)
+    must not be relied on silently -- it needs to track
+    `Config.second_factor_authentication_timeout` (the same field
+    `login.py` already reads), so a deployment that changes one also
+    changes the other."""
+    captured: dict[str, object] = {}
+
+    async def _fake_open_settings_dialog(*_args, **kwargs):
+        captured.update(kwargs)
+        return "w9"
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        control_loop, "open_settings_dialog", _fake_open_settings_dialog
+    )
+    monkeypatch.setattr(control_loop, "apply_settings_from_file", _noop)
+    monkeypatch.setattr(control_loop, "close_settings_dialog", _noop)
+
+    launched = types.SimpleNamespace(dispatcher=None)
+    config = _config(
+        settings_file=None,
+        read_only_api=False,
+        second_factor_authentication_timeout=42.0,
+    )
+    await _apply_declarative_settings(launched, LABELS, config)  # type: ignore[arg-type]
+
+    assert captured["timeout"] == 42.0

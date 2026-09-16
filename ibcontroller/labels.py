@@ -140,10 +140,11 @@ class SettingsLabels:
     """Labels for the Global Configuration dialog (see `settings.py`).
 
     `gateway_menu_path` is Gateway's `Configure/Settings`. TWS has no
-    `Configure` menu at all; `tws_menu_path` uses the Mosaic-layout path
-    (`File/Global Configuration...`) since that's TWS's modern default. A
-    Classic-layout path (`Edit/Global Configuration...`) exists but isn't
-    supported here -- `navigate_menu` takes one path, not a fallback list.
+    `Configure` menu at all; `tws_menu_path` is the Mosaic-layout path
+    (`File/Global Configuration...`), `tws_menu_path_classic` the
+    Classic-layout one (`Edit/Global Configuration...`) -- `open_settings_dialog`
+    tries both, Classic first, matching IBC's own `GetConfigDialogTask`
+    order.
 
     `controls` is a flat name -> widget-label map, deliberately decoupled
     from tree paths (which stay literal on each `settings.SettingEntry` in
@@ -168,6 +169,7 @@ class SettingsLabels:
 
     gateway_menu_path: str
     tws_menu_path: str
+    tws_menu_path_classic: str
     dialog_title_marker: str
     apply_button: str
     cancel_button: str

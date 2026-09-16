@@ -319,14 +319,25 @@ async def open_settings_dialog(
     appear (matched by the window title containing `labels.dialog_title_marker`,
     never an exact match -- the real title is account/trading-mode-specific).
 
-    `program` selects `labels.gateway_menu_path` (`"Configure/Settings"`) or
-    `labels.tws_menu_path` (`"File/Global Configuration..."`, Mosaic layout)
-    -- TWS has no `Configure` menu at all.
+    `program` selects `labels.gateway_menu_path` (`"Configure/Settings"`) or,
+    for TWS, a two-path fallback -- `labels.tws_menu_path_classic`
+    (`"Edit/Global Configuration..."`) tried first, `labels.tws_menu_path`
+    (`"File/Global Configuration..."`, Mosaic layout) second -- matching
+    IBC's own `GetConfigDialogTask`'s try-Classic-then-Mosaic order. TWS has
+    no `Configure` menu at all. `timeout` is split in half across the two
+    candidates so a wrong first guess doesn't exhaust the whole budget
+    before the real path even gets a turn.
 
-    `timeout` bounds both the wait for the splash frame to close
-    (`_await_menu_ready`) and the wait for the dialog itself; needs to be
-    long enough to span a real 2FA wait, since Settings may be attempted
-    right after login while Gateway is still gated on a human approving 2FA.
+    `timeout` bounds the wait for the splash frame to close
+    (`_await_menu_ready`), the menu navigation itself (`navigate_menu`
+    retries while the resolved item is disabled or not yet resolvable, e.g.
+    TWS is still populating its menubar right after login -- a real,
+    live-caught race, see #37), and the wait for the dialog to open; needs
+    to be long enough to span a real 2FA wait, since Settings may be
+    attempted right after login while Gateway is still gated on a human
+    approving 2FA -- callers should pass
+    `config.second_factor_authentication_timeout`, not rely on this
+    function's own default, to stay in sync with `login.py`'s own timeout.
 
     Returns the dialog's own `window_id`, captured from the `window_opened`
     event this function waits for, so every subsequent action against this
@@ -334,7 +345,13 @@ async def open_settings_dialog(
     to this one window instead of searching every open window. `None` only
     if the recognised event's own title somehow lacked
     `dialog_title_marker` (never happens in practice, since the wait
-    predicate already requires it)."""
+    predicate already requires it).
+
+    The dialog-open wait is armed before the menu is touched (so its
+    `window_opened` can't be missed), then guaranteed cancelled and drained
+    if the menu navigation raises -- otherwise the armed wait leaks to its
+    own `timeout` and asyncio complains about an unretrieved exception at GC
+    time (#38, a direct consequence of this same gap)."""
     await _await_menu_ready(dispatcher, labels, timeout=timeout)
     wait_future = asyncio.ensure_future(
         wait_for_event(
@@ -345,15 +362,30 @@ async def open_settings_dialog(
         )
     )
     await asyncio.sleep(0)  # let the wait's own .filter() connect before we click
-    # navigate_menu itself retries while the menu item is disabled -- e.g. a
-    # startup dialog still blocking it -- so this is the whole "wait for it
-    # to be safe to open Settings" mechanism, not just the click.
-    menu_path = (
-        labels.gateway_menu_path
-        if program.lower() == "gateway"
-        else labels.tws_menu_path
-    )
-    await navigate_menu(dispatcher, menu_path, timeout=timeout)
+    try:
+        if program.lower() == "gateway":
+            await navigate_menu(dispatcher, labels.gateway_menu_path, timeout=timeout)
+        else:
+            per_path_timeout = timeout / 2
+            try:
+                await navigate_menu(
+                    dispatcher, labels.tws_menu_path_classic, timeout=per_path_timeout
+                )
+            except ElementNotFoundError:
+                await navigate_menu(
+                    dispatcher, labels.tws_menu_path, timeout=per_path_timeout
+                )
+    except BaseException:
+        # wait_future's own `timeout` runs concurrently with the menu-nav
+        # attempts above and can expire first (e.g. both TWS paths retrying
+        # up to their own per-path timeout) -- it may already be done with a
+        # `TimeoutError` of its own by the time we get here, not just
+        # cancellable, so draining it must discard whatever it produced,
+        # not just a `CancelledError`; the real error is `raise`d below.
+        wait_future.cancel()
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            await wait_future
+        raise
     event = await wait_future
     return event.window.window_id
 
