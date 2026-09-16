@@ -113,6 +113,8 @@ allowing `None`. `Config`'s schema is closed — an unknown key in
 | `log_dir` | `IBCONTROLLER_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default | ibcontroller config |
 | `log_level` | `IBCONTROLLER_LOG_LEVEL` | `debug`/`info`/`warning`/`error` | `info` | ibcontroller config |
 | `log_sink` | `IBCONTROLLER_LOG_SINK` | `"std"` (console only) or `"file"` (only, under `log_dir`) — exclusive, not both. Covers `ibcontroller-{instance}.log` and `gateway-{instance}.log` only; the Java agent log and the wire trace are always file, unaffected — see "Logging" below | `"std"` | ibcontroller config |
+| `diagnostic_scope` | `IBCONTROLLER_DIAGNOSTIC_SCOPE` | `"known"`/`"unknown"`/`"all"` — which windows get a structure dump logged (see `docs/Configuration.md`'s "Diagnostics") | `"known"` | ibcontroller config |
+| `diagnostic_when` | `IBCONTROLLER_DIAGNOSTIC_WHEN` | `"open"`/`"openclose"`/`"never"` — when to log a structure dump | `"never"` | ibcontroller config |
 | (env only) | `IBCONTROLLER_APP_DIR` | Override file locations (config/log/run) for container mode | (platform default) | ibcontroller config |
 
 TWS/ibgateway settings

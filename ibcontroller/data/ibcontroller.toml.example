@@ -78,6 +78,19 @@
 # Default "std"
 # log_sink = "std"
 
+# Diagnostics -- off by default. When enabled, logs a component structure dump
+# (the same primitive settings.py/recognisers.py use to find controls) for each
+# matching window event, to ibcontroller-{instance}.log at INFO. Built-in
+# replacement for poking the agent socket directly with socat/nc.
+# diagnostic_scope: which windows qualify -- "known" (recognised by a built-in or
+# declarative recogniser), "unknown", or "all" (env: IBCONTROLLER_DIAGNOSTIC_SCOPE)
+# Default "known"
+# diagnostic_scope = "known"
+# diagnostic_when: which events trigger a dump -- "open", "openclose", or "never"
+# (off) (env: IBCONTROLLER_DIAGNOSTIC_WHEN)
+# Default "never"
+# diagnostic_when = "open"
+
 # IBC: ReadOnlyLogin -- TWS only (IBC disables it on Gateway); NOT YET WIRED to any real
 # behavior in ibcontroller (loaded, but nothing acts on it yet -- see TODO.md).
 # Default false

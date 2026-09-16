@@ -162,6 +162,29 @@ class LogSink(StrEnum):
     STD = "std"
 
 
+class DiagnosticScope(StrEnum):
+    """Which windows `diagnostics.watch_for_diagnostics` dumps -- input from
+    IBC's `LogStructureScope`, not a straight copy (IBC also has `untitled`,
+    dropped here: `WindowInfo.title` already distinguishes a real untitled
+    window from one merely unmatched by any recogniser, so `UNKNOWN` alone
+    covers it)."""
+
+    KNOWN = "known"
+    UNKNOWN = "unknown"
+    ALL = "all"
+
+
+class DiagnosticWhen(StrEnum):
+    """When `diagnostics.watch_for_diagnostics` dumps a window -- input from
+    IBC's `LogStructureWhen`, minus `activate` (no matching `WindowEvent`
+    kind exists today; only `window_opened`/`window_closed`). NEVER is the
+    default -- diagnostics ship inert until explicitly opted into."""
+
+    OPEN = "open"
+    OPENCLOSE = "openclose"
+    NEVER = "never"
+
+
 class AcceptIncomingConnections(StrEnum):
     """AcceptIncomingConnections is the user's choice for what to do when ibcontroller
     detects incoming API connections (see `AcceptIncomingConnectionsRecognizer` in
@@ -272,6 +295,12 @@ class Config:
     # persistent log file instead. Does not affect configure_trace's NDJSON wire
     # trace, which stays file-only regardless (gitea #26).
     log_sink: LogSink = LogSink.STD
+
+    # Diagnostics -- see diagnostics.py. Off by default (diagnostic_when=never);
+    # an opted-in deployment gets a structure dump logged for each matching
+    # window event, the replacement for socket-poking the agent by hand.
+    diagnostic_scope: DiagnosticScope = DiagnosticScope.KNOWN
+    diagnostic_when: DiagnosticWhen = DiagnosticWhen.NEVER
 
 
 def load_config(

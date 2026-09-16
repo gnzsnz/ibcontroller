@@ -374,6 +374,13 @@ class RecognizerRegistry:
         know a specific rule has run (e.g. to know a blocking dialog is now
         gone) before proceeding."""
 
+    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
+        """Read-only: whether any registered recogniser matches, without
+        running its `handle()`. Used by `diagnostics.watch_for_diagnostics`
+        to classify a window as "known"/"unknown" -- the same classification
+        `dispatch()` itself uses, exposed without the side effect."""
+        return any(r.recognises(event, components) for r in self._registry)
+
     async def dispatch(
         self,
         event: WindowEvent,

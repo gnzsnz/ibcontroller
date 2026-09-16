@@ -1006,16 +1006,17 @@ async def test_open_settings_dialog_navigates_and_waits_for_configuration_window
     assert window_id == "w9"
 
 
-async def test_open_settings_dialog_uses_tws_classic_menu_path(
+async def test_open_settings_dialog_uses_tws_mosaic_menu_path(
     sock_path, event_sock_path
 ):
     """Real, live-caught bug (2026-09-09): TWS has no `Configure` menu at all --
     `navigate_menu("Configure/Settings")` (Gateway's own path) fails with
     `not_found` on a real TWS install. `program="tws"` must select
-    `labels.settings.tws_menu_path_classic` (`"Edit/Global
-    Configuration..."`) instead. Classic-only for now -- Mosaic fallback was
-    tried during #37 but dropped from that fix's scope, tracked separately
-    as #39."""
+    `labels.settings.tws_menu_path` (`"File/Global Configuration..."`)
+    instead -- live-confirmed 2026-09-16 as the real Mosaic path, after
+    `tws_menu_path_classic` (`"Edit/Global Configuration..."`) produced a
+    clean `ElementNotFoundError` every run. Mosaic-only for now -- a real
+    Classic fallback is tracked separately as #39."""
     calls: list[dict] = []
     responder = _tracking_responder(calls)
     async with (
@@ -1048,9 +1049,9 @@ async def test_open_settings_dialog_uses_tws_classic_menu_path(
 
     assert {
         "cmd": "navigate_menu",
-        "path": "Edit/Global Configuration...",
+        "path": "File/Global Configuration...",
     } in calls
-    assert {"cmd": "navigate_menu", "path": "File/Global Configuration..."} not in calls
+    assert {"cmd": "navigate_menu", "path": "Edit/Global Configuration..."} not in calls
     assert {"cmd": "navigate_menu", "path": "Configure/Settings"} not in calls
     assert window_id == "w9"
 

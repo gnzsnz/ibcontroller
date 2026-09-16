@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Protocol
 
 from ibcontroller.config import Config
+from ibcontroller.diagnostics import watch_for_diagnostics
 from ibcontroller.labels import Labels, load_labels
 from ibcontroller.launcher import LaunchedInstance, clean_shutdown, launch_instance
 from ibcontroller.logging_setup import stop_logging
@@ -410,6 +411,14 @@ async def _run_one_cycle(  # noqa: PLR0915
     watcher = asyncio.ensure_future(
         watch_for_unprompted_windows(registry, launched.dispatcher)
     )
+    diagnostics_watcher = asyncio.ensure_future(
+        watch_for_diagnostics(
+            registry,
+            launched.dispatcher,
+            config.diagnostic_scope,
+            config.diagnostic_when,
+        )
+    )
     cause = ShutdownCause.REQUESTED
     try:
         _log_transition(state, StartupState.LOGGING_IN)
@@ -486,6 +495,9 @@ async def _run_one_cycle(  # noqa: PLR0915
         watcher.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await watcher
+        diagnostics_watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await diagnostics_watcher
         await clean_shutdown(
             launched,
             program=config.program,

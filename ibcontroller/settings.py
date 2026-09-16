@@ -320,11 +320,14 @@ async def open_settings_dialog(
     never an exact match -- the real title is account/trading-mode-specific).
 
     `program` selects `labels.gateway_menu_path` (`"Configure/Settings"`) or,
-    for TWS, `labels.tws_menu_path_classic` (`"Edit/Global Configuration..."`).
-    TWS has no `Configure` menu at all. Classic-only for now -- Mosaic
-    (`labels.tws_menu_path`, `"File/Global Configuration..."`) was tried as a
-    fallback here during #37 but never validated live and dropped from this
-    fix's scope; tracked separately as #39.
+    for TWS, `labels.tws_menu_path` (`"File/Global Configuration..."`,
+    Mosaic layout -- the only layout live-confirmed so far). TWS has no
+    `Configure` menu at all. Mosaic-only for now -- Classic
+    (`labels.tws_menu_path_classic`, `"Edit/Global Configuration..."`) was
+    the original guess, live-disproven 2026-09-16 (Classic's `Edit` menu
+    doesn't exist under Mosaic, a clean `ElementNotFoundError` every time,
+    not the #40 wrong-frame race it was mistaken for); a real
+    Classic/Mosaic fallback is tracked separately as #39.
 
     `timeout` bounds the wait for the splash frame to close
     (`_await_menu_ready`), the menu navigation itself (`navigate_menu`
@@ -364,7 +367,7 @@ async def open_settings_dialog(
         menu_path = (
             labels.gateway_menu_path
             if program.lower() == "gateway"
-            else labels.tws_menu_path_classic
+            else labels.tws_menu_path
         )
         await navigate_menu(dispatcher, menu_path, timeout=timeout)
     except BaseException:
