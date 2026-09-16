@@ -227,11 +227,13 @@ final class Protocol {
             return errorResponse("bad_request", "path must be a string");
         }
         try {
-            boolean clicked = WriteOps.navigateMenu(pathString);
+            boolean clicked = WriteOps.navigateMenu(pathString, windowId(request));
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("ok", true);
             response.put("clicked", clicked);
             return response;
+        } catch (ComponentLookup.WindowGoneException e) {
+            return errorResponse("window_gone", e.getMessage());
         } catch (ComponentLookup.ElementNotFoundException e) {
             return errorResponse("not_found", e.getMessage());
         } catch (RuntimeException e) {

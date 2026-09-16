@@ -154,6 +154,7 @@ class LoginManager:
         self._login_frame_window_id: str | None = None
         self._login_start_time: float | None = None
         self._retry_task: asyncio.Task[None] | None = None
+        self.main_window_id: str | None = None
 
     def is_logged_in(self) -> bool:
         """Returns whether `state` is `LOGGED_IN`. Supplied to
@@ -367,6 +368,11 @@ class LoginManager:
             )
             if exists:
                 self.state = LoginState.LOGGED_IN
+                # Keep the window_id this same check just validated (#40) --
+                # Gateway's path below never sets this (no ambiguity there,
+                # see _wait_for_outcome_gateway's docstring), so consumers
+                # must treat None as "no scoping available, fall back".
+                self.main_window_id = event.window.window_id
                 logger.info("IBController > login completed")
                 return
             # Not the main window (an intermediate dialog, e.g. "Downloading

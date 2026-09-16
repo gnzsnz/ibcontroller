@@ -413,6 +413,7 @@ async def test_apply_declarative_settings_applies_builtin_with_no_settings_file(
                     launched,  # type: ignore[arg-type]
                     LABELS,
                     config,
+                    None,
                 )
             )
             await asyncio.sleep(0.02)
@@ -468,6 +469,7 @@ async def test_apply_declarative_settings_applies_builtin_when_user_file_missing
                         launched,  # type: ignore[arg-type]
                         LABELS,
                         config,
+                        None,
                     )
                 )
                 await asyncio.sleep(0.02)
@@ -534,6 +536,7 @@ async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
                     launched,  # type: ignore[arg-type]
                     LABELS,
                     config,
+                    None,
                 )
             )
             await asyncio.sleep(0.02)
@@ -564,7 +567,11 @@ async def test_apply_declarative_settings_passes_second_factor_timeout(
     must not be relied on silently -- it needs to track
     `Config.second_factor_authentication_timeout` (the same field
     `login.py` already reads), so a deployment that changes one also
-    changes the other."""
+    changes the other.
+
+    Also covers #40: `main_window_id` (`LoginManager.main_window_id`) must
+    reach `open_settings_dialog` unchanged, so `navigate_menu` scopes to the
+    already-validated main window instead of a global search."""
     captured: dict[str, object] = {}
 
     async def _fake_open_settings_dialog(*_args, **kwargs):
@@ -586,6 +593,12 @@ async def test_apply_declarative_settings_passes_second_factor_timeout(
         read_only_api=False,
         second_factor_authentication_timeout=42.0,
     )
-    await _apply_declarative_settings(launched, LABELS, config)  # type: ignore[arg-type]
+    await _apply_declarative_settings(
+        launched,  # type: ignore[arg-type]
+        LABELS,
+        config,
+        "w5",
+    )
 
     assert captured["timeout"] == 42.0
+    assert captured["main_window_id"] == "w5"

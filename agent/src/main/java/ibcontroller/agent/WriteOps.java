@@ -162,15 +162,27 @@ final class WriteOps {
      * across the RPC boundary, since this method must stay non-blocking on the agent
      * side and Python already owns polling for other things (`launcher.py`'s
      * `_wait_for_ready`).
+     *
+     * <p><b>{@code windowId} (2026-09-16, #40).</b> Previously always used the unscoped
+     * {@link #findMenuBar()} -- "first displayable {@code JFrame} with a menu bar" -- which
+     * can pick the wrong frame when more than one is displayable at once (TWS's login/shell
+     * frame alongside the real main window), a live-only failure the unscoped search can't
+     * tell apart from "menu not populated yet". {@code windowId}, when given, resolves via
+     * {@link #resolveScope} and uses the scoped {@link #findMenuBar(Window)} instead --
+     * matching IBC's own {@code Utils.invokeMenuItem(mainForm, path)}, always scoped to its
+     * {@code MainWindowManager}-tracked main window, never a global search. {@code null}
+     * keeps the old unscoped search (Python's {@code LoginManager.main_window_id} is
+     * {@code None} on the Gateway path, which has no such ambiguity to begin with).
      */
-    static boolean navigateMenu(String path) {
+    static boolean navigateMenu(String path, String windowId) {
+        Window scope = resolveScope(windowId);
         String[] parts = path.split("/");
         RuntimeException[] error = new RuntimeException[1];
         JMenuItem[] found = new JMenuItem[1];
         boolean[] enabled = new boolean[1];
         ComponentLookup.runOnEdt(
                 () -> {
-                    JMenuBar menuBar = findMenuBar();
+                    JMenuBar menuBar = scope != null ? findMenuBar(scope) : findMenuBar();
                     if (menuBar == null) {
                         error[0] = new ComponentLookup.ElementNotFoundException(path);
                         return;

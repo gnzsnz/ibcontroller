@@ -362,11 +362,18 @@ class AgentCommandConnection:
         if not response["ok"]:
             self._raise_for_error(response)
 
-    async def navigate_menu(self, path: str) -> bool:
+    async def navigate_menu(self, path: str, window_id: str | None = None) -> bool:
         """Walks a menu path (e.g. `"File/Close"`) and clicks the item at the
         end. `click` cannot reach menu items -- a menu's dropdown lives
         outside the ordinary component tree while closed. Fire-and-forget
         once a click is actually queued.
+
+        `window_id`, if given, resolves directly to that window's own menu
+        bar (matching `menu_item_exists`'s scoping) instead of the agent's
+        own global "first displayable frame with a menu bar" search (#40) --
+        `None` (the default) keeps that global search, for callers that
+        don't have a validated main-window id to give (e.g. Gateway, whose
+        `login.py` path never captures one, see `LoginManager.main_window_id`).
 
         Returns whether the item was actually clicked: `False` means the
         resolved item exists but is currently disabled (a retriable
@@ -374,7 +381,10 @@ class AgentCommandConnection:
         `ElementNotFoundError` (the path itself doesn't resolve to anything).
         `actions.navigate_menu` owns the retry loop this return value is
         for."""
-        response = await self._request({"cmd": "navigate_menu", "path": path})
+        payload: dict[str, Any] = {"cmd": "navigate_menu", "path": path}
+        if window_id is not None:
+            payload["window_id"] = window_id
+        response = await self._request(payload)
         if not response["ok"]:
             self._raise_for_error(response)
         return bool(response.get("clicked", True))

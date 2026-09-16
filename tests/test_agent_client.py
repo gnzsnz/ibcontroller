@@ -431,6 +431,40 @@ async def test_navigate_menu_defaults_clicked_true_when_field_omitted(sock_path)
             assert await conn.navigate_menu("File/Close") is True
 
 
+async def test_navigate_menu_sends_window_id_when_given(sock_path):
+    """#40: `window_id`, when given, scopes the agent's menu-bar lookup to
+    that exact window instead of its global "first displayable frame"
+    search -- omitted from the payload entirely when `None` (the default),
+    matching `expand_tree`'s existing optional-scoping shape."""
+    sock = sock_path
+
+    def responder(request):
+        assert request == {
+            "cmd": "navigate_menu",
+            "path": "File/Global Configuration...",
+            "window_id": "w2",
+        }
+        return {"ok": True, "clicked": True}
+
+    async with FakeCommandServer(sock, responder):
+        async with AgentCommandConnection(sock) as conn:
+            assert (
+                await conn.navigate_menu("File/Global Configuration...", "w2") is True
+            )
+
+
+async def test_navigate_menu_omits_window_id_when_none(sock_path):
+    sock = sock_path
+
+    def responder(request):
+        assert "window_id" not in request
+        return {"ok": True, "clicked": True}
+
+    async with FakeCommandServer(sock, responder):
+        async with AgentCommandConnection(sock) as conn:
+            assert await conn.navigate_menu("File/Close", None) is True
+
+
 async def test_expand_tree_success(sock_path):
     sock = sock_path
 

@@ -140,12 +140,19 @@ def _build_registry(
 
 
 async def _apply_declarative_settings(
-    launched: LaunchedInstance, labels: Labels, config: Config
+    launched: LaunchedInstance,
+    labels: Labels,
+    config: Config,
+    main_window_id: str | None,
 ) -> None:
     """Applies the bundled built-in entries (`read_only_api`/
     `auto_restart_time`, from `Config` alone -- see `settings.py`'s own "Two
     tiers, not one" section), merged with a user's own `Config.settings_file`
     when set.
+
+    `main_window_id` (`LoginManager.main_window_id`, from `_run_one_cycle`'s
+    own `manager`) scopes `open_settings_dialog`'s menu navigation to the
+    already-validated main window instead of a global guess -- #40.
 
     `window_id` (from `open_settings_dialog`'s return value) scopes every
     subsequent action to the exact dialog that opened, and `close_settings_dialog`
@@ -177,6 +184,7 @@ async def _apply_declarative_settings(
         labels.settings,
         program=config.program,
         timeout=config.second_factor_authentication_timeout,
+        main_window_id=main_window_id,
     )
     try:
         await apply_settings_from_file(
@@ -200,7 +208,10 @@ async def _apply_declarative_settings(
 
 
 async def _apply_declarative_settings_or_log(
-    launched: LaunchedInstance, labels: Labels, config: Config
+    launched: LaunchedInstance,
+    labels: Labels,
+    config: Config,
+    main_window_id: str | None,
 ) -> None:
     """`_apply_declarative_settings`, with a local error boundary -- a
     Settings-application failure must not tear down an otherwise-healthy,
@@ -209,7 +220,7 @@ async def _apply_declarative_settings_or_log(
     Utils.logException(e); }`) while every other step stays fatal on an
     unhandled exception."""
     try:
-        await _apply_declarative_settings(launched, labels, config)
+        await _apply_declarative_settings(launched, labels, config, main_window_id)
     except Exception:
         logger.exception(
             "IBController > declarative settings application failed -- "
@@ -428,7 +439,9 @@ async def _run_one_cycle(  # noqa: PLR0915
 
         _log_transition(state, StartupState.APPLYING_SETTINGS)
         state = StartupState.APPLYING_SETTINGS
-        await _apply_declarative_settings_or_log(launched, labels, config)
+        await _apply_declarative_settings_or_log(
+            launched, labels, config, manager.main_window_id
+        )
 
         _log_transition(state, StartupState.READY)
         state = StartupState.READY

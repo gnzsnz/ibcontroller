@@ -148,26 +148,39 @@ async def navigate_menu(
     path: str,
     *,
     timeout: float = 30.0,
+    window_id: str | None = None,
 ) -> None:
     """Walks menu `path` (e.g. `"File/Close"`) and clicks the item at the
     end. Use this for menu items -- `click` only reaches components in the
     ordinary component tree, not menu dropdowns.
+
+    `window_id`, when given, scopes the lookup to that window's own menu
+    bar (matching `menu_item_exists`'s scoping) instead of the agent's
+    global "first displayable frame with a menu bar" search -- the wrong
+    frame can otherwise be picked when more than one displayable frame
+    carries a menu bar at once (#40; `open_settings_dialog` passes
+    `LoginManager.main_window_id`, once `login.py` has validated it, for
+    exactly this reason). `None` (the default) keeps the old global search.
 
     Retries every `_MENU_RETRY_INTERVAL` seconds while the resolved item is
     disabled (e.g. a blocking dialog is still open) or not yet resolvable at
     all (e.g. TWS is still populating its menubar right after login -- a
     real race, not a wrong path: IBC avoids it upstream by gating the whole
     config-dialog step on `MainWindowManager.getMainWindow()`/
-    `SessionManager.awaitReady()` before ever touching the menu, which this
-    project doesn't have an equivalent readiness signal for yet, so this
-    retry is the bounded-poll substitute), up to `timeout` seconds, then
-    re-raises the last failure (`ElementNotFoundError` or `TimeoutError`)."""
+    `SessionManager.awaitReady()` before ever touching the menu; this
+    project's equivalent is `LoginManager.main_window_id` plus this same
+    retry as a bounded-poll substitute for IBC's blocking wait, since a
+    single asyncio loop doesn't need a `Future`-based one), up to `timeout`
+    seconds, then re-raises the last failure (`ElementNotFoundError` or
+    `TimeoutError`)."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
         try:
             clicked = await dispatcher.send_command(
-                functools.partial(dispatcher.command_conn.navigate_menu, path)
+                functools.partial(
+                    dispatcher.command_conn.navigate_menu, path, window_id
+                )
             )
         except ElementNotFoundError:
             if loop.time() >= deadline:

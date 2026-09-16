@@ -451,6 +451,32 @@ async def test_navigate_menu_sends_path(sock_path, event_sock_path):
             await dispatcher.stop()
 
 
+async def test_navigate_menu_forwards_window_id(sock_path, event_sock_path):
+    """#40: `window_id`, when given, scopes `navigate_menu` to that exact
+    window instead of the agent's global "first displayable frame" search --
+    `open_settings_dialog` passes `LoginManager.main_window_id` for this."""
+
+    def responder(request):
+        assert request == {
+            "cmd": "navigate_menu",
+            "path": "File/Global Configuration...",
+            "window_id": "w2",
+        }
+        return {"ok": True, "clicked": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await navigate_menu(
+                dispatcher, "File/Global Configuration...", window_id="w2"
+            )
+        finally:
+            await dispatcher.stop()
+
+
 async def test_navigate_menu_retries_while_disabled_then_succeeds(
     sock_path, event_sock_path
 ):

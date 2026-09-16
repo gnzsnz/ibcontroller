@@ -314,6 +314,7 @@ async def open_settings_dialog(
     *,
     program: str = "gateway",
     timeout: float = 180.0,
+    main_window_id: str | None = None,
 ) -> str | None:
     """Opens the Global Configuration dialog and waits for it to actually
     appear (matched by the window title containing `labels.dialog_title_marker`,
@@ -328,6 +329,14 @@ async def open_settings_dialog(
     doesn't exist under Mosaic, a clean `ElementNotFoundError` every time,
     not the #40 wrong-frame race it was mistaken for); a real
     Classic/Mosaic fallback is tracked separately as #39.
+
+    `main_window_id`, when given (`control_loop.py` passes
+    `LoginManager.main_window_id`), scopes `navigate_menu` to that exact,
+    already-validated main window instead of the agent's own global
+    "first displayable frame with a menu bar" guess -- fixes #40, the
+    live/paper split traced to that guess landing on the wrong frame.
+    `None` (Gateway's path never captures one -- no ambiguity there) keeps
+    the old global search.
 
     `timeout` bounds the wait for the splash frame to close
     (`_await_menu_ready`), the menu navigation itself (`navigate_menu`
@@ -369,7 +378,9 @@ async def open_settings_dialog(
             if program.lower() == "gateway"
             else labels.tws_menu_path
         )
-        await navigate_menu(dispatcher, menu_path, timeout=timeout)
+        await navigate_menu(
+            dispatcher, menu_path, timeout=timeout, window_id=main_window_id
+        )
     except BaseException:
         # wait_future's own `timeout` runs concurrently with the menu-nav
         # attempt above and can expire first -- it may already be done with a
