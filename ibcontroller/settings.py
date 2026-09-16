@@ -320,13 +320,11 @@ async def open_settings_dialog(
     never an exact match -- the real title is account/trading-mode-specific).
 
     `program` selects `labels.gateway_menu_path` (`"Configure/Settings"`) or,
-    for TWS, a two-path fallback -- `labels.tws_menu_path_classic`
-    (`"Edit/Global Configuration..."`) tried first, `labels.tws_menu_path`
-    (`"File/Global Configuration..."`, Mosaic layout) second -- matching
-    IBC's own `GetConfigDialogTask`'s try-Classic-then-Mosaic order. TWS has
-    no `Configure` menu at all. `timeout` is split in half across the two
-    candidates so a wrong first guess doesn't exhaust the whole budget
-    before the real path even gets a turn.
+    for TWS, `labels.tws_menu_path_classic` (`"Edit/Global Configuration..."`).
+    TWS has no `Configure` menu at all. Classic-only for now -- Mosaic
+    (`labels.tws_menu_path`, `"File/Global Configuration..."`) was tried as a
+    fallback here during #37 but never validated live and dropped from this
+    fix's scope; tracked separately as #39.
 
     `timeout` bounds the wait for the splash frame to close
     (`_await_menu_ready`), the menu navigation itself (`navigate_menu`
@@ -363,22 +361,15 @@ async def open_settings_dialog(
     )
     await asyncio.sleep(0)  # let the wait's own .filter() connect before we click
     try:
-        if program.lower() == "gateway":
-            await navigate_menu(dispatcher, labels.gateway_menu_path, timeout=timeout)
-        else:
-            per_path_timeout = timeout / 2
-            try:
-                await navigate_menu(
-                    dispatcher, labels.tws_menu_path_classic, timeout=per_path_timeout
-                )
-            except ElementNotFoundError:
-                await navigate_menu(
-                    dispatcher, labels.tws_menu_path, timeout=per_path_timeout
-                )
+        menu_path = (
+            labels.gateway_menu_path
+            if program.lower() == "gateway"
+            else labels.tws_menu_path_classic
+        )
+        await navigate_menu(dispatcher, menu_path, timeout=timeout)
     except BaseException:
         # wait_future's own `timeout` runs concurrently with the menu-nav
-        # attempts above and can expire first (e.g. both TWS paths retrying
-        # up to their own per-path timeout) -- it may already be done with a
+        # attempt above and can expire first -- it may already be done with a
         # `TimeoutError` of its own by the time we get here, not just
         # cancellable, so draining it must discard whatever it produced,
         # not just a `CancelledError`; the real error is `raise`d below.
