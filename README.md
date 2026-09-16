@@ -6,12 +6,12 @@ Heavily inspired by [IBC](https://github.com/IbcAlpha/IBC) project, now archived
 
 ## What it does?
 
-- Finds ibgateway/TWS installation and JRE.
+- Finds ibgateway/TWS installation, JRE and launchs it.
 - Automates user/password entry, waits for MFA.
 - Automates ibgatewa/TWS settings.
 - Manages pop-ups and automatically accept.
 
-It provides a "declarative" engine, so settings and pop-ups can be "declared" by configuration entries.
+It provides a "**declarative**" engine, so settings and pop-ups can be "declared" by configuration entries.
 
 ## How to use it
 
@@ -41,9 +41,7 @@ setting is actually missing (in practice, just the two credential env vars).
 
 ## Packaging
 
-The Java agent jar is not built by `uv build`/`pip install` -- it ships via
-`[tool.setuptools.package-data]` (same mechanism as `ibcontroller/data/*.json`), which
-only picks up files already present in the source tree at build time. `make dist` makes
+The Java agent jar is not built by `uv build`/`pip install`. `make dist` makes
 this explicit: it builds `ibcontroller/ibcontroller-agent.jar` first, then runs
 `uv build`. Building the wheel any other way (plain `uv build`, `python -m build`) works
 only if the jar has already been built into `ibcontroller/` by a prior `make`/`make run`.
@@ -69,9 +67,10 @@ repository.
 
 ### File location
 
-When environment variable `IBCONTROLLER_APP_DIR` is not set, then `ibcontroller` will use the standard platform directories.
+When environment variable `IBCONTROLLER_APP_DIR` is not set, then
+`ibcontroller` will use the standard platform directories.
 
-| Location | Directory| Platform |
+| Location | Directory  Platform |
 | -- | -- | -- |
 | `config_dir` | `~/.config/ibcontroller` | Linux |
 | `config_dir` | `~/Library/Application Support/ibcontroller` | macOS |
@@ -86,23 +85,20 @@ When `IBCONTROLLER_APP_DIR` is set then:
 - `log_dir`-> `IBCONTROLLER_APP_DIR/log`
 - `socket_dir` -> `IBCONTROLLER_APP_DIR/run`
 
-
 ### Settings
 
-**Category** column says whether a field configures the real TWS/Gateway application itself
-(directly, or via the declarative `settings.py` mechanism) versus ibcontroller's own
-operational behavior (never written to TWS/Gateway). **Only the two credential env vars
-below are actually mandatory** — everything else here has a safe default or is
-auto-detected.
+On the table below **Category** column says whether a field configures the real
+TWS/Gateway application itself (directly, or via the declarative `settings.py`
+mechanism) versus ibcontroller's own operational behavior (never written to
+TWS/Gateway). **Only the two credential env vars below are actually mandatory**
+ — everything else here has a safe default or is auto-detected.
 
-`None` on a `TWS/Gateway setting` row is a deliberate third state, not just "unset" —
-matching IBC's own `config.ini` yes/no/unset convention: set it explicitly to apply a
-value, or leave it `None` to leave TWS/Gateway's existing setting alone. This is the
-actual enable/disable mechanism for these fields, not a side effect of the type
-allowing `None`. `Config`'s schema is closed — an unknown key in `ibcontroller.toml`
-fails at startup with a clean error (`ConfigError`), not silently ignored — so a new
-`TWS/Gateway setting` field always needs a `config.py` code change first, it can't be
-added by editing the TOML file alone.
+`None` on a `TWS/Gateway setting` row is a deliberate third state, not just
+"unset" yes/no/unset convention: set it explicitly to apply value, or leave
+it `None` to leave TWS/Gateway's existing setting alone. This is the actual
+enable/disable mechanism for these fields, not a side effect of the type
+allowing `None`. `Config`'s schema is closed — an unknown key in
+`ibcontroller.toml` fails at startup with a clean error (`ConfigError`).
 
 | TOML key | Env var | Description | Default | Category |
 | --- | --- | --- | --- | --- |
@@ -110,7 +106,7 @@ added by editing the TOML file alone.
 | `program` | `IBCONTROLLER_PROGRAM` | `"gateway"` or `"tws"` | `"gateway"` | ibcontroller config |
 | `tws_version` | `IBCONTROLLER_TWS_VERSION` | Installed TWS/Gateway version, e.g. `"10.50"` | `None` — auto-detected (see below) | ibcontroller config |
 | `tws_channel` | `IBCONTROLLER_TWS_CHANNEL` | `"stable"`/`"latest"`; narrows auto-detection to one update channel | `"stable"` | ibcontroller config |
-| `tws_path` | `IBCONTROLLER_TWS_PATH` | Override install-path inference | `None` | ibcontroller config |
+| `tws_path` | `IBCONTROLLER_TWS_PATH` | Override TWS/gateway install-path inference | `None` | ibcontroller config |
 | `tws_settings_path` | `IBCONTROLLER_TWS_SETTINGS_PATH` | TWS/Gateway settings dir (per instance) | `None` | ibcontroller config |
 | `settings_file` | `IBCONTROLLER_SETTINGS_FILE` | Extra `ibkr_settings.toml`, merged on top of the built-in settings -- see "Declarative configuration" below | `None` | ibcontroller config |
 | `trace_enabled` | `IBCONTROLLER_TRACE_ENABLED` | Enable verbose raw wire trace (`cmd-{instance}.jsonl`/`events-{instance}.jsonl`) | `false` | ibcontroller config |
@@ -148,8 +144,7 @@ at once — `tws_channel = "stable"` picks `10.45`; leaving it unset picks `10.5
 greatest overall. The channel itself is read per-install from its own
 `.install4j/i4jparams.conf`, not guessed from the version number.
 
-TWS requests fall back to Gateway installs (gitea #25, ported from IBC's own
-`ibcstart.sh`): when `program = "tws"` and no TWS install matches — no
+TWS requests fall back to Gateway installs when `program = "tws"` and no TWS install matches — no
 `Trader Workstation *` directory at all, or none on the requested `tws_channel` — the
 Gateway installs (`IB Gateway *`) are used instead, launching the TWS front end
 (`jclient.LoginFrame`) from the Gateway jars. `tws_channel` still applies to the
@@ -168,15 +163,13 @@ programs use, so both apply here too). If both are set, whichever occurs first w
 malformed value is logged and skipped rather than aborting the other one.
 
 - `cold_restart_time` -- `"HH:MM"`, 24-hour, local time. Every **Sunday** at this time,
-  ibcontroller closes the instance tidily and relaunches with a full fresh login (no
-  restart hash, deliberately not a silent relogin, and via ibcontroller's own
-  `launch_instance`, not IBC's native-launcher `File > Restart`) -- forcing the weekly
-  reauth IBKR requires around Sunday 01:00 US/Eastern token invalidation.
+  ibcontroller closes the instance tidily and relaunches with a full fresh login forcing the weekly
+ reauth IBKR requires around Sunday 01:00 US/Eastern token invalidation.
 - `closedown_at` -- `"HH:MM"` (every day) or `"<Weekday> HH:MM"` (one day a week,
   `Weekday` a full English name, `Monday`..`Sunday`). Closes the instance tidily at that
   time, with no relaunch -- you're responsible for restarting it yourself.
 
-Both use the local system clock, matching IBC's own `Calendar.getInstance()` -- not
+Both use the local system clock, not
 converted to US/Eastern, so pick a local time that lands after the Sunday 01:00
 US/Eastern invalidation window if that's the intent.
 
@@ -291,12 +284,6 @@ action = "toggle"
 label = "Read-Only API Access"
 value_from_config = "read_only_api"
 ```
-
-### `existing_session_action` — reacting to a collision with another running session
-
-Set in `ibcontroller.toml` (no separate file): `manual` (leave the dialog for a human),
-`primary`/`primaryoverride`/`secondary` (IBC's own four-way policy for which session
-wins when two logins collide). See the field table above for the env var.
 
 ## Logging
 
