@@ -980,6 +980,7 @@ async def test_tws_happy_path_fills_credentials_and_reaches_logged_in(
             await dispatcher.stop()
 
     assert manager.state is LoginState.LOGGED_IN
+    assert manager.main_window_id == "w-main"
     sent_targets = [c.get("target") for c in calls if "target" in c]
     assert "Username" in sent_targets
     assert "Password" in sent_targets
@@ -1044,6 +1045,7 @@ async def test_tws_skips_intermediate_window_then_matches_main_window_by_menu_it
             await dispatcher.stop()
 
     assert manager.state is LoginState.LOGGED_IN
+    assert manager.main_window_id == "w-main"
 
 
 async def test_tws_2fa_is_handled_inline_then_reaches_logged_in(
