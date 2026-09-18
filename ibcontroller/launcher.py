@@ -46,13 +46,6 @@ _INSTALL4J_DPROPS_STATIC = [
     "-Dexe4j.isInstall4j=true",
     "-Dinstall4jType=standalone",
 ]
-# The channel install4j was built for ("stable"/"latest") -- historically hardcoded to
-# "latest" here (matching IBC's own ibcstart.sh, which hardcodes it identically), kept
-# only as the fallback now that build_launch_plan reads the real value dynamically per
-# install (see _read_i4j_variable) -- confirmed live that stable and latest are
-# genuinely different, differently-versioned installs, not just a label.
-_DEFAULT_CHANNEL = "latest"
-
 _ENTRY_CLASSES = {
     "gateway": "ibgateway.GWClient",
     "tws": "jclient.LoginFrame",
@@ -623,7 +616,7 @@ def build_launch_plan(
     )
     vm_options = _read_vmoptions_file(vmoptions_file)
     vm_options.extend(_INSTALL4J_DPROPS_STATIC)
-    channel = _read_i4j_variable(install4j_dir, "channel") or _DEFAULT_CHANNEL
+    channel = _read_i4j_variable(install4j_dir, "channel") or config.tws_channel
     vm_options.append(f"-Dchannel={channel}")
 
     jxbrowser_key = _read_jxbrowser_key(install4j_dir)

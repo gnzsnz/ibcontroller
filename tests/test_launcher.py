@@ -777,7 +777,9 @@ def test_build_launch_plan_reads_channel_dynamically(tmp_path):
     assert "-Dchannel=latest" not in plan.command
 
 
-def test_build_launch_plan_channel_falls_back_to_default_when_not_found(tmp_path):
+def test_build_launch_plan_channel_falls_back_to_config_when_not_found(tmp_path):
+    """No `channel` in the real install's `i4jparams.conf` -- falls back to
+    `Config.tws_channel` (default "stable"), not a hardcoded literal (tea #35)."""
     base = _make_synthetic_install(tmp_path, os_name="macos")  # no i4jparams.conf
     config = _config(
         program="gateway",
@@ -788,7 +790,7 @@ def test_build_launch_plan_channel_falls_back_to_default_when_not_found(tmp_path
     plan = build_launch_plan(
         config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
     )
-    assert "-Dchannel=latest" in plan.command
+    assert "-Dchannel=stable" in plan.command
 
 
 def test_build_launch_plan_omits_restart_flag_when_hash_not_given(tmp_path):
