@@ -308,6 +308,7 @@ def load_config(
     log_dir: str | Path | None = None,
     toml_path: str | Path | None = None,
     dotenv_path: str | Path | None = None,
+    cli_overrides: Mapping[str, Any] | None = None,
 ) -> Config:
 
     load_dotenv(dotenv_path, override=False)
@@ -363,6 +364,11 @@ def load_config(
         # adds the _FILE-suffix Docker-secrets indirection on top of plain EnvLoader.
         _FileBackedEnvLoader(prefix=ENV_PREFIX),
     ]
+    # CLI flags (cli.py) are the most explicit, per-invocation expression of intent --
+    # last loader wins, so these override file/env unconditionally. Only added when
+    # the caller actually set something, same reasoning as _log_dir_default above.
+    if cli_overrides:
+        CONF_LOADERS.append(DictLoader(dict(cli_overrides)))
     CONF_PROCESSORS: list[FormatProcessor] = [FormatProcessor()]
     CONF_CONVERTER: Converter = ts.converters.default_converter()
 

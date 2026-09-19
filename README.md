@@ -39,6 +39,22 @@ setting is actually missing (in practice, just the two credential env vars).
 
 `ibcontroller version` prints the installed package version.
 
+### Running paper and live in parallel
+
+`--trading-mode`, `--tws-path`, `--tws-settings-path`, and `--instance` on `ibcontroller
+run` override the matching `Config` field for that one invocation, winning over both
+the shared `ibcontroller.toml` and the environment (see the Settings table below).
+`instance` already defaults to `"{program}-{trading_mode}"`, so `--trading-mode` alone
+is enough to keep two runs' log/trace files and agent sockets apart:
+
+```bash
+ibcontroller run --trading-mode=live --dotenv=.env-live
+ibcontroller run --trading-mode=paper --dotenv=.env-paper
+```
+
+`--app-dir` (also accepted by `init`) overrides `IBCONTROLLER_APP_DIR` for one
+invocation, for pointing each instance's config/log/run dirs somewhere different too.
+
 ## Packaging
 
 The Java agent jar is not built by `uv build`/`pip install`. `make dist` makes
@@ -100,40 +116,40 @@ enable/disable mechanism for these fields, not a side effect of the type
 allowing `None`. `Config`'s schema is closed — an unknown key in
 `ibcontroller.toml` fails at startup with a clean error (`ConfigError`).
 
-| TOML key | Env var | Description | Default | Category |
-| --- | --- | --- | --- | --- |
-| `instance` | `IBCONTROLLER_INSTANCE` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) | ibcontroller config |
-| `program` | `IBCONTROLLER_PROGRAM` | `"gateway"` or `"tws"` | `"gateway"` | ibcontroller config |
-| `tws_version` | `IBCONTROLLER_TWS_VERSION` | Installed TWS/Gateway version, e.g. `"10.50"` | `None` — auto-detected (see below) | ibcontroller config |
-| `tws_channel` | `IBCONTROLLER_TWS_CHANNEL` | `"stable"`/`"latest"`; narrows auto-detection to one update channel | `"stable"` | ibcontroller config |
-| `tws_path` | `IBCONTROLLER_TWS_PATH` | Override TWS/gateway install-path inference | `None` | ibcontroller config |
-| `tws_settings_path` | `IBCONTROLLER_TWS_SETTINGS_PATH` | TWS/Gateway settings dir (per instance) | `None` | ibcontroller config |
-| `settings_file` | `IBCONTROLLER_SETTINGS_FILE` | Extra `ibkr_settings.toml`, merged on top of the built-in settings -- see "Declarative configuration" below | `None` | ibcontroller config |
-| `trace_enabled` | `IBCONTROLLER_TRACE_ENABLED` | Enable verbose raw wire trace (`cmd-{instance}.jsonl`/`events-{instance}.jsonl`) | `false` | ibcontroller config |
-| `log_dir` | `IBCONTROLLER_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default | ibcontroller config |
-| `log_level` | `IBCONTROLLER_LOG_LEVEL` | `debug`/`info`/`warning`/`error` | `info` | ibcontroller config |
-| `log_sink` | `IBCONTROLLER_LOG_SINK` | `"std"` (console only) or `"file"` (only, under `log_dir`) — exclusive, not both. Covers `ibcontroller-{instance}.log` and `gateway-{instance}.log` only; the Java agent log and the wire trace are always file, unaffected — see "Logging" below | `"std"` | ibcontroller config |
-| `diagnostic_scope` | `IBCONTROLLER_DIAGNOSTIC_SCOPE` | `"known"`/`"unknown"`/`"all"` — which windows get a structure dump logged (see `docs/Configuration.md`'s "Diagnostics") | `"known"` | ibcontroller config |
-| `diagnostic_when` | `IBCONTROLLER_DIAGNOSTIC_WHEN` | `"open"`/`"openclose"`/`"never"` — when to log a structure dump | `"never"` | ibcontroller config |
-| (env only) | `IBCONTROLLER_APP_DIR` | Override file locations (config/log/run) for container mode | (platform default) | ibcontroller config |
+| TOML key | Env var | CLI flag | Description | Default | Category |
+| --- | --- | --- | --- | --- | --- |
+| `instance` | `IBCONTROLLER_INSTANCE` | `--instance` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) | ibcontroller config |
+| `program` | `IBCONTROLLER_PROGRAM` | — | `"gateway"` or `"tws"` | `"gateway"` | ibcontroller config |
+| `tws_version` | `IBCONTROLLER_TWS_VERSION` | — | Installed TWS/Gateway version, e.g. `"10.50"` | `None` — auto-detected (see below) | ibcontroller config |
+| `tws_channel` | `IBCONTROLLER_TWS_CHANNEL` | — | `"stable"`/`"latest"`; narrows auto-detection to one update channel | `"stable"` | ibcontroller config |
+| `tws_path` | `IBCONTROLLER_TWS_PATH` | `--tws-path` | Override TWS/gateway install-path inference | `None` | ibcontroller config |
+| `tws_settings_path` | `IBCONTROLLER_TWS_SETTINGS_PATH` | `--tws-settings-path` | TWS/Gateway settings dir (per instance) | `None` | ibcontroller config |
+| `settings_file` | `IBCONTROLLER_SETTINGS_FILE` | — | Extra `ibkr_settings.toml`, merged on top of the built-in settings -- see "Declarative configuration" below | `None` | ibcontroller config |
+| `trace_enabled` | `IBCONTROLLER_TRACE_ENABLED` | — | Enable verbose raw wire trace (`cmd-{instance}.jsonl`/`events-{instance}.jsonl`) | `false` | ibcontroller config |
+| `log_dir` | `IBCONTROLLER_LOG_DIR` | — | Where ibcontroller's own log file lives; always resolved at startup | platform default | ibcontroller config |
+| `log_level` | `IBCONTROLLER_LOG_LEVEL` | — | `debug`/`info`/`warning`/`error` | `info` | ibcontroller config |
+| `log_sink` | `IBCONTROLLER_LOG_SINK` | — | `"std"` (console only) or `"file"` (only, under `log_dir`) — exclusive, not both. Covers `ibcontroller-{instance}.log` and `gateway-{instance}.log` only; the Java agent log and the wire trace are always file, unaffected — see "Logging" below | `"std"` | ibcontroller config |
+| `diagnostic_scope` | `IBCONTROLLER_DIAGNOSTIC_SCOPE` | — | `"known"`/`"unknown"`/`"all"` — which windows get a structure dump logged (see `docs/Configuration.md`'s "Diagnostics") | `"known"` | ibcontroller config |
+| `diagnostic_when` | `IBCONTROLLER_DIAGNOSTIC_WHEN` | — | `"open"`/`"openclose"`/`"never"` — when to log a structure dump | `"never"` | ibcontroller config |
+| (env only) | `IBCONTROLLER_APP_DIR` | `--app-dir` | Override file locations (config/log/run) for container mode; `--app-dir`/`init`/`run` set the env var for the invocation, same effect | (platform default) | ibcontroller config |
 
 TWS/ibgateway settings
 
-| TOML key | Env var | Description | Default | Category |
-| --- | --- | --- | --- | --- |
-| `trading_mode` | `IBCONTROLLER_TRADING_MODE` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` | TWS/Gateway setting |
-| `read_only_login` | `IBCONTROLLER_READ_ONLY_LOGIN` | TWS-only; **not yet wired to any behavior** (loaded, unused — see TODO.md) | `false` | TWS/Gateway setting (unwired) |
-| `read_only_api` | `IBCONTROLLER_READ_ONLY_API` | `true`/`false` sets it; omit to leave unchanged. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` | TWS/Gateway setting |
-| `accept_incoming_connections` | `IBCONTROLLER_ACCEPT_INCOMING_CONNECTIONS` | `manual`/`accept`/`reject` | `"manual"` | TWS/Gateway setting |
-| `existing_session_action` | `IBCONTROLLER_EXISTING_SESSION_ACTION` | `manual`/`primary`/`primaryoverride`/`secondary` | `"manual"` | TWS/Gateway setting |
-| `login_dialog_display_timeout` | `IBCONTROLLER_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog | `60.0` | TWS/Gateway setting |
-| `second_factor_authentication_timeout` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_TIMEOUT` | IB's 2FA timeout in seconds | `180.0` | TWS/Gateway setting |
-| `relogin_after_2fa_timeout` | `IBCONTROLLER_RELOGIN_AFTER_2FA_TIMEOUT` | Restart login if 2FA times out | `false` | TWS/Gateway setting |
-| `second_factor_authentication_exit_interval` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_EXIT_INTERVAL` | Bounds the post-2FA wait when relogin enabled | `60.0` | TWS/Gateway setting |
-| `auto_restart_time` | `IBCONTROLLER_AUTO_RESTART_TIME` | `"hh:mm AM/PM"` daily auto-restart time. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` | TWS/Gateway setting |
-| `auto_logoff_time` | `IBCONTROLLER_AUTO_LOGOFF_TIME` | `"hh:mm AM/PM"` daily auto-logoff time; same "Lock and Exit" radio-button pair as `auto_restart_time` -- if both are set, `auto_restart_time` wins | `None` | TWS/Gateway setting |
-| `cold_restart_time` | `IBCONTROLLER_COLD_RESTART_TIME` | TWS and Gateway. `"HH:MM"` 24-hour local time; every Sunday, ibcontroller closes the instance tidily and relaunches with a full fresh login, forcing IBKR's weekly Sunday 01:00 US/Eastern token-invalidation reauth -- not a GUI setting, see "Scheduled shutdown" below | `None` | ibcontroller scheduled action |
-| `closedown_at` | `IBCONTROLLER_CLOSEDOWN_AT` | TWS and Gateway. `"HH:MM"` (daily) or `"<Weekday> HH:MM"` (weekly); closes the instance tidily at that time, no relaunch -- not a GUI setting, see "Scheduled shutdown" below | `None` | ibcontroller scheduled action |
+| TOML key | Env var | CLI flag | Description | Default | Category |
+| --- | --- | --- | --- | --- | --- |
+| `trading_mode` | `IBCONTROLLER_TRADING_MODE` | `--trading-mode` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` | TWS/Gateway setting |
+| `read_only_login` | `IBCONTROLLER_READ_ONLY_LOGIN` | — | TWS-only; **not yet wired to any behavior** (loaded, unused — see TODO.md) | `false` | TWS/Gateway setting (unwired) |
+| `read_only_api` | `IBCONTROLLER_READ_ONLY_API` | — | `true`/`false` sets it; omit to leave unchanged. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` | TWS/Gateway setting |
+| `accept_incoming_connections` | `IBCONTROLLER_ACCEPT_INCOMING_CONNECTIONS` | — | `manual`/`accept`/`reject` | `"manual"` | TWS/Gateway setting |
+| `existing_session_action` | `IBCONTROLLER_EXISTING_SESSION_ACTION` | — | `manual`/`primary`/`primaryoverride`/`secondary` | `"manual"` | TWS/Gateway setting |
+| `login_dialog_display_timeout` | `IBCONTROLLER_LOGIN_DIALOG_DISPLAY_TIMEOUT` | — | Seconds to wait for the login dialog | `60.0` | TWS/Gateway setting |
+| `second_factor_authentication_timeout` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_TIMEOUT` | — | IB's 2FA timeout in seconds | `180.0` | TWS/Gateway setting |
+| `relogin_after_2fa_timeout` | `IBCONTROLLER_RELOGIN_AFTER_2FA_TIMEOUT` | — | Restart login if 2FA times out | `false` | TWS/Gateway setting |
+| `second_factor_authentication_exit_interval` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_EXIT_INTERVAL` | — | Bounds the post-2FA wait when relogin enabled | `60.0` | TWS/Gateway setting |
+| `auto_restart_time` | `IBCONTROLLER_AUTO_RESTART_TIME` | — | `"hh:mm AM/PM"` daily auto-restart time. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` | TWS/Gateway setting |
+| `auto_logoff_time` | `IBCONTROLLER_AUTO_LOGOFF_TIME` | — | `"hh:mm AM/PM"` daily auto-logoff time; same "Lock and Exit" radio-button pair as `auto_restart_time` -- if both are set, `auto_restart_time` wins | `None` | TWS/Gateway setting |
+| `cold_restart_time` | `IBCONTROLLER_COLD_RESTART_TIME` | — | TWS and Gateway. `"HH:MM"` 24-hour local time; every Sunday, ibcontroller closes the instance tidily and relaunches with a full fresh login, forcing IBKR's weekly Sunday 01:00 US/Eastern token-invalidation reauth -- not a GUI setting, see "Scheduled shutdown" below | `None` | ibcontroller scheduled action |
+| `closedown_at` | `IBCONTROLLER_CLOSEDOWN_AT` | — | TWS and Gateway. `"HH:MM"` (daily) or `"<Weekday> HH:MM"` (weekly); closes the instance tidily at that time, no relaunch -- not a GUI setting, see "Scheduled shutdown" below | `None` | ibcontroller scheduled action |
 
 #### `tws_version` auto-detection
 
@@ -386,3 +402,22 @@ or both.
 - All five files carry the instance name and share one flat directory, so two
   instances (e.g. `paper` and `live`) can run in parallel and each tail its own files
   without interleaving, even if copied or globbed out of their directory.
+
+## License
+
+```text
+
+   Copyright 2023 Gonzalo Sáenz
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+```

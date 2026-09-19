@@ -27,8 +27,10 @@ import asyncio
 import contextlib
 import logging
 import signal
+from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
+from typing import Any
 
 from ibcontroller.app_dirs import resolve_app_dirs
 from ibcontroller.config import load_config
@@ -93,6 +95,7 @@ async def run_async(
     log_dir: Path,
     *,
     dotenv_path: Path | None = None,
+    cli_overrides: Mapping[str, Any] | None = None,
 ) -> ShutdownCause:
     """Loads config/labels for the one instance described by `{config_dir}/
     ibcontroller.toml`, then runs it to completion via `control_loop.run_control_loop`.
@@ -106,6 +109,10 @@ async def run_async(
     today's `control_loop.run_control_loop`'s own default (`load_labels()`, no
     `config_dir`) never sees a user's `{config_dir}/labels.json` override at all.
 
+    `cli_overrides`, if given, is passed straight through to `load_config` -- the
+    per-invocation `Config` field overrides `cli.py`'s `run` command builds from its
+    own `--trading-mode`/`--tws-path`/`--tws-settings-path`/`--instance` options.
+
     Ctrl-C (`SIGINT`) and `SIGTERM` both cancel the running task -- the graceful-stop
     contract `control_loop.py`'s own docstring already documents ("cancel this
     coroutine's own task to request a graceful stop... a plain Ctrl-C in a CLI"),
@@ -114,7 +121,10 @@ async def run_async(
 
     ensure_config_scaffold(config_dir, log_dir)
     config = load_config(
-        config_dir=config_dir, log_dir=log_dir, dotenv_path=dotenv_path
+        config_dir=config_dir,
+        log_dir=log_dir,
+        dotenv_path=dotenv_path,
+        cli_overrides=cli_overrides,
     )
     labels = load_labels(config_dir=config_dir)
     agent_jar_path = _load_jar_path()

@@ -67,7 +67,9 @@ def test_run_reports_shutdown_cause_on_success(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
     monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(app_dir))
 
-    async def fake_run_async(config_dir, log_dir, *, dotenv_path=None):
+    async def fake_run_async(
+        config_dir, log_dir, *, dotenv_path=None, cli_overrides=None
+    ):
         return ShutdownCause.REQUESTED
 
     monkeypatch.setattr(_main, "run_async", fake_run_async)
@@ -76,6 +78,88 @@ def test_run_reports_shutdown_cause_on_success(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "stopped: REQUESTED" in result.output
+
+
+def test_run_field_flags_become_cli_overrides(tmp_path, monkeypatch):
+    """--trading-mode/--tws-path/--tws-settings-path/--instance reach run_async as
+    cli_overrides, unset ones dropped."""
+    app_dir = tmp_path / "app"
+    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(app_dir))
+    captured = {}
+
+    async def fake_run_async(
+        config_dir, log_dir, *, dotenv_path=None, cli_overrides=None
+    ):
+        captured.update(cli_overrides or {})
+        return ShutdownCause.REQUESTED
+
+    monkeypatch.setattr(_main, "run_async", fake_run_async)
+
+    result = runner.invoke(
+        _cli.app,
+        [
+            "run",
+            "--trading-mode=live",
+            "--tws-path=/opt/tws",
+            "--tws-settings-path=/opt/tws-settings",
+            "--instance=custom",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "trading_mode": "live",
+        "tws_path": "/opt/tws",
+        "tws_settings_path": "/opt/tws-settings",
+        "instance": "custom",
+    }
+
+
+def test_run_without_flags_produces_no_cli_overrides(tmp_path, monkeypatch):
+    app_dir = tmp_path / "app"
+    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(app_dir))
+    captured = {}
+
+    async def fake_run_async(
+        config_dir, log_dir, *, dotenv_path=None, cli_overrides=None
+    ):
+        captured.update(cli_overrides or {})
+        return ShutdownCause.REQUESTED
+
+    monkeypatch.setattr(_main, "run_async", fake_run_async)
+
+    result = runner.invoke(_cli.app, ["run"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {}
+
+
+def test_run_app_dir_flag_wins_over_env_var(tmp_path, monkeypatch):
+    env_app_dir = tmp_path / "env-app"
+    flag_app_dir = tmp_path / "flag-app"
+    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(env_app_dir))
+    for key in _BASE_ENV:
+        monkeypatch.delenv(key, raising=False)
+
+    result = runner.invoke(_cli.app, ["run", f"--app-dir={flag_app_dir}"])
+
+    assert result.exit_code == 1
+    # the scaffold ran before load_config failed on missing credentials, same as
+    # test_run_without_config_auto_scaffolds_then_fails_clearly
+    assert (flag_app_dir / "config" / "ibcontroller.toml").exists()
+    assert not (env_app_dir / "config").exists()
+
+
+def test_init_app_dir_flag_wins_over_env_var(tmp_path, monkeypatch):
+    env_app_dir = tmp_path / "env-app"
+    flag_app_dir = tmp_path / "flag-app"
+    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(env_app_dir))
+
+    result = runner.invoke(_cli.app, ["init", f"--app-dir={flag_app_dir}"])
+
+    assert result.exit_code == 0, result.output
+    assert (flag_app_dir / "config" / "ibcontroller.toml").exists()
+    assert not (env_app_dir / "config").exists()
 
 
 def test_version_prints_something():

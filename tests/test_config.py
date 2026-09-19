@@ -113,6 +113,44 @@ def test_credentials_in_toml_are_rejected(monkeypatch, tmp_path):
         load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
 
 
+def test_cli_overrides_win_over_env_and_toml(monkeypatch, tmp_path):
+    """`cli_overrides` is the last loader -- must win over both TOML and env, the
+    whole point of letting `cli.py`'s `run` pick trading_mode/etc. per invocation
+    regardless of what a shared ibcontroller.toml or .env file says."""
+    _set_credentials(monkeypatch)
+    toml_path = _write_toml(tmp_path, 'trading_mode = "paper"\n')
+    monkeypatch.setenv("IBCONTROLLER_TRADING_MODE", "paper")
+    config = load_config(
+        config_dir=tmp_path,
+        log_dir=tmp_path,
+        toml_path=toml_path,
+        cli_overrides={"trading_mode": "live"},
+    )
+    assert config.trading_mode is TradingMode.LIVE
+
+
+def test_cli_overrides_feed_instance_template(monkeypatch, tmp_path):
+    """A `trading_mode` cli_override is resolved before FormatProcessor runs, so
+    `instance`'s "{program}-{trading_mode}" default picks it up too -- confirming
+    --trading-mode alone is enough to separate paper/live instances."""
+    _set_credentials(monkeypatch)
+    config = load_config(
+        config_dir=tmp_path,
+        log_dir=tmp_path,
+        cli_overrides={"trading_mode": "live"},
+    )
+    assert config.instance == "gateway-live"
+
+
+def test_empty_cli_overrides_do_not_affect_config(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    toml_path = _write_toml(tmp_path, 'trading_mode = "paper"\n')
+    config = load_config(
+        config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path, cli_overrides={}
+    )
+    assert config.trading_mode is TradingMode.PAPER
+
+
 def test_legacy_section_headers_raise_clearly(monkeypatch, tmp_path):
     """Phase 4 assessment (2026-09-11): config_old.py had a hand-written check for
     this (a real, live-caught bug -- a [section]-header config silently dropped every
