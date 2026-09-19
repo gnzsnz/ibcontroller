@@ -308,7 +308,7 @@ class LoginManager:
         if self._config.program.lower() == "gateway":
             await self._wait_for_outcome_gateway(outcome_timeout)
         else:
-            await self._wait_for_outcome_tws()
+            await self._wait_for_outcome_tws(outcome_timeout)
 
     async def _wait_for_outcome_tws(self, timeout: float | None = None) -> None:
         """Loops over `window_opened` events (other than the login frame's
@@ -317,11 +317,13 @@ class LoginManager:
         dialog. On 2FA, waits for it to close, then delegates to
         `_after_2fa_closed_tws`.
 
-        `timeout` defaults to unbounded (`None`) -- TWS's real login flow
-        never times out waiting for the main window itself.
-        `_after_2fa_closed_tws`'s own exit-interval watchdog is the one case
-        that passes an explicit `timeout`, tracked as one deadline across
-        every loop iteration.
+        `timeout` defaults to `None` (unbounded) only as a safety net for a
+        direct call with no argument -- every real call site passes an
+        explicit bound: `_wait_for_outcome` passes `outcome_timeout`,
+        `_after_2fa_closed_tws` passes either that same budget (its
+        unconditional "keep waiting" fallbacks) or its own shorter
+        `second_factor_authentication_exit_interval` watchdog, tracked as
+        one deadline across every loop iteration.
 
         Deliberately does *not* fall back to the shared recogniser registry
         for anything else it sees (existing-session, login-failed,
@@ -383,7 +385,8 @@ class LoginManager:
         `second_factor_authentication_timeout` (IB's own real limit for
         completing 2FA, default 180s).
 
-        If 2FA closed within that budget: waits for the outcome again (an
+        If 2FA closed within that budget: waits for the outcome again, bounded
+        by that same `second_factor_authentication_timeout` budget (an
         unconditional wait if `relogin_after_2fa_timeout` is off), or arms a
         shorter `second_factor_authentication_exit_interval` watchdog and
         raises `LoginError` if login still hasn't completed by then -- there
@@ -391,14 +394,17 @@ class LoginManager:
 
         If 2FA's own timeout already expired while its dialog was still
         open: retries the whole login after `_IBC_RELOGIN_DELAY_SECONDS`, or
-        keeps waiting for the outcome if retry is disabled."""
+        keeps waiting for the outcome (same bounded budget) if retry is
+        disabled."""
         elapsed = time.monotonic() - (self._login_start_time or time.monotonic())
 
         if elapsed < self._config.second_factor_authentication_timeout:
             # 2FA was handled within IB's own budget -- authentication should
             # be under way.
             if not self._config.relogin_after_2fa_timeout:
-                await self._wait_for_outcome_tws()
+                await self._wait_for_outcome_tws(
+                    self._config.second_factor_authentication_timeout
+                )
                 return
             # A second, shorter watchdog: if login still hasn't completed by
             # now, we have no restart primitive at this layer (Management/L1,
@@ -428,7 +434,9 @@ class LoginManager:
             # -- returning here instead would complete run() while state
             # stays stuck at TWO_FA_IN_PROGRESS, so keep waiting for the
             # outcome, same as the "on-time, relogin disabled" branch above.
-            await self._wait_for_outcome_tws()
+            await self._wait_for_outcome_tws(
+                self._config.second_factor_authentication_timeout
+            )
             return
         logger.info(
             "IBController > re-login after second factor authentication timeout in %ss",

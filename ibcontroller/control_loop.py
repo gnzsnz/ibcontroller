@@ -21,9 +21,13 @@ return_when=FIRST_COMPLETED)`), all converging on one exit path:
 - **REQUESTED**: caller cancels this coroutine's own task.
 - **PROCESS_EXITED**: `launched.process.wait()` returns -- a manual close, or
   a scheduled daily restart (confirmed live: it kills the whole JVM, not an
-  in-place UI restart).
+  in-place UI restart). Raced against every phase of the cycle, not just the
+  post-login `READY` wait, so a process dying during login or settings
+  application is classified the same way instead of hanging on a login-side
+  timeout that's either unbounded or unrelated to the process being gone.
 - **CONNECTION_LOST**: `Dispatcher.tasks` ends while the process is still
-  alive -- a distinct failure mode from process-exit.
+  alive -- a distinct failure mode from process-exit, also raced across every
+  phase.
 - **LOGIN_FAILED**: `watch_for_unprompted_windows` raises
   (`recognisers.LoginFailedError`, or `login.LoginError` from the 2FA-timeout
   watchdog).
@@ -43,11 +47,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
 from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from ibcontroller.config import Config
 from ibcontroller.diagnostics import watch_for_diagnostics
@@ -299,42 +303,45 @@ class _HasReturncode(Protocol):
 
 async def _wait_for_first_completion(
     *,
-    watcher: asyncio.Task,
+    main_tasks: Sequence[asyncio.Task],
     process_done: asyncio.Task,
-    scheduled_shutdown: asyncio.Task,
     dispatcher_tasks: Sequence[asyncio.Task],
     process: _HasReturncode,
     grace_period: float = 2.0,
 ) -> asyncio.Task:
-    """Races the four background waits `_run_one_cycle` cares about and
-    returns whichever finished first. A JVM closes its own sockets early in
-    its shutdown sequence -- well before the OS reaps the process and
-    asyncio's child watcher sets `process.returncode` -- so on a real process
-    exit, a dispatcher task noticing the dropped connection can be the one
-    `asyncio.wait` reports as first-completed, moments ahead of `process_done`
-    itself (confirmed live, 2026-09-14: a real scheduled restart was
-    misclassified `CONNECTION_LOST` this way even after the Linux
-    native-relaunch path was independently closed off, i.e. the process
-    really was exiting -- this race, not a bypassed relaunch, was the cause).
+    """Races `main_tasks` (the phase-specific work -- login, settings
+    application, or the READY-state `watcher`/`scheduled_shutdown` pair)
+    against `process_done`/`dispatcher_tasks` and returns whichever finished
+    first. Shared by every phase of `_run_one_cycle` (directly at READY, via
+    `_run_phase_watching_process` before it) so a dead process or lost
+    connection is classified the same way regardless of the instance's
+    current phase.
+
+    A JVM closes its own sockets early in its shutdown sequence -- well
+    before the OS reaps the process and asyncio's child watcher sets
+    `process.returncode` -- so on a real process exit, a dispatcher task
+    noticing the dropped connection can be the one `asyncio.wait` reports as
+    first-completed, moments ahead of `process_done` itself (confirmed live,
+    2026-09-14: a real scheduled restart was misclassified `CONNECTION_LOST`
+    this way even after the Linux native-relaunch path was independently
+    closed off, i.e. the process really was exiting -- this race, not a
+    bypassed relaunch, was the cause).
 
     When that happens (some other task finished first and `returncode` isn't
     set yet), gives `process_done` a short bounded window to catch up before
     returning -- same shape as `_is_restart_with_grace`'s own poll: bound the
     race statistically rather than trusting an instant check or waiting
     forever. Deliberately still returns the *original* first-finished task
-    (not `process_done`) either way -- `_run_one_cycle`'s own classification
-    already falls back to checking `process.returncode` directly, so it picks
-    up a `PROCESS_EXITED` classification correctly regardless of which task
-    object this returns, as long as `returncode` itself is now set."""
+    (not `process_done`) either way -- callers already fall back to checking
+    `process.returncode` directly, so they pick up a `PROCESS_EXITED`
+    classification correctly regardless of which task object this returns,
+    as long as `returncode` itself is now set."""
     done, _pending = await asyncio.wait(
-        [watcher, process_done, scheduled_shutdown, *dispatcher_tasks],
+        [*main_tasks, process_done, *dispatcher_tasks],
         return_when=asyncio.FIRST_COMPLETED,
     )
     finished = next(iter(done))
-    if (
-        finished not in (watcher, scheduled_shutdown, process_done)
-        and process.returncode is None
-    ):
+    if finished not in (*main_tasks, process_done) and process.returncode is None:
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(asyncio.shield(process_done), timeout=grace_period)
     return finished
@@ -353,6 +360,57 @@ async def _is_restart_with_grace(
             return True
         await asyncio.sleep(poll_interval)
     return False
+
+
+class _PhaseAborted(Exception):
+    """Signals that `process_done`/a dispatcher task won the race inside
+    `_run_phase_watching_process`, carrying the `ShutdownCause` to report.
+    Caught by `_run_one_cycle`, never propagates further."""
+
+    def __init__(self, cause: ShutdownCause) -> None:
+        super().__init__(cause)
+        self.cause = cause
+
+
+async def _run_phase_watching_process(
+    phase: Coroutine[Any, Any, None] | asyncio.Task[None],
+    *,
+    process_done: asyncio.Task,
+    dispatcher_tasks: Sequence[asyncio.Task],
+    process: _HasReturncode,
+) -> None:
+    """Runs `phase` (login or settings application) racing it against
+    `process_done`/`dispatcher_tasks` via `_wait_for_first_completion` --
+    the same mechanism the READY-state wait already uses for `watcher`/
+    `scheduled_shutdown`, extended to cover the phases that run before it.
+
+    If `phase` finishes first, awaits it to completion, propagating its
+    result or exception unchanged -- a login/settings failure that isn't
+    caused by the process dying is not a `ShutdownCause`. If the process or
+    a dispatcher task finishes first instead, cancels `phase` and raises
+    `_PhaseAborted` with the matching cause."""
+    phase_task = asyncio.ensure_future(phase)
+    try:
+        finished = await _wait_for_first_completion(
+            main_tasks=[phase_task],
+            process_done=process_done,
+            dispatcher_tasks=dispatcher_tasks,
+            process=process,
+        )
+        if finished is phase_task:
+            await phase_task
+            return
+        cause = (
+            ShutdownCause.PROCESS_EXITED
+            if process.returncode is not None
+            else ShutdownCause.CONNECTION_LOST
+        )
+        raise _PhaseAborted(cause)
+    finally:
+        if not phase_task.done():
+            phase_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await phase_task
 
 
 async def _sleep_until_scheduled_shutdown(config: Config) -> ShutdownCause:
@@ -431,66 +489,88 @@ async def _run_one_cycle(  # noqa: PLR0915
         )
     )
     cause = ShutdownCause.REQUESTED
+    # Spans the whole cycle (not just the post-login READY wait) so
+    # `_run_phase_watching_process` can race login/settings against it too.
+    process_done = asyncio.ensure_future(launched.process.wait())
     try:
-        _log_transition(state, StartupState.LOGGING_IN)
-        state = StartupState.LOGGING_IN
-        await manager.run()
-        logger.info("IBController > login completed, state=%s", manager.state)
-
-        _log_transition(state, StartupState.APPLYING_SETTINGS)
-        state = StartupState.APPLYING_SETTINGS
-        await _apply_declarative_settings_or_log(
-            launched, labels, config, manager.main_window_id
-        )
-
-        _log_transition(state, StartupState.READY)
-        state = StartupState.READY
-
-        process_done = asyncio.ensure_future(launched.process.wait())
-        scheduled_shutdown = asyncio.ensure_future(
-            _sleep_until_scheduled_shutdown(config)
-        )
         try:
-            finished = await _wait_for_first_completion(
-                watcher=watcher,
+            _log_transition(state, StartupState.LOGGING_IN)
+            state = StartupState.LOGGING_IN
+            await _run_phase_watching_process(
+                manager.run(),
                 process_done=process_done,
-                scheduled_shutdown=scheduled_shutdown,
                 dispatcher_tasks=launched.dispatcher.tasks,
                 process=launched.process,
             )
-        finally:
-            process_done.cancel()
-            scheduled_shutdown.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await process_done
-            with contextlib.suppress(asyncio.CancelledError):
-                await scheduled_shutdown
+            logger.info("IBController > login completed, state=%s", manager.state)
 
-        if finished is watcher:
-            exc = watcher.exception()
-            cause = ShutdownCause.LOGIN_FAILED
-            logger.warning("background watcher ended, raising=%r", exc)
-        elif finished is scheduled_shutdown:
-            cause = scheduled_shutdown.result()
-            logger.warning("IBController > scheduled shutdown fired: %s", cause.name)
-        elif finished is process_done or launched.process.returncode is not None:
-            # A restart kills the process and every socket it held at once, so
-            # `asyncio.wait`'s FIRST_COMPLETED race between `process_done` and
-            # the event-reader noticing EOF isn't a reliable "process died" vs
-            # "connection dropped" signal on its own -- `returncode` is ground
-            # truth, and `_wait_for_first_completion` already gave it a short
-            # grace period to catch up before returning.
-            cause = ShutdownCause.PROCESS_EXITED
-            logger.warning(
-                "agent process exited on its own (returncode=%s)",
-                launched.process.returncode,
+            _log_transition(state, StartupState.APPLYING_SETTINGS)
+            state = StartupState.APPLYING_SETTINGS
+            await _run_phase_watching_process(
+                _apply_declarative_settings_or_log(
+                    launched, labels, config, manager.main_window_id
+                ),
+                process_done=process_done,
+                dispatcher_tasks=launched.dispatcher.tasks,
+                process=launched.process,
             )
-        else:
-            cause = ShutdownCause.CONNECTION_LOST
+
+            _log_transition(state, StartupState.READY)
+            state = StartupState.READY
+
+            scheduled_shutdown = asyncio.ensure_future(
+                _sleep_until_scheduled_shutdown(config)
+            )
+            try:
+                finished = await _wait_for_first_completion(
+                    main_tasks=[watcher, scheduled_shutdown],
+                    process_done=process_done,
+                    dispatcher_tasks=launched.dispatcher.tasks,
+                    process=launched.process,
+                )
+            finally:
+                scheduled_shutdown.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await scheduled_shutdown
+
+            if finished is watcher:
+                exc = watcher.exception()
+                cause = ShutdownCause.LOGIN_FAILED
+                logger.warning("background watcher ended, raising=%r", exc)
+            elif finished is scheduled_shutdown:
+                cause = scheduled_shutdown.result()
+                logger.warning(
+                    "IBController > scheduled shutdown fired: %s", cause.name
+                )
+            elif finished is process_done or launched.process.returncode is not None:
+                # A restart kills the process and every socket it held at once,
+                # so `asyncio.wait`'s FIRST_COMPLETED race between
+                # `process_done` and the event-reader noticing EOF isn't a
+                # reliable "process died" vs "connection dropped" signal on its
+                # own -- `returncode` is ground truth, and
+                # `_wait_for_first_completion` already gave it a short grace
+                # period to catch up before returning.
+                cause = ShutdownCause.PROCESS_EXITED
+                logger.warning(
+                    "agent process exited on its own (returncode=%s)",
+                    launched.process.returncode,
+                )
+            else:
+                cause = ShutdownCause.CONNECTION_LOST
+                logger.warning(
+                    "dispatcher background task ended unexpectedly, process still "
+                    "alive: %r",
+                    finished,
+                )
+        except _PhaseAborted as exc:
+            # Process/connection died during login or settings application --
+            # same causes the READY-state wait above already handles, just
+            # reached from an earlier phase.
+            cause = exc.cause
             logger.warning(
-                "dispatcher background task ended unexpectedly, process still "
-                "alive: %r",
-                finished,
+                "IBController > %s during %s -- aborting this cycle",
+                cause.name,
+                state.name,
             )
     except Exception:
         # `cause` defaults to REQUESTED (placeholder, above) -- log here so a
@@ -503,6 +583,9 @@ async def _run_one_cycle(  # noqa: PLR0915
         )
         raise
     finally:
+        process_done.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await process_done
         _log_transition(state, StartupState.SHUTTING_DOWN)
         state = StartupState.SHUTTING_DOWN
         watcher.cancel()

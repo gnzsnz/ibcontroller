@@ -1097,3 +1097,35 @@ async def test_tws_2fa_is_handled_inline_then_reaches_logged_in(
             await dispatcher.stop()
 
     assert manager.state is LoginState.LOGGED_IN
+
+
+async def test_tws_outcome_wait_is_bounded_by_outcome_timeout(
+    sock_path, event_sock_path, tmp_path
+):
+    """`_wait_for_outcome_tws` used to be called with `timeout=None`
+    (unbounded) on this path -- if the main window never appeared (e.g. the
+    process died before completing login, issue #43), `run()` hung forever.
+    Now bounded by the same `outcome_timeout` every other path already
+    honours: no main-window event arrives, and `run()` must raise
+    `TimeoutError` within `outcome_timeout`, not hang."""
+    responder = _tracking_responder([])
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program="tws"), LABELS, dispatcher, settings_dir=tmp_path
+        )
+        try:
+            task = asyncio.ensure_future(
+                manager.run(login_timeout=5.0, outcome_timeout=0.2)
+            )
+            await _feed(
+                dispatcher,
+                [_window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE)],
+            )
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(task, timeout=2.0)
+        finally:
+            await dispatcher.stop()

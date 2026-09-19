@@ -33,6 +33,8 @@ from ibcontroller.control_loop import (
     _apply_declarative_settings,
     _build_registry,
     _log_transition,
+    _PhaseAborted,
+    _run_phase_watching_process,
     _sleep_until_scheduled_shutdown,
     _wait_for_first_completion,
     run_control_loop,
@@ -217,9 +219,8 @@ async def test_wait_for_first_completion_returns_process_done_immediately():
     try:
         finished = await asyncio.wait_for(
             _wait_for_first_completion(
-                watcher=watcher,
+                main_tasks=[watcher, scheduled_shutdown],
                 process_done=process_done,
-                scheduled_shutdown=scheduled_shutdown,
                 dispatcher_tasks=[],
                 process=process,
                 grace_period=5.0,
@@ -251,9 +252,8 @@ async def test_wait_for_first_completion_grace_period_catches_a_delayed_reap():
     try:
         finished = await asyncio.wait_for(
             _wait_for_first_completion(
-                watcher=watcher,
+                main_tasks=[watcher, scheduled_shutdown],
                 process_done=process_done,
-                scheduled_shutdown=scheduled_shutdown,
                 dispatcher_tasks=[dispatcher_task],
                 process=process,
                 grace_period=2.0,
@@ -279,9 +279,8 @@ async def test_wait_for_first_completion_gives_up_after_grace_period(caplog):
     try:
         finished = await asyncio.wait_for(
             _wait_for_first_completion(
-                watcher=watcher,
+                main_tasks=[watcher, scheduled_shutdown],
                 process_done=process_done,
-                scheduled_shutdown=scheduled_shutdown,
                 dispatcher_tasks=[dispatcher_task],
                 process=process,
                 grace_period=0.05,
@@ -312,9 +311,8 @@ async def test_wait_for_first_completion_returns_watcher_without_grace_delay():
     try:
         finished = await asyncio.wait_for(
             _wait_for_first_completion(
-                watcher=watcher,
+                main_tasks=[watcher, scheduled_shutdown],
                 process_done=process_done,
-                scheduled_shutdown=scheduled_shutdown,
                 dispatcher_tasks=[],
                 process=process,
                 grace_period=5.0,
@@ -329,6 +327,92 @@ async def test_wait_for_first_completion_returns_watcher_without_grace_delay():
 
     assert finished is watcher
     assert process.returncode is None
+
+
+async def test_run_phase_watching_process_returns_normally_when_phase_wins():
+    """The common case: login/settings completes before the process ever
+    exits -- no `_PhaseAborted`, `phase`'s own result is what matters."""
+    process = _FakeProcess()
+    process_done = await _never_completing_task()
+    try:
+        await _run_phase_watching_process(
+            asyncio.sleep(0),
+            process_done=process_done,
+            dispatcher_tasks=[],
+            process=process,
+        )
+    finally:
+        process_done.cancel()
+
+
+async def test_run_phase_watching_process_propagates_a_real_phase_failure():
+    """A genuine login/settings failure (e.g. `LoginError`) is not caused by
+    the process dying -- it must propagate unchanged, not be reclassified as
+    a `ShutdownCause` (#43/#48's fix must not swallow real login failures)."""
+    process = _FakeProcess()
+    process_done = await _never_completing_task()
+
+    async def _phase_raises():
+        raise RuntimeError("boom")
+
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            await _run_phase_watching_process(
+                _phase_raises(),
+                process_done=process_done,
+                dispatcher_tasks=[],
+                process=process,
+            )
+    finally:
+        process_done.cancel()
+
+
+async def test_run_phase_watching_process_aborts_on_process_exit():
+    """Issue #43's shape: the process exits (e.g. the login window is closed
+    manually) while `phase` is still waiting on an event that will now never
+    arrive -- must raise `_PhaseAborted(PROCESS_EXITED)` promptly instead of
+    hanging on `phase`'s own (possibly unbounded) timeout, and must cancel
+    the now-pointless `phase` task."""
+    process = _FakeProcess()
+    process_done = asyncio.ensure_future(_delayed_process_exit(process, delay=0.01))
+    phase_task = asyncio.ensure_future(asyncio.sleep(3600))
+    with pytest.raises(_PhaseAborted) as exc_info:
+        await asyncio.wait_for(
+            _run_phase_watching_process(
+                phase_task,
+                process_done=process_done,
+                dispatcher_tasks=[],
+                process=process,
+            ),
+            timeout=2.0,
+        )
+    assert exc_info.value.cause is ShutdownCause.PROCESS_EXITED
+    assert phase_task.cancelled()
+
+
+async def test_run_phase_watching_process_aborts_on_connection_lost():
+    """Issue #48's shape: the process is still alive but a dispatcher task
+    (the socket connection) has ended -- classified `CONNECTION_LOST`, the
+    same distinction `_run_one_cycle`'s READY-state wait already makes."""
+    process = _FakeProcess()
+    process_done = await _never_completing_task()
+    dispatcher_task = asyncio.ensure_future(asyncio.sleep(0))
+    phase_task = asyncio.ensure_future(asyncio.sleep(3600))
+    try:
+        with pytest.raises(_PhaseAborted) as exc_info:
+            await asyncio.wait_for(
+                _run_phase_watching_process(
+                    phase_task,
+                    process_done=process_done,
+                    dispatcher_tasks=[dispatcher_task],
+                    process=process,
+                ),
+                timeout=5.0,
+            )
+        assert exc_info.value.cause is ShutdownCause.CONNECTION_LOST
+        assert phase_task.cancelled()
+    finally:
+        process_done.cancel()
 
 
 async def test_run_control_loop_cold_restart_relaunches_with_no_restart_hash(
