@@ -11,6 +11,8 @@ Heavily inspired by [IBC](https://github.com/IbcAlpha/IBC) project, now archived
 - Automates ibgatewa/TWS settings.
 - Manages pop-ups and automatically accept.
 
+- Manages ibgateway/TWS restarts.
+
 It provides a "**declarative**" engine, so settings and pop-ups can be "declared" by configuration entries.
 
 ## How to use it
@@ -69,6 +71,8 @@ environment variables, with precedence `defaults < TOML file < .env < environmen
 can be loaded from a `.env` file. Credentials are environment-variable-only and must
 never appear in the config file.
 
+A sample file with all settings is provided as an [example](./ibcontroller.env).
+
 `ibcontroller init` (or the first `ibcontroller run`) copies starter templates into the
 config directory: `ibcontroller.toml` (every key commented out -- safe to run as-is,
 since it changes nothing versus the defaults below), `ibkr_settings.toml.example`
@@ -86,12 +90,12 @@ repository.
 When environment variable `IBCONTROLLER_APP_DIR` is not set, then
 `ibcontroller` will use the standard platform directories.
 
-| Location | Directory  Platform |
-| -- | -- | -- |
+| Location | Directory | Platform |
+| --- | --- | --- |
 | `config_dir` | `~/.config/ibcontroller` | Linux |
 | `config_dir` | `~/Library/Application Support/ibcontroller` | macOS |
 | `log_dir` | `~/.local/share/ibcontroller` | Linux |
-| `log_dir` | `~/Library/Application Support/ibcontroller` | macOS |
+| `log_dir` | `~/Library/Logs/ibcontroller` | macOS |
 | `socket_dir` | `/run/user/<uid>/SuperApp` | Linux |
 | `socket_dir` | `~/Library/Caches/TemporaryItems/SuperApp` | macOS |
 
