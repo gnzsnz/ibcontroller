@@ -263,6 +263,11 @@ class Config:
     # whichever occurs first wins.
     closedown_at: str | None = None  # None = disable
 
+    # JVM heap for TWS/Gateway at launch, e.g. "1024m"/"4g". Overrides the
+    # -Xmx line in the installed .vmoptions file (ibgateway.vmoptions/tws.
+    # vmoptions); None = leave the file's value untouched.
+    java_heap_size: str | None = None
+
     # Credentials -- environment-variable-only. Field name matches the real env var
     # (IBCONTROLLER_USERID) directly -- no alias/mapping needed.
     userid: Secret = ts.secret(default=None)

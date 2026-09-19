@@ -616,6 +616,11 @@ def build_launch_plan(
     )
     vm_options = _read_vmoptions_file(vmoptions_file)
     vm_options.extend(_INSTALL4J_DPROPS_STATIC)
+    if config.java_heap_size:
+        # Deterministic override: strip the installed file's -Xmx, don't rely
+        # on "last -Xmx wins" JVM behavior.
+        vm_options = [opt for opt in vm_options if not opt.startswith("-Xmx")]
+        vm_options.append(f"-Xmx{config.java_heap_size}")
     channel = _read_i4j_variable(install4j_dir, "channel") or config.tws_channel
     vm_options.append(f"-Dchannel={channel}")
 

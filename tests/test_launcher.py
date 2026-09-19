@@ -732,6 +732,23 @@ def test_build_launch_plan_macos_gateway(tmp_path):
     assert (program_path / "IB Gateway 10.50-1.app").is_dir()
 
 
+def test_build_launch_plan_java_heap_size_overrides_vmoptions_file(tmp_path):
+    base = _make_synthetic_install(tmp_path, os_name="macos")
+    settings_dir = tmp_path / "settings"
+    config = _config(
+        program="gateway",
+        tws_path=str(base),
+        tws_settings_path=str(settings_dir),
+        instance="paper",
+        java_heap_size="2g",
+    )
+    plan = build_launch_plan(
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+    )
+    assert "-Xmx2g" in plan.command
+    assert "-Xmx768m" not in plan.command
+
+
 def test_build_launch_plan_auto_detects_tws_version_when_unset(tmp_path):
     """`Config.tws_channel` defaults to "stable" (2026-09-11 decision, TODO.md), so
     auto-detection filters to stable-channel installs -- the synthetic install must

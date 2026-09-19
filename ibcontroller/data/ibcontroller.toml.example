@@ -163,3 +163,9 @@
 # Default None - not set
 # closedown_at = "22:00"
 # closedown_at = "Friday 22:00"
+
+# JVM heap for TWS/Gateway at launch, e.g. "1024m"/"4g". Overrides the -Xmx
+# line in the installed .vmoptions file (ibgateway.vmoptions/tws.vmoptions);
+# bare size, no -Xmx prefix (env: IBCONTROLLER_JAVA_HEAP_SIZE)
+# Default None - leave the installed file's value untouched
+# java_heap_size = "2g"

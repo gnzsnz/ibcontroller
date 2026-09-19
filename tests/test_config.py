@@ -78,6 +78,15 @@ def test_tws_settings_path_field(monkeypatch, tmp_path):
     assert config.tws_settings_path == "/some/path"
 
 
+def test_java_heap_size_field(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.java_heap_size is None
+    monkeypatch.setenv("IBCONTROLLER_JAVA_HEAP_SIZE", "2g")
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.java_heap_size == "2g"
+
+
 def test_instance_default_uses_trading_mode(monkeypatch, tmp_path):
     """config.py's own default is f"{program}-{trading_mode.value}" -- confirmed
     against config.py:510, not tws_channel."""
