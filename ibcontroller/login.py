@@ -304,11 +304,23 @@ class LoginManager:
     async def _wait_for_outcome(self, outcome_timeout: float) -> None:
         """Waits for the login outcome, dispatching on `config.program` --
         Gateway and TWS need different completion signals (see the module
-        docstring)."""
-        if self._config.program.lower() == "gateway":
-            await self._wait_for_outcome_gateway(outcome_timeout)
-        else:
-            await self._wait_for_outcome_tws(outcome_timeout)
+        docstring). Every nested wait bounded by `outcome_timeout` itself
+        (as opposed to `second_factor_authentication_exit_interval`, already
+        wrapped where it's used) converges here, so a raw `TimeoutError` is
+        caught once, in this one place, and turned into `LoginError` --
+        matching every other timeout in this module and keeping
+        `cli.py`'s clean operational-error reporting intact."""
+        try:
+            if self._config.program.lower() == "gateway":
+                await self._wait_for_outcome_gateway(outcome_timeout)
+            else:
+                await self._wait_for_outcome_tws(outcome_timeout)
+        except TimeoutError as exc:
+            raise LoginError(
+                f"login did not complete within {outcome_timeout}s of "
+                "credentials being submitted "
+                "(second_factor_authentication_timeout)"
+            ) from exc
 
     async def _wait_for_outcome_tws(self, timeout: float | None = None) -> None:
         """Loops over `window_opened` events (other than the login frame's
@@ -323,7 +335,11 @@ class LoginManager:
         `_after_2fa_closed_tws` passes either that same budget (its
         unconditional "keep waiting" fallbacks) or its own shorter
         `second_factor_authentication_exit_interval` watchdog, tracked as
-        one deadline across every loop iteration.
+        one deadline across every loop iteration -- including the 2FA-closed
+        wait, which uses `deadline`'s own remaining time rather than a fresh
+        `timeout`, matching IBC's `LoginManager.secondFactorAuthenticationDialogClosed`
+        (elapsed measured from one fixed login-start anchor, never re-armed
+        per stage).
 
         Deliberately does *not* fall back to the shared recogniser registry
         for anything else it sees (existing-session, login-failed,
@@ -351,7 +367,11 @@ class LoginManager:
                     self._dispatcher,
                     "window_closed",
                     lambda e: e.window.title == twofa_title,
-                    timeout=self._config.second_factor_authentication_timeout,
+                    timeout=(
+                        None
+                        if deadline is None
+                        else max(0.0, deadline - time.monotonic())
+                    ),
                 )
                 await self._after_2fa_closed_tws()
                 return
@@ -457,9 +477,16 @@ class LoginManager:
         `wait_for_event` waits (splash-closed, 2FA-opened), since they're
         different event kinds (`window_closed` vs `window_opened`); both are
         always cancelled in `finally` before this method returns, whichever
-        path was actually taken."""
+        path was actually taken.
+
+        `deadline`, tracked once from entry, matches `_wait_for_outcome_tws`'s
+        own `deadline`/`remaining` pattern: the 2FA-closed wait below uses
+        what's left of `outcome_timeout`, not a fresh copy of it -- 2FA
+        opening late in the budget must not grant a second full budget's
+        worth of extra waiting."""
         splash_title = self._labels.login.starting_application_title
         twofa_title = self._labels.second_factor_auth.title
+        deadline = time.monotonic() + outcome_timeout
 
         splash_closed = asyncio.ensure_future(
             wait_for_event(
@@ -499,7 +526,7 @@ class LoginManager:
                     self._dispatcher,
                     "window_closed",
                     lambda e: e.window.title == twofa_title,
-                    timeout=outcome_timeout,
+                    timeout=max(0.0, deadline - time.monotonic()),
                 )
                 await self._after_2fa_closed_gateway(splash_closed, outcome_timeout)
             await splash_closed

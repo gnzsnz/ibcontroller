@@ -53,16 +53,28 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Protocol
 
+from ibcontroller.agent_client import AgentClientError
 from ibcontroller.config import Config
 from ibcontroller.diagnostics import watch_for_diagnostics
 from ibcontroller.labels import Labels, load_labels
-from ibcontroller.launcher import LaunchedInstance, clean_shutdown, launch_instance
+from ibcontroller.launcher import (
+    LaunchedInstance,
+    LauncherError,
+    clean_shutdown,
+    launch_instance,
+)
 from ibcontroller.logging_setup import stop_logging
-from ibcontroller.login import LoginManager, find_autorestart_hash, is_restart
+from ibcontroller.login import (
+    LoginError,
+    LoginManager,
+    find_autorestart_hash,
+    is_restart,
+)
 from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
     DeclarativeDismissRecognizer,
     ExistingSessionRecognizer,
+    LoginFailedError,
     LoginFailedRecognizer,
     RecognizerRegistry,
     TooManyFailedLoginAttemptsRecognizer,
@@ -81,6 +93,20 @@ from ibcontroller.settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Known "operational" failure modes reachable from within a cycle (a real
+# login/settings/launch failure) -- `cli.py` extends this with the config-load
+# failures that happen before a cycle even starts (`ConfigError`/`RuntimeError`)
+# and reports the whole set as a clean one-line message, not a traceback.
+# Shared here so `_run_one_cycle`'s own logging can tell an anticipated
+# failure apart from a genuine bug too.
+OPERATIONAL_ERRORS = (
+    LoginError,
+    LoginFailedError,
+    SettingsError,
+    LauncherError,
+    AgentClientError,
+)
 
 
 class ShutdownCause(Enum):
@@ -572,6 +598,12 @@ async def _run_one_cycle(  # noqa: PLR0915
                 cause.name,
                 state.name,
             )
+    except OPERATIONAL_ERRORS as exc:
+        # An anticipated failure (bad credentials, a settings/launch problem)
+        # that `cli.py` will already report as a clean one-line message --
+        # log it plainly here too, no traceback, so it doesn't read as a bug.
+        logger.warning("IBController > cycle aborted: %s", exc)
+        raise
     except Exception:
         # `cause` defaults to REQUESTED (placeholder, above) -- log here so a
         # genuine mid-cycle failure isn't misreported as a clean requested

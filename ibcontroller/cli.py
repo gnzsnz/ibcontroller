@@ -18,26 +18,20 @@ import attrs
 import typer
 
 from ibcontroller import main as _main
-from ibcontroller.agent_client import AgentClientError
 from ibcontroller.app_dirs import resolve_app_dirs
 from ibcontroller.config import Config, ConfigError, TradingMode
-from ibcontroller.launcher import LauncherError
-from ibcontroller.login import LoginError
-from ibcontroller.recognisers import LoginFailedError
-from ibcontroller.settings import SettingsError
+from ibcontroller.control_loop import OPERATIONAL_ERRORS as _CYCLE_OPERATIONAL_ERRORS
 
 # Known "operational" failure modes (config mistakes, an install that isn't where
 # configured, a real login/settings failure) -- reported as a clean one-line message
 # and exit 1, not a traceback. Anything not in this tuple is unexpected and should show
 # its full traceback (a real bug report, not a deployment mistake to fix and retry).
+# `ConfigError`/`RuntimeError` happen before a cycle even starts (config load); the
+# rest is `control_loop.py`'s own set, reused rather than duplicated here.
 _OPERATIONAL_ERRORS = (
     ConfigError,
     RuntimeError,
-    LauncherError,
-    LoginError,
-    LoginFailedError,
-    SettingsError,
-    AgentClientError,
+    *_CYCLE_OPERATIONAL_ERRORS,
 )
 
 app = typer.Typer(

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from tempfile import gettempdir
 
 import attrs
@@ -1107,7 +1108,8 @@ async def test_tws_outcome_wait_is_bounded_by_outcome_timeout(
     process died before completing login, issue #43), `run()` hung forever.
     Now bounded by the same `outcome_timeout` every other path already
     honours: no main-window event arrives, and `run()` must raise
-    `TimeoutError` within `outcome_timeout`, not hang."""
+    `LoginError` (not a raw `TimeoutError`) within `outcome_timeout`, not
+    hang."""
     responder = _tracking_responder([])
     async with (
         FakeCommandServer(sock_path, responder),
@@ -1125,7 +1127,137 @@ async def test_tws_outcome_wait_is_bounded_by_outcome_timeout(
                 dispatcher,
                 [_window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE)],
             )
-            with pytest.raises(TimeoutError):
+            with pytest.raises(LoginError):
                 await asyncio.wait_for(task, timeout=2.0)
         finally:
             await dispatcher.stop()
+
+
+async def test_gateway_outcome_wait_is_bounded_by_outcome_timeout(
+    sock_path, event_sock_path, tmp_path
+):
+    """Gateway equivalent of the TWS test above -- wrong credentials, no 2FA,
+    no splash-closed event ever arrives. `_wait_for_outcome_gateway`'s own
+    `TimeoutError` must surface as `LoginError`, matching `cli.py`'s
+    `_OPERATIONAL_ERRORS` contract, not leak out raw (the shape of the bug
+    found live: a short `second_factor_authentication_timeout` plus a
+    credential mismatch produced an unhandled `TimeoutError` traceback
+    instead of a clean login failure)."""
+    responder = _tracking_responder([])
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program="gateway"), LABELS, dispatcher, settings_dir=tmp_path
+        )
+        try:
+            task = asyncio.ensure_future(
+                manager.run(login_timeout=5.0, outcome_timeout=0.2)
+            )
+            await _feed(
+                dispatcher,
+                [_window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway")],
+            )
+            with pytest.raises(LoginError):
+                await asyncio.wait_for(task, timeout=2.0)
+        finally:
+            await dispatcher.stop()
+
+
+async def test_gateway_2fa_close_wait_uses_remaining_deadline_not_full_budget(
+    sock_path, event_sock_path, tmp_path
+):
+    """The 2FA-closed wait inside `_wait_for_outcome_gateway`'s loop used to
+    pass the full `outcome_timeout` again instead of what's left of the
+    original deadline -- 2FA opening late in the budget granted a second full
+    budget's worth of extra waiting, past what `LoginError`'s own message
+    claims. 2FA opens ~0.3s into a 0.4s `outcome_timeout` and never closes --
+    `run()` must raise `LoginError` close to the original ~0.4s deadline, not
+    ~0.4s plus another full 0.4s on top."""
+    responder = _tracking_responder([])
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program="gateway"), LABELS, dispatcher, settings_dir=tmp_path
+        )
+        start = time.monotonic()
+        try:
+            task = asyncio.ensure_future(
+                manager.run(login_timeout=5.0, outcome_timeout=0.4)
+            )
+            await _feed(
+                dispatcher,
+                [_window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway")],
+            )
+            await asyncio.sleep(0.3)
+            dispatcher.window_events.emit(
+                _window_event(
+                    2,
+                    "window_opened",
+                    "twslaunch.jauthentication.bh",
+                    "Second Factor Authentication",
+                )
+            )
+            with pytest.raises(LoginError):
+                # A generous outer bound -- if the bug were still present,
+                # this would need ~0.8s (two full budgets); 0.6s only leaves
+                # room for the original ~0.4s deadline plus scheduling slack.
+                await asyncio.wait_for(task, timeout=0.6)
+        finally:
+            await dispatcher.stop()
+        assert time.monotonic() - start < 0.6
+
+
+async def test_tws_2fa_close_wait_uses_remaining_deadline_not_full_budget(
+    sock_path, event_sock_path, tmp_path
+):
+    """Same bug class as Gateway's, confirmed against IBC's own
+    `LoginManager.secondFactorAuthenticationDialogClosed` (elapsed measured
+    from one fixed login-start anchor, never re-armed per stage): the
+    2FA-closed wait inside `_wait_for_outcome_tws`'s loop used to pass the
+    full `second_factor_authentication_timeout` again instead of what's left
+    of `outcome_timeout`'s own deadline. 2FA opens ~0.3s into a 0.4s
+    `outcome_timeout` and never closes -- `run()` must raise `LoginError`
+    close to the original ~0.4s deadline, not ~0.4s plus another full
+    `second_factor_authentication_timeout` on top."""
+    responder = _tracking_responder([])
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program="tws"), LABELS, dispatcher, settings_dir=tmp_path
+        )
+        start = time.monotonic()
+        try:
+            task = asyncio.ensure_future(
+                manager.run(login_timeout=5.0, outcome_timeout=0.4)
+            )
+            await _feed(
+                dispatcher,
+                [_window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE)],
+            )
+            await asyncio.sleep(0.3)
+            dispatcher.window_events.emit(
+                _window_event(
+                    2,
+                    "window_opened",
+                    "twslaunch.jauthentication.bh",
+                    "Second Factor Authentication",
+                )
+            )
+            with pytest.raises(LoginError):
+                # Same generous-but-bounded outer window as Gateway's mirror
+                # test above -- would need ~0.4s plus a full
+                # second_factor_authentication_timeout if the bug regressed.
+                await asyncio.wait_for(task, timeout=0.6)
+        finally:
+            await dispatcher.stop()
+        assert time.monotonic() - start < 0.6
+        assert time.monotonic() - start < 0.6
