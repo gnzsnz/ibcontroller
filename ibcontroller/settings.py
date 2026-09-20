@@ -152,7 +152,7 @@ async def load_settings_file(path: str | Path) -> SettingsFile:
     this specifically to fall back to built-in-only settings rather than
     losing the whole settings step to one bad user file."""
     try:
-        raw = await AsyncPath(path).read_bytes()
+        raw = await AsyncPath(Path(path).expanduser()).read_bytes()
     except OSError as exc:
         raise SettingsError(f"could not read settings file {path}: {exc}") from exc
     try:
