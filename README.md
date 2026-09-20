@@ -19,16 +19,16 @@ It provides a "**declarative**" engine, so settings and pop-ups can be "declared
 
 ```bash
 # 1. Build the Java agent jar and install the package (editable, for a source checkout)
-make
+make dist
 uv sync
 
 # 2. Scaffold a starter config directory (platformdirs default, or $IBCONTROLLER_APP_DIR)
 uv run ibcontroller init
 
 # 3. Export IBCONTROLLER_USERID / IBCONTROLLER_PASSWORD (see Credentials below) -- the
-#    only settings actually required. Everything else in the printed ibcontroller.toml
+#    only settings actually required. Everything else in the base ibcontroller.toml
 #    is commented out and already safe to run as-is: trading_mode defaults to "paper",
-#    and tws_version is auto-detected from whatever's installed under tws_path.
+#    and tws_version is auto-detected from standard tws_path.
 
 # 4. Run it -- Ctrl-C for a graceful shutdown
 uv run ibcontroller run
@@ -41,28 +41,73 @@ setting is actually missing (in practice, just the two credential env vars).
 
 `ibcontroller version` prints the installed package version.
 
+### CLI parameters
+
+You can use the following cli parameters:
+
+```text
+ Usage: ibcontroller [OPTIONS] COMMAND [ARGS]...
+
+ Login/launch controller for TWS and IBKR Gateway.
+
+╭─ Options ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --install-completion          Install completion for the current shell.                                                                 │
+│ --show-completion             Show completion for the current shell, to copy it or customize the installation.                          │
+│ --help                        Show this message and exit.                                                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ init     Scaffold the config directory with starter ibcontroller.toml/                                                                  │
+│          ibkr_settings.toml.example/labels.json.example files. Never overwrites a file                                                  │
+│          that already exists unless --force is given.                                                                                   │
+│ run      Run one ibcontroller instance until it stops (Ctrl-C for a graceful shutdown,                                                  │
+│          or Gateway/TWS exiting or restarting on its own). Scaffolds the config directory                                               │
+│          first if it's missing, same as `ibcontroller init`.                                                                            │
+│ version  Print the installed ibcontroller version.                                                                                      │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+And the `ibcontroller run` parameters:
+
+```text
+ Usage: ibcontroller run [OPTIONS]
+
+ Run one ibcontroller instance until it stops (Ctrl-C for a graceful shutdown, or Gateway/TWS exiting or restarting on its own). Scaffolds the config directory first if it's
+ missing, same as `ibcontroller init`.
+
+ `--trading-mode`/`--tws-path`/`--tws-settings-path`/`--instance` let one
+ invocation pick these `Config` fields directly, overriding TOML/env for this run
+ only -- e.g. `ibcontroller run --trading-mode=live --dotenv=.env-live` and
+ `ibcontroller run --trading-mode=paper --dotenv=.env-paper` run side by side from
+ one shared config.
+
+╭─ Options ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --dotenv                   <path>        Optional .env file to load into the environment before reading config (only fills variables not already set).                          │
+│ --app-dir                  <path>        Override IBCONTROLLER_APP_DIR for this invocation -- config/log/run all move under {app_dir}/{config,log,run} instead of the platform  │
+│                                          default.                                                                                                                               │
+│ --trading-mode             <live|paper>  Override Config.trading_mode ('live'/'paper') for this invocation.                                                                     │
+│ --tws-path                 <path>        Override Config.tws_path (the TWS/Gateway install-path inference) for this invocation.                                                 │
+│ --tws-settings-path        <path>        Override Config.tws_settings_path (where TWS/Gateway stores its own settings) for this invocation.                                     │
+│ --instance                 <str>         Override Config.instance (per-instance log/trace/socket names) for this invocation. Defaults to '{program}-{trading_mode}', so         │
+│                                          --trading-mode alone is usually enough to keep paper/live instances apart.                                                             │
+│ --help                                   Show this message and exit.                                                                                                            │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+
 ### Running paper and live in parallel
 
-`--trading-mode`, `--tws-path`, `--tws-settings-path`, and `--instance` on `ibcontroller
-run` override the matching `Config` field for that one invocation, winning over both
-the shared `ibcontroller.toml` and the environment (see the Settings table below).
-`instance` already defaults to `"{program}-{trading_mode}"`, so `--trading-mode` alone
-is enough to keep two runs' log/trace files and agent sockets apart:
+To run parallel instances in `live`and `paper`trading mode, we need to pass credentials and trading mode:
 
 ```bash
+# terminal 1
 ibcontroller run --trading-mode=live --dotenv=.env-live
+# terminal 2
 ibcontroller run --trading-mode=paper --dotenv=.env-paper
 ```
 
 `--app-dir` (also accepted by `init`) overrides `IBCONTROLLER_APP_DIR` for one
 invocation, for pointing each instance's config/log/run dirs somewhere different too.
 
-## Packaging
-
-The Java agent jar is not built by `uv build`/`pip install`. `make dist` makes
-this explicit: it builds `ibcontroller/ibcontroller-agent.jar` first, then runs
-`uv build`. Building the wheel any other way (plain `uv build`, `python -m build`) works
-only if the jar has already been built into `ibcontroller/` by a prior `make`/`make run`.
 
 ## Configuration
 
@@ -107,11 +152,8 @@ When `IBCONTROLLER_APP_DIR` is set then:
 
 ### Settings
 
-On the table below **Category** column says whether a field configures the real
-TWS/Gateway application itself (directly, or via the declarative `settings.py`
-mechanism) versus ibcontroller's own operational behavior (never written to
-TWS/Gateway). **Only the two credential env vars below are actually mandatory**
- — everything else here has a safe default or is auto-detected.
+`ibcontroller`ships with sensible defaults.  **Only the two credential env vars below are actually mandatory**
+ everything else here has a safe default or is auto-detected.
 
 `None` on a `TWS/Gateway setting` row is a deliberate third state, not just
 "unset" yes/no/unset convention: set it explicitly to apply value, or leave
@@ -212,9 +254,8 @@ Docker/Compose secrets, so a value never has to sit in the process environment.
 
 Beyond `ibcontroller.toml`, three things let you shape ibcontroller's behavior without
 writing any Python: **`labels.json`** (window/button text, plus simple pop-up dismissal
-rules), **`ibkr_settings.toml`** (Global Configuration settings applied to Gateway/TWS
-at startup), and `ibcontroller.toml`'s `existing_session_action` (how to react when a
-second login attempt collides with one already running). Each is covered below.
+rules) and **`ibkr_settings.toml`** (Global Configuration settings applied to Gateway/TWS
+at startup). Each is covered below.
 
 ### `labels.json` — window/button text and pop-up dismissal
 
