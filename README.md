@@ -96,8 +96,8 @@ When environment variable `IBCONTROLLER_APP_DIR` is not set, then
 | `config_dir` | `~/Library/Application Support/ibcontroller` | macOS |
 | `log_dir` | `~/.local/share/ibcontroller` | Linux |
 | `log_dir` | `~/Library/Logs/ibcontroller` | macOS |
-| `socket_dir` | `/run/user/<uid>/SuperApp` | Linux |
-| `socket_dir` | `~/Library/Caches/TemporaryItems/SuperApp` | macOS |
+| `socket_dir` | `/run/user/<uid>/ibcontroller` | Linux |
+| `socket_dir` | `~/Library/Caches/TemporaryItems/ibcontroller` | macOS |
 
 When `IBCONTROLLER_APP_DIR` is set then:
 
@@ -411,7 +411,7 @@ or both.
 
 ```text
 
-   Copyright 2023 Gonzalo Sáenz
+   Copyright 2023 gnzsnz
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
