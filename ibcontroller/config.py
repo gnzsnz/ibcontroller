@@ -208,8 +208,7 @@ class Config:
     # Defaults to `None` (inert) until a user points `[settings] file` at a renamed
     # copy of the example file. See module docstring for why this is deliberate.
     settings_file: str | None = None
-    # Matches config_old.py's own default: f"{program}-{trading_mode.value}", not
-    # tws_channel -- confirmed against config_old.py:510.
+    # instance default: f"{program}-{trading_mode.value}".
     instance: str = "{program}-{trading_mode}"
     program: str = "gateway"  # "gateway" or "tws"
     # None -> auto-detected from the real install directory (launcher.

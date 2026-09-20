@@ -98,7 +98,8 @@ def init(
 
 
 @app.command()
-def run(
+def run(  # noqa: PLR0913, PLR0917 -- one typer.Option per Config field, not
+    # actually 7 callers'-worth of complexity
     dotenv: Path | None = typer.Option(  # noqa: B008 -- typer's own idiom
         None,
         "--dotenv",
@@ -122,6 +123,12 @@ def run(
         help="Override Config.tws_path (the TWS/Gateway install-path inference) "
         "for this invocation.",
     ),
+    tws_channel: str | None = typer.Option(
+        None,
+        "--tws-channel",
+        help="Override Config.tws_channel ('stable'/'latest', filters install "
+        "auto-detection) for this invocation.",
+    ),
     tws_settings_path: Path | None = typer.Option(  # noqa: B008
         None,
         "--tws-settings-path",
@@ -140,7 +147,8 @@ def run(
     or Gateway/TWS exiting or restarting on its own). Scaffolds the config directory
     first if it's missing, same as `ibcontroller init`.
 
-    `--trading-mode`/`--tws-path`/`--tws-settings-path`/`--instance` let one
+    `--trading-mode`/`--tws-path`/`--tws-channel`/`--tws-settings-path`/`--instance`
+    let one
     invocation pick these `Config` fields directly, overriding TOML/env for this run
     only -- e.g. `ibcontroller run --trading-mode=live --dotenv=.env-live` and
     `ibcontroller run --trading-mode=paper --dotenv=.env-paper` run side by side from
@@ -151,6 +159,7 @@ def run(
     cli_overrides = _cli_overrides(
         trading_mode=trading_mode,
         tws_path=tws_path,
+        tws_channel=tws_channel,
         tws_settings_path=tws_settings_path,
         instance=instance,
     )
