@@ -218,7 +218,7 @@ class Config:
     # Filters auto-detection to installs carrying this channel (see
     # launcher._detect_tws_version); "stable"/"latest" as directly observed on real
     # installs (not a strict enum). Defaults to "stable", the safer pick when several
-    # channels are installed side by side -- confirmed 2026-09-11, see TODO.md.
+    # channels are installed side by side.
     tws_channel: str = "stable"
     tws_path: str | None = None
     # Where TWS/Gateway itself stores its settings (IBC's own TWS_SETTINGS_PATH) --
@@ -227,7 +227,7 @@ class Config:
     tws_settings_path: str | None = None
     # IBC-key-compatible settings (file or env, never a secret).
     trading_mode: TradingMode = TradingMode.PAPER
-    # IBC: ReadOnlyLogin -- loaded but not yet wired to any behavior, see TODO.md.
+    # IBC: ReadOnlyLogin -- loaded but not yet wired to any behavior.
     read_only_login: bool = False
     read_only_api: bool | None = None  # None = leave the existing setting unchanged
     accept_incoming_connections: AcceptIncomingConnections = (
