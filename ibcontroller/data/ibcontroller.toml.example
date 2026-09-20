@@ -52,7 +52,13 @@
 # tws_channel = "stable"
 
 # Override the install path launcher.py would otherwise infer (env: IBCONTROLLER_TWS_PATH)
+# tws_path = "~/Jts"
 # tws_path = ""
+
+# Where TWS/Gateway itself stores its settings, deliberately NOT the same as tws_path
+# (the install location). None defaults, {instance}={program}-{trading_mode}
+# ie, ~/Jts/gateway-live
+# tws_settings_path =
 
 # TWS/Gateway is "live" or "paper" -- defaults to "paper" (the safe, non-monetary mode)
 # when unset (env: IBCONTROLLER_TRADING_MODE)
@@ -63,12 +69,13 @@
 # apply_settings_from_file) -- see ibkr_settings.toml.example. Omit this key (the
 # default) to apply nothing declaratively.
 # (env: IBCONTROLLER_SETTINGS_FILE)
-# settings_file = "ibkr_settings.toml"
+# settings_file = "~/.config/ibkr_settings.toml"
 
 # Where ibcontroller's own log and trace files live (env: IBCONTROLLER_LOG_DIR).
 # Optional: when unset, defaults to the platformdirs user-log dir (or
 # $IBCONTROLLER_APP_DIR/log in docker mode). Every instance's files (log, trace,
 # gateway stdout) land flat in this one directory.
+# log_dir = "~/.local/share/ibcontroller"
 # log_dir = ""
 
 # Where ibcontroller's own log and Gateway/TWS's own console output go: "std"
@@ -97,7 +104,7 @@
 # read_only_login = false
 
 # IBC: ReadOnlyApi -- true/false sets it
-# env: IBCONTROLLER_READ_ONLY_API)
+# (env: IBCONTROLLER_READ_ONLY_API)
 # Default "false"
 # read_only_api = false
 

@@ -278,10 +278,7 @@ class Config:
     # (app_dirs.resolve_app_dirs, honoring IBCONTROLLER_APP_DIR's docker mode); a
     # caller-supplied `load_config(log_dir=...)` is only a lower-priority default
     # (DictLoader), so the config file's `log_dir` and the IBCONTROLLER_LOG_DIR env var
-    # genuinely override it. (2026-09-12: this field used to be `str | None` with
-    # `load_config`'s platform-dirs parameter force-overwriting whatever TOML set --
-    # pyrefly correctly refused `Path(config.log_dir)` in launcher.py:602, and a config
-    # file `log_dir` silently never took effect.) See load_config for the loader order.
+    # genuinely override it. See load_config for the loader order.
     trace_enabled: bool = False
     log_dir: str = ts.option(factory=lambda: str(resolve_app_dirs()[1]))
     # Logging level for ibcontroller's own log file (not the raw wire trace).
