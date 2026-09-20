@@ -95,7 +95,7 @@ def _os_name() -> str:
 
 def _resolve_tws_path(config: Config, os_name: str) -> Path:
     if config.tws_path:
-        return Path(config.tws_path)
+        return Path(config.tws_path).expanduser()
     return Path.home() / ("Applications" if os_name == "macos" else "Jts")
 
 
@@ -113,7 +113,7 @@ def resolve_tws_settings_path(config: Config) -> Path:
     running live and paper concurrently is this project's normal use case,
     not an edge case to opt into safety for."""
     if config.tws_settings_path:
-        return Path(config.tws_settings_path)
+        return Path(config.tws_settings_path).expanduser()
     return Path.home() / "Jts" / config.instance
 
 

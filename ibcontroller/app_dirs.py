@@ -26,10 +26,10 @@ def resolve_app_dirs(env: Mapping[str, str] | None = None) -> tuple[Path, Path]:
     env = os.environ if env is None else env
     app_dir = env.get("IBCONTROLLER_APP_DIR")
     if app_dir:
-        base = Path(app_dir)
+        base = Path(app_dir).expanduser()
         return base / "config", base / "log"
     dirs = platformdirs.PlatformDirs(_APP_NAME, appauthor=False)
-    return Path(dirs.user_config_dir), Path(dirs.user_log_dir)
+    return Path(dirs.user_config_dir).expanduser(), Path(dirs.user_log_dir).expanduser()
 
 
 def resolve_runtime_dir(env: Mapping[str, str] | None = None) -> Path:
@@ -39,6 +39,6 @@ def resolve_runtime_dir(env: Mapping[str, str] | None = None) -> Path:
     env = os.environ if env is None else env
     app_dir = env.get("IBCONTROLLER_APP_DIR")
     if app_dir:
-        return Path(app_dir) / "run"
+        return Path(app_dir).expanduser() / "run"
     dirs = platformdirs.PlatformDirs(_APP_NAME, appauthor=False)
-    return Path(dirs.user_runtime_dir)
+    return Path(dirs.user_runtime_dir).expanduser()
