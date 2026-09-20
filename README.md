@@ -93,7 +93,6 @@ And the `ibcontroller run` parameters:
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-
 ### Running paper and live in parallel
 
 To run parallel instances in `live`and `paper`trading mode, we need to pass credentials and trading mode:
@@ -107,7 +106,6 @@ ibcontroller run --trading-mode=paper --dotenv=.env-paper
 
 `--app-dir` (also accepted by `init`) overrides `IBCONTROLLER_APP_DIR` for one
 invocation, for pointing each instance's config/log/run dirs somewhere different too.
-
 
 ## Configuration
 
@@ -237,7 +235,7 @@ Both use the local system clock, not
 converted to US/Eastern, so pick a local time that lands after the Sunday 01:00
 US/Eastern invalidation window if that's the intent.
 
-### Credentials (env only, never in the config file)
+### Credentials (env only, never in the configuration file)
 
 A single pair is used regardless of `trading_mode`.
 
