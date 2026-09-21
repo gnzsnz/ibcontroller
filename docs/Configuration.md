@@ -6,7 +6,7 @@ credentials, which are environment-variable-only (see below).
 
 Precedence, highest first:
 
-1. Environment variables (`IBCONTROLLER_*`)
+1. Environment variables (`IBC_*`)
 2. Config file
 3. Built-in defaults
 
@@ -14,15 +14,15 @@ Schema is closed: any key not declared below is rejected at startup with a clean
 error, never silently ignored.
 
 Every config-field also has an environment-variable spelling:
-`IBCONTROLLER_` + the field name upper-cased and in snake-case, e.g.
-`accept_incoming_connections` -> `IBCONTROLLER_ACCEPT_INCOMING_CONNECTIONS`.
+`IBC_` + the field name upper-cased and in snake-case, e.g.
+`accept_incoming_connections` -> `IBC_ACCEPT_INCOMING_CONNECTIONS`.
 Environment variables override the config file.
 
 Credentials are never accepted from the config file -- `userid`/`password` in the
 file are rejected at startup. Only the environment variables work, and each also
 accepts a `_FILE`-suffixed variant that reads the value from a file instead
-(Docker/Compose secrets): `IBCONTROLLER_USERID` / `IBCONTROLLER_PASSWORD`,
-`IBCONTROLLER_USERID_FILE` / `IBCONTROLLER_PASSWORD_FILE`.
+(Docker/Compose secrets): `IBC_USERID` / `IBC_PASSWORD`,
+`IBC_USERID_FILE` / `IBC_PASSWORD_FILE`.
 
 ## IBController specific settings
 
@@ -30,19 +30,22 @@ Settings that drive the behaviour of `ibcontroller` itself.
 
 | TOML key | Env var | Description | Default |
 | --- | --- | --- | --- |
-| `instance` | `IBCONTROLLER_INSTANCE` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) |
-| `program` | `IBCONTROLLER_PROGRAM` | `"gateway"` or `"tws"` | `"gateway"` |
-| `tws_version` | `IBCONTROLLER_TWS_VERSION` | Installed TWS/Gateway version, e.g. `"10.50"`. Omit to auto-detect from the real install (greatest version wins, narrowed by `tws_channel`) | `None` (auto-detected) |
-| `tws_channel` | `IBCONTROLLER_TWS_CHANNEL` | `"stable"`/`"latest"`; narrows auto-detection to installs carrying this update channel. Ignored when `tws_version` is set explicitly | `"stable"` |
-| `tws_path` | `IBCONTROLLER_TWS_PATH` | Override the install-path inference | `None` |
-| `tws_settings_path` | `IBCONTROLLER_TWS_SETTINGS_PATH` | Where TWS/Gateway stores its own settings (not the install dir); per instance | `None` (per-instance default) |
-| `settings_file` | `IBCONTROLLER_SETTINGS_FILE` | Extra declarative settings file, merged on top of the built-in settings -- see "Declarative settings" below | `None` |
-| (rejected) | `IBCONTROLLER_USERID` | Login user id; environment-variable-only, never from the config file. Also accepts `IBCONTROLLER_USERID_FILE` | (required) |
-| (rejected) | `IBCONTROLLER_PASSWORD` | Login password; environment-variable-only, never from the config file. Also accepts `IBCONTROLLER_PASSWORD_FILE` | (required) |
-| `trace_enabled` | `IBCONTROLLER_TRACE_ENABLED` | Verbose raw wire trace (`cmd-{instance}.jsonl` / `events-{instance}.jsonl` next to the log file) | `false` |
-| (resolved) | `IBCONTROLLER_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default |
-| `log_level` | `IBCONTROLLER_LOG_LEVEL` | Logging level for ibcontroller's own log: `debug`/`info`/`warning`/`error` | `info` |
-| `log_sink` | `IBCONTROLLER_LOG_SINK` | `"std"` (console only) or `"file"` (only `ibcontroller-{instance}.log`/`gateway-{instance}.log`, under `log_dir`) -- exclusive, not both. Also covers Gateway/TWS's own console output, not just ibcontroller's own log. Doesn't affect the wire trace above, which stays file-only regardless | `"std"` |
+| `instance` | `IBC_INSTANCE` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) |
+| `program` | `IBC_PROGRAM` | `"gateway"` or `"tws"` | `"gateway"` |
+| `tws_version` | `IBC_TWS_VERSION` | Installed TWS/Gateway version, e.g. `"10.50"`. Omit to auto-detect from the real install (greatest version wins, narrowed by `tws_channel`) | `None` (auto-detected) |
+| `tws_channel` | `IBC_TWS_CHANNEL` | `"stable"`/`"latest"`; narrows auto-detection to installs carrying this update channel. Ignored when `tws_version` is set explicitly | `"stable"` |
+| `tws_path` | `IBC_TWS_PATH` | Override the install-path inference | `None` |
+| `tws_settings_path` | `IBC_TWS_SETTINGS_PATH` | Where TWS/Gateway stores its own settings (not the install dir); per instance | `None` (per-instance default) |
+| `settings_file` | `IBC_SETTINGS_FILE` | Extra declarative settings file, merged on top of the built-in settings -- see "Declarative settings" below | `None` |
+| (rejected) | `IBC_USERID` | Login user id; environment-variable-only, never from the config file. Also accepts `IBC_USERID_FILE` | (required) |
+| (rejected) | `IBC_PASSWORD` | Login password; environment-variable-only, never from the config file. Also accepts `IBC_PASSWORD_FILE` | (required) |
+| `trace_enabled` | `IBC_TRACE_ENABLED` | Verbose raw wire trace (`cmd-{instance}.jsonl` / `events-{instance}.jsonl` next to the log file) | `false` |
+| (resolved) | `IBC_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default |
+| `log_level` | `IBC_LOG_LEVEL` | Logging level for ibcontroller's own log: `debug`/`info`/`warning`/`error` | `info` |
+| `log_sink` | `IBC_LOG_SINK` | `"std"` (console only) or `"file"` (only `ibcontroller-{instance}.log`/`gateway-{instance}.log`, under `log_dir`) -- exclusive, not both. Also covers Gateway/TWS's own console output, not just ibcontroller's own log. Doesn't affect the wire trace above, which stays file-only regardless | `"std"` |
+| `java_heap_size` | `IBC_JAVA_HEAP_SIZE` | JVM heap for TWS/Gateway at launch, e.g. `"1024m"`/`"4g"`. Overrides the `-Xmx` line in the installed `.vmoptions` file; bare size, no `-Xmx` prefix | `None` (unchanged) |
+| `diagnostic_scope` | `IBC_DIAGNOSTIC_SCOPE` | Which windows get a structure dump logged: `"known"` (recognised by a built-in/declarative recogniser), `"unknown"`, or `"all"` -- see "Diagnostics" below | `"known"` |
+| `diagnostic_when` | `IBC_DIAGNOSTIC_WHEN` | When to log a structure dump: `"open"`, `"openclose"`, or `"never"` (off) -- see "Diagnostics" below | `"never"` |
 
 ## TWS/ibgateway specific settings
 
@@ -50,18 +53,18 @@ Settings related to TWS/ibgateway.
 
 | TOML key | Env var | Description | Default |
 | --- | --- | --- | --- |
-| `trading_mode` | `IBCONTROLLER_TRADING_MODE` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
-| `read_only_login` | `IBCONTROLLER_READ_ONLY_LOGIN` | TWS only. Loaded but not yet wired to any behavior -- reserved | `false` |
-| `read_only_api` | `IBCONTROLLER_READ_ONLY_API` | `true`/`false` sets it; omit to leave the existing setting unchanged. Applied automatically -- see "Declarative settings" | `None` (unchanged) |
-| `accept_incoming_connections` | `IBCONTROLLER_ACCEPT_INCOMING_CONNECTIONS` | How to handle incoming API connection dialogs -- see below | `"manual"` |
-| `existing_session_action` | `IBCONTROLLER_EXISTING_SESSION_ACTION` | What to do when an existing session is detected -- see below | `"manual"` |
-| `auto_restart_time` | `IBCONTROLLER_AUTO_RESTART_TIME` | Daily auto-restart time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
-| `auto_logoff_time` | `IBCONTROLLER_AUTO_LOGOFF_TIME` | Daily auto-logoff time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
+| `trading_mode` | `IBC_TRADING_MODE` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
+| `read_only_login` | `IBC_READ_ONLY_LOGIN` | TWS only. Loaded but not yet wired to any behavior -- reserved | `false` |
+| `read_only_api` | `IBC_READ_ONLY_API` | `true`/`false` sets it; omit to leave the existing setting unchanged. Applied automatically -- see "Declarative settings" | `None` (unchanged) |
+| `accept_incoming_connections` | `IBC_ACCEPT_INCOMING_CONNECTIONS` | How to handle incoming API connection dialogs -- see below | `"manual"` |
+| `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | What to do when an existing session is detected -- see below | `"manual"` |
+| `auto_restart_time` | `IBC_AUTO_RESTART_TIME` | Daily auto-restart time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
+| `auto_logoff_time` | `IBC_AUTO_LOGOFF_TIME` | Daily auto-logoff time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
 
 ### Accept Incoming Connection
 
 **key:** `accept_incoming_connections`
-**Environment variable:** `IBCONTROLLER_ACCEPT_INCOMING_CONNECTIONS`
+**Environment variable:** `IBC_ACCEPT_INCOMING_CONNECTIONS`
 
 If set to 'accept', ibcontroller automatically accepts incoming API connection
 dialogs. If set to 'reject', ibcontroller automatically rejects them. If set to
@@ -76,7 +79,7 @@ those IP addresses).
 ### Existing Session Detected Action
 
 **key:** `existing_session_action`
-**Environment variable:** `IBCONTROLLER_EXISTING_SESSION_ACTION`
+**Environment variable:** `IBC_EXISTING_SESSION_ACTION`
 
 When a user logs on to an IBKR account for trading purposes by any means, the
 IBKR account server checks to see whether the account is already logged in
@@ -109,7 +112,7 @@ default is 'manual'.
 ### Auto Restart Time
 
 **key:** `auto_restart_time`
-**Environment variable:** `IBCONTROLLER_AUTO_RESTART_TIME`
+**Environment variable:** `IBC_AUTO_RESTART_TIME`
 
 `"hh:mm AM/PM"` (e.g. `"08:00 AM"`). Sets TWS/Gateway's own daily "Auto restart"
 time under Lock and Exit. Omit this key (the default) to leave the existing
@@ -119,7 +122,7 @@ if both are set, this one wins (applied last).
 ### Auto Logoff Time
 
 **key:** `auto_logoff_time`
-**Environment variable:** `IBCONTROLLER_AUTO_LOGOFF_TIME`
+**Environment variable:** `IBC_AUTO_LOGOFF_TIME`
 
 Same `"hh:mm AM/PM"` format and the same Lock and Exit control as Auto Restart
 Time above, just selecting "Auto logoff" instead of "Auto restart". Omit this
@@ -129,7 +132,7 @@ set, Auto Restart Time wins -- set only one of the two in practice.
 ### Cold Restart Time
 
 **key:** `cold_restart_time`
-**Environment variable:** `IBCONTROLLER_COLD_RESTART_TIME`
+**Environment variable:** `IBC_COLD_RESTART_TIME`
 
 TWS and Gateway alike (ported from IBC's `IbcTws.java`, the shared base class
 both programs use). `"HH:MM"`, 24-hour, local system time. Unlike the settings
@@ -145,7 +148,7 @@ wins.
 ### Closedown At
 
 **key:** `closedown_at`
-**Environment variable:** `IBCONTROLLER_CLOSEDOWN_AT`
+**Environment variable:** `IBC_CLOSEDOWN_AT`
 
 TWS and Gateway alike, same reasoning as `cold_restart_time` above. `"HH:MM"`
 (every day) or `"<Weekday> HH:MM"` (one day a week -- `Weekday` a full English
@@ -162,10 +165,22 @@ TWS/Gateway itself.
 
 | TOML key | Env var | Description | Default |
 | --- | --- | --- | --- |
-| `login_dialog_display_timeout` | `IBCONTROLLER_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog to appear | `60.0` |
-| `second_factor_authentication_timeout` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_TIMEOUT` | The real 2FA budget in seconds, mirroring IBKR's own external limit | `180.0` |
-| `relogin_after_2fa_timeout` | `IBCONTROLLER_RELOGIN_AFTER_2FA_TIMEOUT` | Restart the login attempt if 2FA times out (instead of giving up) | `false` |
-| `second_factor_authentication_exit_interval` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_EXIT_INTERVAL` | Bounds the wait after a timed-out 2FA when relogin is enabled | `60.0` |
+| `login_dialog_display_timeout` | `IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog to appear | `60.0` |
+| `mfa_timeout` | `IBC_MFA_TIMEOUT` | The real 2FA budget in seconds, mirroring IBKR's own external limit | `180.0` |
+| `relogin_after_mfa_timeout` | `IBC_RELOGIN_AFTER_MFA_TIMEOUT` | Restart the login attempt if 2FA times out (instead of giving up) | `false` |
+| `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | Bounds the wait after a timed-out 2FA when relogin is enabled | `60.0` |
+
+## Diagnostics
+
+Off by default (`diagnostic_when="never"`). When enabled, logs a component
+structure dump (`AgentClient.dump`, the same primitive `settings.py`/
+`recognisers.py` use to locate controls) for each matching window event --
+a built-in replacement for poking the agent socket directly with
+`socat`/`nc`. `diagnostic_scope` picks which windows qualify:
+`"known"` (recognised by a built-in or declarative recogniser),
+`"unknown"` (not recognised by any), or `"all"`. `diagnostic_when` picks
+which events trigger a dump: `"open"`, `"openclose"`, or `"never"`.
+Dumps land in `ibcontroller-{instance}.log` at `INFO` level.
 
 ## Declarative settings
 
