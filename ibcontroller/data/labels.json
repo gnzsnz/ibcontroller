@@ -12,7 +12,7 @@
     "starting_application_title": "Starting application...",
     "tws_main_window_menu_item": "File/Lock Application"
   },
-  "second_factor_auth": {
+  "mfa": {
     "title": "Second Factor Authentication"
   },
   "existing_session": {

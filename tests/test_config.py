@@ -20,8 +20,8 @@ def _write_toml(tmp_path, text):
 
 
 def _set_credentials(monkeypatch):
-    monkeypatch.setenv("IBCONTROLLER_USERID", "user")
-    monkeypatch.setenv("IBCONTROLLER_PASSWORD", "pass")
+    monkeypatch.setenv("IBC_USERID", "user")
+    monkeypatch.setenv("IBC_PASSWORD", "pass")
 
 
 def test_toml_values_are_actually_applied(monkeypatch, tmp_path):
@@ -39,7 +39,7 @@ def test_env_var_overrides_toml_value(monkeypatch, tmp_path):
     had zero effect on the loaded Config, confirmed live before the fix."""
     _set_credentials(monkeypatch)
     toml_path = _write_toml(tmp_path, 'trading_mode = "paper"\n')
-    monkeypatch.setenv("IBCONTROLLER_TRADING_MODE", "live")
+    monkeypatch.setenv("IBC_TRADING_MODE", "live")
     config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
     assert config.trading_mode is TradingMode.LIVE
 
@@ -47,8 +47,8 @@ def test_env_var_overrides_toml_value(monkeypatch, tmp_path):
 def test_missing_credentials_raise_config_error(monkeypatch, tmp_path):
     # dotenv_path="" points load_dotenv() at a nonexistent file instead of letting
     # it search upward and pick up the repo's real, gitignored .env.
-    monkeypatch.delenv("IBCONTROLLER_USERID", raising=False)
-    monkeypatch.delenv("IBCONTROLLER_PASSWORD", raising=False)
+    monkeypatch.delenv("IBC_USERID", raising=False)
+    monkeypatch.delenv("IBC_PASSWORD", raising=False)
     with pytest.raises(ConfigError, match="credentials not found"):
         load_config(
             config_dir=tmp_path,
@@ -59,21 +59,21 @@ def test_missing_credentials_raise_config_error(monkeypatch, tmp_path):
 
 def test_log_level_converts_name_to_constant(monkeypatch, tmp_path):
     _set_credentials(monkeypatch)
-    monkeypatch.setenv("IBCONTROLLER_LOG_LEVEL", "debug")
+    monkeypatch.setenv("IBC_LOG_LEVEL", "debug")
     config = load_config(config_dir=tmp_path, log_dir=tmp_path)
     assert config.log_level == logging.DEBUG
 
 
 def test_log_level_rejects_bad_name(monkeypatch, tmp_path):
     _set_credentials(monkeypatch)
-    monkeypatch.setenv("IBCONTROLLER_LOG_LEVEL", "bogus")
+    monkeypatch.setenv("IBC_LOG_LEVEL", "bogus")
     with pytest.raises(ConfigError):
         load_config(config_dir=tmp_path, log_dir=tmp_path)
 
 
 def test_tws_settings_path_field(monkeypatch, tmp_path):
     _set_credentials(monkeypatch)
-    monkeypatch.setenv("IBCONTROLLER_TWS_SETTINGS_PATH", "/some/path")
+    monkeypatch.setenv("IBC_TWS_SETTINGS_PATH", "/some/path")
     config = load_config(config_dir=tmp_path, log_dir=tmp_path)
     assert config.tws_settings_path == "/some/path"
 
@@ -82,7 +82,7 @@ def test_java_heap_size_field(monkeypatch, tmp_path):
     _set_credentials(monkeypatch)
     config = load_config(config_dir=tmp_path, log_dir=tmp_path)
     assert config.java_heap_size is None
-    monkeypatch.setenv("IBCONTROLLER_JAVA_HEAP_SIZE", "2g")
+    monkeypatch.setenv("IBC_JAVA_HEAP_SIZE", "2g")
     config = load_config(config_dir=tmp_path, log_dir=tmp_path)
     assert config.java_heap_size == "2g"
 
@@ -91,17 +91,17 @@ def test_instance_default_uses_trading_mode(monkeypatch, tmp_path):
     """config.py's own default is f"{program}-{trading_mode.value}" -- confirmed
     against config.py:510, not tws_channel."""
     _set_credentials(monkeypatch)
-    monkeypatch.setenv("IBCONTROLLER_TRADING_MODE", "live")
+    monkeypatch.setenv("IBC_TRADING_MODE", "live")
     config = load_config(config_dir=tmp_path, log_dir=tmp_path)
     assert config.instance == "gateway-live"
 
 
 def test_password_file_suffix_reads_file_contents(monkeypatch, tmp_path):
-    monkeypatch.setenv("IBCONTROLLER_USERID", "user")
-    monkeypatch.delenv("IBCONTROLLER_PASSWORD", raising=False)
+    monkeypatch.setenv("IBC_USERID", "user")
+    monkeypatch.delenv("IBC_PASSWORD", raising=False)
     secret_path = tmp_path / "password.txt"
     secret_path.write_text("from-file-pass\n")
-    monkeypatch.setenv("IBCONTROLLER_PASSWORD_FILE", str(secret_path))
+    monkeypatch.setenv("IBC_PASSWORD_FILE", str(secret_path))
     config = load_config(config_dir=tmp_path, log_dir=tmp_path)
     assert config.password.get_secret_value() == "from-file-pass"
 
@@ -110,7 +110,7 @@ def test_password_file_suffix_wins_over_plain_var(monkeypatch, tmp_path):
     _set_credentials(monkeypatch)
     secret_path = tmp_path / "password.txt"
     secret_path.write_text("file-wins\n")
-    monkeypatch.setenv("IBCONTROLLER_PASSWORD_FILE", str(secret_path))
+    monkeypatch.setenv("IBC_PASSWORD_FILE", str(secret_path))
     config = load_config(config_dir=tmp_path, log_dir=tmp_path)
     assert config.password.get_secret_value() == "file-wins"
 
@@ -128,7 +128,7 @@ def test_cli_overrides_win_over_env_and_toml(monkeypatch, tmp_path):
     regardless of what a shared ibcontroller.toml or .env file says."""
     _set_credentials(monkeypatch)
     toml_path = _write_toml(tmp_path, 'trading_mode = "paper"\n')
-    monkeypatch.setenv("IBCONTROLLER_TRADING_MODE", "paper")
+    monkeypatch.setenv("IBC_TRADING_MODE", "paper")
     config = load_config(
         config_dir=tmp_path,
         log_dir=tmp_path,

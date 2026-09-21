@@ -17,7 +17,7 @@ def test_default_uses_platformdirs():
 
 
 def test_docker_mode_env_var_overrides_platformdirs():
-    config_dir, log_dir = resolve_app_dirs(env={"IBCONTROLLER_APP_DIR": "/data/ibc"})
+    config_dir, log_dir = resolve_app_dirs(env={"IBC_APP_DIR": "/data/ibc"})
     assert config_dir == Path("/data/ibc/config")
     assert log_dir == Path("/data/ibc/log")
 
@@ -25,7 +25,7 @@ def test_docker_mode_env_var_overrides_platformdirs():
 def test_docker_mode_ignores_empty_string():
     """Empty counts as unset, matching config.py's own convention elsewhere --
     lets a deployment clear the var without deleting it."""
-    config_dir, _log_dir = resolve_app_dirs(env={"IBCONTROLLER_APP_DIR": ""})
+    config_dir, _log_dir = resolve_app_dirs(env={"IBC_APP_DIR": ""})
     dirs = platformdirs.PlatformDirs("ibcontroller", appauthor=False)
     assert config_dir == Path(dirs.user_config_dir)
 
@@ -45,11 +45,11 @@ def test_runtime_dir_default_uses_platformdirs():
 
 
 def test_runtime_dir_docker_mode_env_var_overrides_platformdirs():
-    runtime_dir = resolve_runtime_dir(env={"IBCONTROLLER_APP_DIR": "/data/ibc"})
+    runtime_dir = resolve_runtime_dir(env={"IBC_APP_DIR": "/data/ibc"})
     assert runtime_dir == Path("/data/ibc/run")
 
 
 def test_runtime_dir_docker_mode_ignores_empty_string():
-    runtime_dir = resolve_runtime_dir(env={"IBCONTROLLER_APP_DIR": ""})
+    runtime_dir = resolve_runtime_dir(env={"IBC_APP_DIR": ""})
     dirs = platformdirs.PlatformDirs("ibcontroller", appauthor=False)
     assert runtime_dir == Path(dirs.user_runtime_dir)

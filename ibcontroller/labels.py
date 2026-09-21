@@ -62,7 +62,7 @@ class LoginLabels:
 
 
 @attrs.define(frozen=True)
-class SecondFactorAuthLabels:
+class MfaLabels:
     title: str
 
 
@@ -193,7 +193,7 @@ class ShutdownLabels:
 @attrs.define(frozen=True)
 class Labels:
     login: LoginLabels
-    second_factor_auth: SecondFactorAuthLabels
+    mfa: MfaLabels
     existing_session: ExistingSessionLabels
     accept_incoming_connection: AcceptIncomingConnectionLabels
     login_failed: LoginFailedLabels

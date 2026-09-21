@@ -24,10 +24,10 @@ from tests.fakes import FakeCommandServer, FakeEventServer
 pytestmark = pytest.mark.asyncio
 
 _BASE_ENV = {
-    "IBCONTROLLER_USERID": "papuser",
-    "IBCONTROLLER_PASSWORD": "pappass",  # nosec B105
-    "IBCONTROLLER_TRADING_MODE": "paper",
-    "IBCONTROLLER_TWS_VERSION": "10.50",
+    "IBC_USERID": "papuser",
+    "IBC_PASSWORD": "pappass",  # nosec B105
+    "IBC_TRADING_MODE": "paper",
+    "IBC_TWS_VERSION": "10.50",
 }
 
 
@@ -37,9 +37,9 @@ async def test_config_log_dir_reaches_a_real_dispatcher(
     app_dir = tmp_path / "app"
     env = {
         **_BASE_ENV,
-        "IBCONTROLLER_APP_DIR": str(app_dir),
-        "IBCONTROLLER_INSTANCE": "paper",
-        "IBCONTROLLER_TRACE_ENABLED": "yes",
+        "IBC_APP_DIR": str(app_dir),
+        "IBC_INSTANCE": "paper",
+        "IBC_TRACE_ENABLED": "yes",
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -95,9 +95,9 @@ async def test_config_password_never_reaches_trace_file_as_plaintext(
     app_dir = tmp_path / "app"
     env = {
         **_BASE_ENV,
-        "IBCONTROLLER_APP_DIR": str(app_dir),
-        "IBCONTROLLER_INSTANCE": "paper",
-        "IBCONTROLLER_TRACE_ENABLED": "yes",
+        "IBC_APP_DIR": str(app_dir),
+        "IBC_INSTANCE": "paper",
+        "IBC_TRACE_ENABLED": "yes",
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -142,5 +142,5 @@ async def test_config_password_never_reaches_trace_file_as_plaintext(
 # polluting real user state. config.py's own test_log_dir_defaults_via_app_dirs
 # already covers "log_dir resolves to the real platformdirs path" at the
 # pure-resolution level, with no file I/O; this file only integration-tests the path
-# that's actually safe to run for real, i.e. with IBCONTROLLER_APP_DIR pointed at a
+# that's actually safe to run for real, i.e. with IBC_APP_DIR pointed at a
 # tmp_path.

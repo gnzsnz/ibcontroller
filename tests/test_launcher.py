@@ -1069,7 +1069,7 @@ def test_build_launch_plan_linux_tws_falls_back_to_ibgateway(tmp_path):
 def test_build_launch_plan_default_runtime_dir_uses_platformdirs(tmp_path, monkeypatch):
     """No `runtime_dir` override -- falls back to `app_dirs.resolve_runtime_dir()`,
     same "Docker mode" env-var override as `resolve_app_dirs`."""
-    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(tmp_path / "appdir"))
+    monkeypatch.setenv("IBC_APP_DIR", str(tmp_path / "appdir"))
     base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
         program="gateway",

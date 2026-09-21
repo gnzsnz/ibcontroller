@@ -39,8 +39,8 @@ from typed_settings.types import Secret
 
 from ibcontroller.app_dirs import resolve_app_dirs
 
-ENV_PREFIX = "IBCONTROLLER_"
-ENV_SENSITIVE: list[str] = ["IBCONTROLLER_USERID", "IBCONTROLLER_PASSWORD"]
+ENV_PREFIX = "IBC_"
+ENV_SENSITIVE: list[str] = ["IBC_USERID", "IBC_PASSWORD"]
 
 # Field/TOML key names that must never appear in the config file -- credentials are
 # environment-variable-only (see module docstring). Mirrors config_old.py's own
@@ -85,7 +85,7 @@ def _reject_credentials_in_file(data: Mapping[str, Any], path: Path) -> None:
         raise ConfigError(
             f"{path}: credentials must not be set in the config file "
             f"({', '.join(found)} found) -- use environment variables instead "
-            "(IBCONTROLLER_USERID/IBCONTROLLER_PASSWORD, each also accepting a "
+            "(IBC_USERID/IBC_PASSWORD, each also accepting a "
             "_FILE-suffixed variant)"
         )
 
@@ -234,15 +234,15 @@ class Config:
     )
     existing_session_action: ExistingSessionAction = ExistingSessionAction.MANUAL
 
-    # Login/2FA timeout and retry settings
+    # Login/MFA timeout and retry settings
     # IBC: LoginDialogDisplayTimeout
     login_dialog_display_timeout: float = 60.0
     # IBC: SecondFactorAuthenticationTimeout
-    second_factor_authentication_timeout: float = 180.0
+    mfa_timeout: float = 180.0
     # IBC: ReloginAfterSecondFactorAuthenticationTimeout
-    relogin_after_2fa_timeout: bool = False
+    relogin_after_mfa_timeout: bool = False
     # IBC: SecondFactorAuthenticationExitInterval
-    second_factor_authentication_exit_interval: float = 60.0
+    mfa_exit_interval: float = 60.0
 
     # AutoRestartTime "hh:mm AM/PM" format (e.g. "08:00 AM")
     auto_restart_time: str | None = None  # None = leave the existing setting unchanged
@@ -268,15 +268,15 @@ class Config:
     java_heap_size: str | None = None
 
     # Credentials -- environment-variable-only. Field name matches the real env var
-    # (IBCONTROLLER_USERID) directly -- no alias/mapping needed.
+    # (IBC_USERID) directly -- no alias/mapping needed.
     userid: Secret = ts.secret(default=None)
     password: Secret = ts.secret(default=None)
 
     # Logging and tracing -- log_dir is the one path ibcontroller's own log/trace files
     # land in, always resolved: never None. Defaults to the platformdirs log dir
-    # (app_dirs.resolve_app_dirs, honoring IBCONTROLLER_APP_DIR's docker mode); a
+    # (app_dirs.resolve_app_dirs, honoring IBC_APP_DIR's docker mode); a
     # caller-supplied `load_config(log_dir=...)` is only a lower-priority default
-    # (DictLoader), so the config file's `log_dir` and the IBCONTROLLER_LOG_DIR env var
+    # (DictLoader), so the config file's `log_dir` and the IBC_LOG_DIR env var
     # genuinely override it. See load_config for the loader order.
     trace_enabled: bool = False
     log_dir: str = ts.option(factory=lambda: str(resolve_app_dirs()[1]))
@@ -347,7 +347,7 @@ def load_config(
     CONF_FORMATS = {"*.toml": TomlFormat(None)}
     # A caller-supplied log_dir (platform dirs in production, a tmp dir in tests) is
     # a low-priority DEFAULT -- first in the loader list, so every later loader wins
-    # over it and `log_dir` in the config file (or IBCONTROLLER_LOG_DIR) genuinely
+    # over it and `log_dir` in the config file (or IBC_LOG_DIR) genuinely
     # takes effect. The Config field's own factory default (resolve_app_dirs) is the
     # even-lower built-in base when neither param nor file/env set it.
     _log_dir_default: dict[str, str] = {}
@@ -388,8 +388,8 @@ def load_config(
         or _config.password.get_secret_value() is None
     ):
         raise ConfigError(
-            "credentials not found -- set IBCONTROLLER_USERID and "
-            "IBCONTROLLER_PASSWORD in the environment"
+            "credentials not found -- set IBC_USERID and "
+            "IBC_PASSWORD in the environment"
         )
 
     return _config

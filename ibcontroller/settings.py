@@ -346,7 +346,7 @@ async def open_settings_dialog(
     to be long enough to span a real 2FA wait, since Settings may be
     attempted right after login while Gateway is still gated on a human
     approving 2FA -- callers should pass
-    `config.second_factor_authentication_timeout`, not rely on this
+    `config.mfa_timeout`, not rely on this
     function's own default, to stay in sync with `login.py`'s own timeout.
 
     Returns the dialog's own `window_id`, captured from the `window_opened`

@@ -13,7 +13,7 @@ def test_bundled_default_loads_and_structures():
     labels = load_labels()
     assert isinstance(labels, Labels)
     assert "IBKR Gateway" in labels.login.gateway_titles
-    assert labels.second_factor_auth.title == "Second Factor Authentication"
+    assert labels.mfa.title == "Second Factor Authentication"
     assert labels.existing_session.title == "Existing session detected"
     assert labels.accept_incoming_connection.title == "Accept incoming connection"
     assert labels.accept_incoming_connection.accept_buttons == ["OK", "Yes"]

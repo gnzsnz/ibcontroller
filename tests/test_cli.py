@@ -1,7 +1,7 @@
 """cli.py -- the installed `ibcontroller` command. Thin: argument parsing plus mapping
 `main.py`'s exceptions to exit codes and human-readable messages. Runs through
 `typer.testing.CliRunner` (in-process, no subprocess) against a tmp_path-scoped
-`IBCONTROLLER_APP_DIR`, same isolation pattern as `tests/test_trace_integration.py` --
+`IBC_APP_DIR`, same isolation pattern as `tests/test_trace_integration.py` --
 never touches the real platformdirs locations.
 """
 
@@ -16,16 +16,16 @@ from ibcontroller.control_loop import ShutdownCause
 runner = CliRunner()
 
 _BASE_ENV = {
-    "IBCONTROLLER_USERID": "papuser",
-    "IBCONTROLLER_PASSWORD": "pappass",  # nosec B105
-    "IBCONTROLLER_TRADING_MODE": "paper",
-    "IBCONTROLLER_TWS_VERSION": "10.50",
+    "IBC_USERID": "papuser",
+    "IBC_PASSWORD": "pappass",  # nosec B105
+    "IBC_TRADING_MODE": "paper",
+    "IBC_TWS_VERSION": "10.50",
 }
 
 
 def test_init_scaffolds_config_dir(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
-    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(app_dir))
+    monkeypatch.setenv("IBC_APP_DIR", str(app_dir))
 
     result = runner.invoke(_cli.app, ["init"])
 
@@ -40,7 +40,7 @@ def test_init_scaffolds_config_dir(tmp_path, monkeypatch):
 
 def test_init_reports_nothing_to_do_on_second_run(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
-    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(app_dir))
+    monkeypatch.setenv("IBC_APP_DIR", str(app_dir))
     runner.invoke(_cli.app, ["init"])
 
     result = runner.invoke(_cli.app, ["init"])
@@ -51,7 +51,7 @@ def test_init_reports_nothing_to_do_on_second_run(tmp_path, monkeypatch):
 
 def test_run_without_config_auto_scaffolds_then_fails_clearly(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
-    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(app_dir))
+    monkeypatch.setenv("IBC_APP_DIR", str(app_dir))
     for key in _BASE_ENV:
         monkeypatch.delenv(key, raising=False)
 
@@ -65,7 +65,7 @@ def test_run_without_config_auto_scaffolds_then_fails_clearly(tmp_path, monkeypa
 
 def test_run_reports_shutdown_cause_on_success(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
-    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(app_dir))
+    monkeypatch.setenv("IBC_APP_DIR", str(app_dir))
 
     async def fake_run_async(
         config_dir, log_dir, *, dotenv_path=None, cli_overrides=None
@@ -84,7 +84,7 @@ def test_run_field_flags_become_cli_overrides(tmp_path, monkeypatch):
     """--trading-mode/--tws-path/--tws-channel/--program/--tws-settings-path/
     --instance reach run_async as cli_overrides, unset ones dropped."""
     app_dir = tmp_path / "app"
-    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(app_dir))
+    monkeypatch.setenv("IBC_APP_DIR", str(app_dir))
     captured = {}
 
     async def fake_run_async(
@@ -121,7 +121,7 @@ def test_run_field_flags_become_cli_overrides(tmp_path, monkeypatch):
 
 def test_run_without_flags_produces_no_cli_overrides(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
-    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(app_dir))
+    monkeypatch.setenv("IBC_APP_DIR", str(app_dir))
     captured = {}
 
     async def fake_run_async(
@@ -141,7 +141,7 @@ def test_run_without_flags_produces_no_cli_overrides(tmp_path, monkeypatch):
 def test_run_app_dir_flag_wins_over_env_var(tmp_path, monkeypatch):
     env_app_dir = tmp_path / "env-app"
     flag_app_dir = tmp_path / "flag-app"
-    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(env_app_dir))
+    monkeypatch.setenv("IBC_APP_DIR", str(env_app_dir))
     for key in _BASE_ENV:
         monkeypatch.delenv(key, raising=False)
 
@@ -157,7 +157,7 @@ def test_run_app_dir_flag_wins_over_env_var(tmp_path, monkeypatch):
 def test_init_app_dir_flag_wins_over_env_var(tmp_path, monkeypatch):
     env_app_dir = tmp_path / "env-app"
     flag_app_dir = tmp_path / "flag-app"
-    monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(env_app_dir))
+    monkeypatch.setenv("IBC_APP_DIR", str(env_app_dir))
 
     result = runner.invoke(_cli.app, ["init", f"--app-dir={flag_app_dir}"])
 

@@ -649,7 +649,7 @@ async def test_apply_declarative_settings_passes_second_factor_timeout(
 ):
     """#37 follow-up: `open_settings_dialog`'s own `timeout` default (180.0)
     must not be relied on silently -- it needs to track
-    `Config.second_factor_authentication_timeout` (the same field
+    `Config.mfa_timeout` (the same field
     `login.py` already reads), so a deployment that changes one also
     changes the other.
 
@@ -675,7 +675,7 @@ async def test_apply_declarative_settings_passes_second_factor_timeout(
     config = _config(
         settings_file=None,
         read_only_api=False,
-        second_factor_authentication_timeout=42.0,
+        mfa_timeout=42.0,
     )
     await _apply_declarative_settings(
         launched,  # type: ignore[arg-type]

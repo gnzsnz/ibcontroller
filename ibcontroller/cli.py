@@ -67,7 +67,7 @@ def init(
     app_dir: Path | None = typer.Option(  # noqa: B008 -- typer's own idiom
         None,
         "--app-dir",
-        help="Override IBCONTROLLER_APP_DIR for this invocation -- config/log/run "
+        help="Override IBC_APP_DIR for this invocation -- config/log/run "
         "all move under {app_dir}/{config,log,run} instead of the platform default.",
     ),
 ) -> None:
@@ -75,7 +75,7 @@ def init(
     ibkr_settings.toml.example/labels.json.example files. Never overwrites a file
     that already exists unless --force is given."""
     if app_dir is not None:
-        os.environ["IBCONTROLLER_APP_DIR"] = str(app_dir)
+        os.environ["IBC_APP_DIR"] = str(app_dir)
     config_dir, log_dir = resolve_app_dirs()
     written = _main.ensure_config_scaffold(config_dir, log_dir, force=force)
 
@@ -92,7 +92,7 @@ def init(
     if "ibcontroller.toml" in {p.name for p in written} or force:
         typer.echo(
             f"\nEdit {config_dir / 'ibcontroller.toml'} (set trading_mode/tws_version) "
-            "and set IBCONTROLLER_USERID/IBCONTROLLER_PASSWORD before running "
+            "and set IBC_USERID/IBC_PASSWORD before running "
             "`ibcontroller run`."
         )
 
@@ -109,7 +109,7 @@ def run(  # noqa: PLR0913, PLR0917 -- one typer.Option per Config field, not
     app_dir: Path | None = typer.Option(  # noqa: B008 -- typer's own idiom
         None,
         "--app-dir",
-        help="Override IBCONTROLLER_APP_DIR for this invocation -- config/log/run "
+        help="Override IBC_APP_DIR for this invocation -- config/log/run "
         "all move under {app_dir}/{config,log,run} instead of the platform default.",
     ),
     trading_mode: TradingMode | None = typer.Option(  # noqa: B008
@@ -159,7 +159,7 @@ def run(  # noqa: PLR0913, PLR0917 -- one typer.Option per Config field, not
     `ibcontroller run --trading-mode=paper --dotenv=.env-paper` run side by side from
     one shared config."""
     if app_dir is not None:
-        os.environ["IBCONTROLLER_APP_DIR"] = str(app_dir)
+        os.environ["IBC_APP_DIR"] = str(app_dir)
     config_dir, log_dir = resolve_app_dirs()
     cli_overrides = _cli_overrides(
         trading_mode=trading_mode,
@@ -183,7 +183,7 @@ def run(  # noqa: PLR0913, PLR0917 -- one typer.Option per Config field, not
         typer.echo(
             f"\nEdit {config_dir / 'ibcontroller.toml'} (run `ibcontroller init` "
             "first if it doesn't exist yet) and set "
-            "IBCONTROLLER_USERID/IBCONTROLLER_PASSWORD.",
+            "IBC_USERID/IBC_PASSWORD.",
             err=True,
         )
         raise typer.Exit(1) from exc

@@ -383,7 +383,7 @@ async def test_restart_expected_false_fills_credentials_even_with_marker_file(
     assert "Password" in sent_targets
 
 
-async def test_2fa_is_handled_inline_then_reaches_logged_in(
+async def test_mfa_is_handled_inline_then_reaches_logged_in(
     sock_path, event_sock_path, tmp_path
 ):
     responder = _tracking_responder([])
@@ -545,7 +545,7 @@ async def test_run_uses_config_sourced_timeouts_when_not_overridden(
     sock_path, event_sock_path, tmp_path
 ):
     """`login_timeout`/`outcome_timeout` default from
-    `Config.login_dialog_display_timeout`/`second_factor_authentication_timeout`
+    `Config.login_dialog_display_timeout`/`mfa_timeout`
     (IBC's own real settings) when `run()` isn't given explicit values --
     confirmed here by NOT passing either argument."""
     calls: list[dict] = []
@@ -557,7 +557,7 @@ async def test_run_uses_config_sourced_timeouts_when_not_overridden(
         dispatcher = await _start(sock_path, event_sock_path)
         config = _config(
             login_dialog_display_timeout=5.0,
-            second_factor_authentication_timeout=5.0,
+            mfa_timeout=5.0,
         )
         manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
         try:
@@ -577,12 +577,12 @@ async def test_run_uses_config_sourced_timeouts_when_not_overridden(
     assert manager.state is LoginState.LOGGED_IN
 
 
-async def test_2fa_watchdog_succeeds_within_exit_interval(
+async def test_mfa_watchdog_succeeds_within_exit_interval(
     sock_path, event_sock_path, tmp_path
 ):
-    """Fast 2FA close (well within `second_factor_authentication_timeout`)
-    with `relogin_after_2fa_timeout` enabled -- the watchdog just bounds the
-    rest of the wait by `second_factor_authentication_exit_interval`; the main
+    """Fast 2FA close (well within `mfa_timeout`)
+    with `relogin_after_mfa_timeout` enabled -- the watchdog just bounds the
+    rest of the wait by `mfa_exit_interval`; the main
     window still arrives in time, so this behaves exactly like the plain 2FA
     case, just with a shorter timeout applied."""
     responder = _tracking_responder([])
@@ -592,9 +592,9 @@ async def test_2fa_watchdog_succeeds_within_exit_interval(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         config = _config(
-            relogin_after_2fa_timeout=True,
-            second_factor_authentication_timeout=5.0,
-            second_factor_authentication_exit_interval=5.0,
+            relogin_after_mfa_timeout=True,
+            mfa_timeout=5.0,
+            mfa_exit_interval=5.0,
         )
         manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
         try:
@@ -628,11 +628,11 @@ async def test_2fa_watchdog_succeeds_within_exit_interval(
     assert manager.state is LoginState.LOGGED_IN
 
 
-async def test_2fa_watchdog_raises_when_main_window_never_appears(
+async def test_mfa_watchdog_raises_when_main_window_never_appears(
     sock_path, event_sock_path, tmp_path
 ):
     """Ported from IBC's `restartAfterTime` -- IBC exits/restarts the JVM if
-    login hasn't completed within `second_factor_authentication_exit_interval`
+    login hasn't completed within `mfa_exit_interval`
     of 2FA closing; we have no restart primitive at this layer, so this raises
     `LoginError` instead, matching how `LoginFailedError` is already treated as
     a real failure signal for whoever eventually supervises Login."""
@@ -643,9 +643,9 @@ async def test_2fa_watchdog_raises_when_main_window_never_appears(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         config = _config(
-            relogin_after_2fa_timeout=True,
-            second_factor_authentication_timeout=5.0,
-            second_factor_authentication_exit_interval=0.05,
+            relogin_after_mfa_timeout=True,
+            mfa_timeout=5.0,
+            mfa_exit_interval=0.05,
         )
         manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
         try:
@@ -677,15 +677,15 @@ async def test_2fa_watchdog_raises_when_main_window_never_appears(
             await dispatcher.stop()
 
 
-async def test_2fa_late_close_relogin_disabled_does_nothing(
+async def test_mfa_late_close_relogin_disabled_does_nothing(
     sock_path, event_sock_path, tmp_path
 ):
-    """2FA closes *after* `second_factor_authentication_timeout` (the user
-    answered too slowly) with `relogin_after_2fa_timeout` disabled (the
+    """2FA closes *after* `mfa_timeout` (the user
+    answered too slowly) with `relogin_after_mfa_timeout` disabled (the
     default) -- matches IBC's own intent (just a log line, no retry) while
     still keeping `run()`'s own contract: it doesn't return early leaving
-    `state` stuck at `TWO_FA_IN_PROGRESS` (a real bug this test caught, fixed
-    in `_after_2fa_closed_gateway`/`_after_2fa_closed_tws`) -- it keeps
+    `state` stuck at `MFA_IN_PROGRESS` (a real bug this test caught, fixed
+    in `_after_mfa_closed_gateway`/`_after_mfa_closed_tws`) -- it keeps
     waiting for the outcome, same as always, just without ever retrying."""
     responder = _tracking_responder([])
     async with (
@@ -694,8 +694,8 @@ async def test_2fa_late_close_relogin_disabled_does_nothing(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         config = _config(
-            relogin_after_2fa_timeout=False,
-            second_factor_authentication_timeout=0.01,
+            relogin_after_mfa_timeout=False,
+            mfa_timeout=0.01,
         )
         manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
         task = asyncio.ensure_future(
@@ -724,7 +724,7 @@ async def test_2fa_late_close_relogin_disabled_does_nothing(
                 )
             )
             await asyncio.sleep(0.05)
-            assert manager.state is LoginState.TWO_FA_IN_PROGRESS
+            assert manager.state is LoginState.MFA_IN_PROGRESS
         finally:
             # `run()` completes normally here (nothing more to do, matching
             # IBC exactly) -- `task` may already be done by this point, so
@@ -742,10 +742,10 @@ async def test_2fa_late_close_relogin_disabled_does_nothing(
             await dispatcher.stop()
 
 
-async def test_2fa_late_close_relogin_enabled_retries_then_succeeds(
+async def test_mfa_late_close_relogin_enabled_retries_then_succeeds(
     sock_path, event_sock_path, tmp_path, monkeypatch
 ):
-    """2FA closes late, `relogin_after_2fa_timeout` enabled -- re-initiates the
+    """2FA closes late, `relogin_after_mfa_timeout` enabled -- re-initiates the
     whole login sequence after IBC's own hardcoded 5-second delay (monkeypatched
     down here so the test doesn't need to wait 5 real seconds; the constant
     itself stays literal in production code, matching IBC)."""
@@ -758,9 +758,9 @@ async def test_2fa_late_close_relogin_enabled_retries_then_succeeds(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         config = _config(
-            relogin_after_2fa_timeout=True,
-            second_factor_authentication_timeout=0.01,
-            second_factor_authentication_exit_interval=5.0,
+            relogin_after_mfa_timeout=True,
+            mfa_timeout=0.01,
+            mfa_exit_interval=5.0,
         )
         manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
         task = asyncio.ensure_future(
@@ -890,7 +890,7 @@ async def test_too_many_failed_attempts_dialog_triggers_retry_via_watcher(
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        config = _config(relogin_after_2fa_timeout=True)
+        config = _config(relogin_after_mfa_timeout=True)
         manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
         registry = RecognizerRegistry(
             [
@@ -1140,7 +1140,7 @@ async def test_gateway_outcome_wait_is_bounded_by_outcome_timeout(
     no splash-closed event ever arrives. `_wait_for_outcome_gateway`'s own
     `TimeoutError` must surface as `LoginError`, matching `cli.py`'s
     `_OPERATIONAL_ERRORS` contract, not leak out raw (the shape of the bug
-    found live: a short `second_factor_authentication_timeout` plus a
+    found live: a short `mfa_timeout` plus a
     credential mismatch produced an unhandled `TimeoutError` traceback
     instead of a clean login failure)."""
     responder = _tracking_responder([])
@@ -1220,11 +1220,11 @@ async def test_tws_2fa_close_wait_uses_remaining_deadline_not_full_budget(
     `LoginManager.secondFactorAuthenticationDialogClosed` (elapsed measured
     from one fixed login-start anchor, never re-armed per stage): the
     2FA-closed wait inside `_wait_for_outcome_tws`'s loop used to pass the
-    full `second_factor_authentication_timeout` again instead of what's left
+    full `mfa_timeout` again instead of what's left
     of `outcome_timeout`'s own deadline. 2FA opens ~0.3s into a 0.4s
     `outcome_timeout` and never closes -- `run()` must raise `LoginError`
     close to the original ~0.4s deadline, not ~0.4s plus another full
-    `second_factor_authentication_timeout` on top."""
+    `mfa_timeout` on top."""
     responder = _tracking_responder([])
     async with (
         FakeCommandServer(sock_path, responder),
@@ -1255,7 +1255,7 @@ async def test_tws_2fa_close_wait_uses_remaining_deadline_not_full_budget(
             with pytest.raises(LoginError):
                 # Same generous-but-bounded outer window as Gateway's mirror
                 # test above -- would need ~0.4s plus a full
-                # second_factor_authentication_timeout if the bug regressed.
+                # mfa_timeout if the bug regressed.
                 await asyncio.wait_for(task, timeout=0.6)
         finally:
             await dispatcher.stop()

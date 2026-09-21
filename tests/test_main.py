@@ -20,10 +20,10 @@ from ibcontroller.labels import Labels
 pytestmark = pytest.mark.asyncio
 
 _BASE_ENV = {
-    "IBCONTROLLER_USERID": "papuser",
-    "IBCONTROLLER_PASSWORD": "pappass",  # nosec B105
-    "IBCONTROLLER_TRADING_MODE": "paper",
-    "IBCONTROLLER_TWS_VERSION": "10.50",
+    "IBC_USERID": "papuser",
+    "IBC_PASSWORD": "pappass",  # nosec B105
+    "IBC_TRADING_MODE": "paper",
+    "IBC_TWS_VERSION": "10.50",
 }
 
 
@@ -110,10 +110,10 @@ async def test_run_async_scaffolds_bundled_ibcontroller_toml_is_inert(
     placeholder values."""
     config_dir = tmp_path / "config"
     log_dir = tmp_path / "log"
-    monkeypatch.delenv("IBCONTROLLER_TRADING_MODE", raising=False)
-    monkeypatch.delenv("IBCONTROLLER_TWS_VERSION", raising=False)
-    monkeypatch.delenv("IBCONTROLLER_USERID", raising=False)
-    monkeypatch.delenv("IBCONTROLLER_PASSWORD", raising=False)
+    monkeypatch.delenv("IBC_TRADING_MODE", raising=False)
+    monkeypatch.delenv("IBC_TWS_VERSION", raising=False)
+    monkeypatch.delenv("IBC_USERID", raising=False)
+    monkeypatch.delenv("IBC_PASSWORD", raising=False)
 
     with pytest.raises(ConfigError, match="credentials not found"):
         await _main.run_async(config_dir, log_dir)

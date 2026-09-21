@@ -22,10 +22,10 @@ It provides a "**declarative**" engine, so settings and pop-ups can be "declared
 make dist
 uv sync
 
-# 2. Scaffold a starter config directory (platformdirs default, or $IBCONTROLLER_APP_DIR)
+# 2. Scaffold a starter config directory (platformdirs default, or $IBC_APP_DIR)
 uv run ibcontroller init
 
-# 3. Export IBCONTROLLER_USERID / IBCONTROLLER_PASSWORD (see Credentials below) -- the
+# 3. Export IBC_USERID / IBC_PASSWORD (see Credentials below) -- the
 #    only settings actually required. Everything else in the base ibcontroller.toml
 #    is commented out and already safe to run as-is: trading_mode defaults to "paper",
 #    and tws_version is auto-detected from standard tws_path.
@@ -82,7 +82,7 @@ And the `ibcontroller run` parameters:
 
 ╭─ Options ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ --dotenv                   <path>        Optional .env file to load into the environment before reading config (only fills variables not already set).                          │
-│ --app-dir                  <path>        Override IBCONTROLLER_APP_DIR for this invocation -- config/log/run all move under {app_dir}/{config,log,run} instead of the platform  │
+│ --app-dir                  <path>        Override IBC_APP_DIR for this invocation -- config/log/run all move under {app_dir}/{config,log,run} instead of the platform           │
 │                                          default.                                                                                                                               │
 │ --trading-mode             <live|paper>  Override Config.trading_mode ('live'/'paper') for this invocation.                                                                     │
 │ --tws-path                 <path>        Override Config.tws_path (the TWS/Gateway install-path inference) for this invocation.                                                 │
@@ -106,7 +106,7 @@ ibcontroller run --trading-mode=live --dotenv=.env-live
 ibcontroller run --trading-mode=paper --dotenv=.env-paper
 ```
 
-`--app-dir` (also accepted by `init`) overrides `IBCONTROLLER_APP_DIR` for one
+`--app-dir` (also accepted by `init`) overrides `IBC_APP_DIR` for one
 invocation, for pointing each instance's config/log/run dirs somewhere different too.
 
 ## Configuration
@@ -136,16 +136,16 @@ A single pair is used regardless of `trading_mode`.
 
 | Env var | Description |
 | --- | --- |
-| `IBCONTROLLER_USERID` | Account user id |
-| `IBCONTROLLER_PASSWORD` | Account password |
+| `IBC_USERID` | Account user id |
+| `IBC_PASSWORD` | Account password |
 
-Each also accepts a `_FILE`-suffixed variant (`IBCONTROLLER_USERID_FILE`,
-`IBCONTROLLER_PASSWORD_FILE`) that reads the value from a file instead —
+Each also accepts a `_FILE`-suffixed variant (`IBC_USERID_FILE`,
+`IBC_PASSWORD_FILE`) that reads the value from a file instead —
 Docker/Compose secrets, so a value never has to sit in the process environment.
 
 ### File location
 
-When environment variable `IBCONTROLLER_APP_DIR` is not set, then
+When environment variable `IBC_APP_DIR` is not set, then
 `ibcontroller` will use the standard platform directories.
 
 | Location | Directory | Platform |
@@ -157,11 +157,11 @@ When environment variable `IBCONTROLLER_APP_DIR` is not set, then
 | `socket_dir` | `/run/user/<uid>/ibcontroller` | Linux |
 | `socket_dir` | `~/Library/Caches/TemporaryItems/ibcontroller` | macOS |
 
-When `IBCONTROLLER_APP_DIR` is set then:
+When `IBC_APP_DIR` is set then:
 
-- `config_dir`-> `IBCONTROLLER_APP_DIR/config`
-- `log_dir`-> `IBCONTROLLER_APP_DIR/log`
-- `socket_dir` -> `IBCONTROLLER_APP_DIR/run`
+- `config_dir`-> `IBC_APP_DIR/config`
+- `log_dir`-> `IBC_APP_DIR/log`
+- `socket_dir` -> `IBC_APP_DIR/run`
 
 ### Settings
 
@@ -177,38 +177,38 @@ allowing `None`. `Config`'s schema is closed — an unknown key in
 
 | TOML key | Env var or CLI flag | Description | Default |
 | --- | --- | --- | --- |
-| `instance` | `IBCONTROLLER_INSTANCE`, `--instance` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) |
-| `program` | `IBCONTROLLER_PROGRAM`, `--program` | `"gateway"` or `"tws"` | `"gateway"` |
-| `tws_version` | `IBCONTROLLER_TWS_VERSION` | Installed TWS/Gateway version, e.g. `"10.50"` | `None` — auto-detected (see below) |
-| `tws_channel` | `IBCONTROLLER_TWS_CHANNEL`, `--tws-channel` | `"stable"`/`"latest"`; narrows auto-detection to one update channel | `"stable"` |
-| `tws_path` | `IBCONTROLLER_TWS_PATH`, `--tws-path` | Override TWS/gateway install-path inference | `None` |
-| `tws_settings_path` | `IBCONTROLLER_TWS_SETTINGS_PATH`, `--tws-settings-path` | TWS/Gateway settings dir (per instance) | `None` |
-| `settings_file` | `IBCONTROLLER_SETTINGS_FILE` | Extra `ibkr_settings.toml`, merged on top of the built-in settings -- see "Declarative configuration" below | `None` |
-| `trace_enabled` | `IBCONTROLLER_TRACE_ENABLED` | Enable verbose raw wire trace (`cmd-{instance}.jsonl`/`events-{instance}.jsonl`) | `false` |
-| `log_dir` | `IBCONTROLLER_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default |
-| `log_level` | `IBCONTROLLER_LOG_LEVEL` | `debug`/`info`/`warning`/`error` | `info` |
-| `log_sink` | `IBCONTROLLER_LOG_SINK` | `"std"` (console only) or `"file"` (only, under `log_dir`) — exclusive, not both. Covers `ibcontroller-{instance}.log` and `gateway-{instance}.log` only; the Java agent log and the wire trace are always file, unaffected — see "Logging" below | `"std"` |
-| `diagnostic_scope` | `IBCONTROLLER_DIAGNOSTIC_SCOPE` | `"known"`/`"unknown"`/`"all"` — which windows get a structure dump logged (see `docs/Configuration.md`'s "Diagnostics") | `"known"` |
-| `diagnostic_when` | `IBCONTROLLER_DIAGNOSTIC_WHEN` | `"open"`/`"openclose"`/`"never"` — when to log a structure dump | `"never"` |
-| (env only) | `IBCONTROLLER_APP_DIR`, `--app-dir` | Override file locations (config/log/run) for container mode; `--app-dir`/`init`/`run` set the env var for the invocation, same effect |
+| `instance` | `IBC_INSTANCE`, `--instance` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) |
+| `program` | `IBC_PROGRAM`, `--program` | `"gateway"` or `"tws"` | `"gateway"` |
+| `tws_version` | `IBC_TWS_VERSION` | Installed TWS/Gateway version, e.g. `"10.50"` | `None` — auto-detected (see below) |
+| `tws_channel` | `IBC_TWS_CHANNEL`, `--tws-channel` | `"stable"`/`"latest"`; narrows auto-detection to one update channel | `"stable"` |
+| `tws_path` | `IBC_TWS_PATH`, `--tws-path` | Override TWS/gateway install-path inference | `None` |
+| `tws_settings_path` | `IBC_TWS_SETTINGS_PATH`, `--tws-settings-path` | TWS/Gateway settings dir (per instance) | `None` |
+| `settings_file` | `IBC_SETTINGS_FILE` | Extra `ibkr_settings.toml`, merged on top of the built-in settings -- see "Declarative configuration" below | `None` |
+| `trace_enabled` | `IBC_TRACE_ENABLED` | Enable verbose raw wire trace (`cmd-{instance}.jsonl`/`events-{instance}.jsonl`) | `false` |
+| `log_dir` | `IBC_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default |
+| `log_level` | `IBC_LOG_LEVEL` | `debug`/`info`/`warning`/`error` | `info` |
+| `log_sink` | `IBC_LOG_SINK` | `"std"` (console only) or `"file"` (only, under `log_dir`) — exclusive, not both. Covers `ibcontroller-{instance}.log` and `gateway-{instance}.log` only; the Java agent log and the wire trace are always file, unaffected — see "Logging" below | `"std"` |
+| `diagnostic_scope` | `IBC_DIAGNOSTIC_SCOPE` | `"known"`/`"unknown"`/`"all"` — which windows get a structure dump logged (see `docs/Configuration.md`'s "Diagnostics") | `"known"` |
+| `diagnostic_when` | `IBC_DIAGNOSTIC_WHEN` | `"open"`/`"openclose"`/`"never"` — when to log a structure dump | `"never"` |
+| (env only) | `IBC_APP_DIR`, `--app-dir` | Override file locations (config/log/run) for container mode; `--app-dir`/`init`/`run` set the env var for the invocation, same effect |
 
 TWS/ibgateway settings
 
 | TOML key | Env var or CLI flag | Description | Default |
 | --- | --- | --- | --- |
-| `trading_mode` | `IBCONTROLLER_TRADING_MODE`, `--trading-mode` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
-| `read_only_login` | `IBCONTROLLER_READ_ONLY_LOGIN` | TWS-only; **not yet wired to any behavior** (loaded, unused — see TODO.md) | `false` |
-| `read_only_api` | `IBCONTROLLER_READ_ONLY_API` | `true`/`false` sets it; omit to leave unchanged. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` |
-| `accept_incoming_connections` | `IBCONTROLLER_ACCEPT_INCOMING_CONNECTIONS` | `manual`/`accept`/`reject` | `"manual"` |
-| `existing_session_action` | `IBCONTROLLER_EXISTING_SESSION_ACTION` | `manual`/`primary`/`primaryoverride`/`secondary` | `"manual"` |
-| `login_dialog_display_timeout` | `IBCONTROLLER_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog | `60.0` |
-| `second_factor_authentication_timeout` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_TIMEOUT` | IB's 2FA timeout in seconds | `180.0` |
-| `relogin_after_2fa_timeout` | `IBCONTROLLER_RELOGIN_AFTER_2FA_TIMEOUT` | Restart login if 2FA times out | `false` |
-| `second_factor_authentication_exit_interval` | `IBCONTROLLER_SECOND_FACTOR_AUTHENTICATION_EXIT_INTERVAL` | Bounds the post-2FA wait when relogin enabled | `60.0` |
-| `auto_restart_time` | `IBCONTROLLER_AUTO_RESTART_TIME` | `"hh:mm AM/PM"` daily auto-restart time. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` |
-| `auto_logoff_time` | `IBCONTROLLER_AUTO_LOGOFF_TIME` | `"hh:mm AM/PM"` daily auto-logoff time; same "Lock and Exit" radio-button pair as `auto_restart_time` -- if both are set, `auto_restart_time` wins | `None` |
-| `cold_restart_time` | `IBCONTROLLER_COLD_RESTART_TIME` | TWS and Gateway. `"HH:MM"` 24-hour local time; every Sunday, ibcontroller closes the instance tidily and relaunches with a full fresh login, forcing IBKR's weekly Sunday 01:00 US/Eastern token-invalidation reauth -- not a GUI setting, see "Scheduled shutdown" below | `None` |
-| `closedown_at` | `IBCONTROLLER_CLOSEDOWN_AT` | TWS and Gateway. `"HH:MM"` (daily) or `"<Weekday> HH:MM"` (weekly); closes the instance tidily at that time, no relaunch -- not a GUI setting, see "Scheduled shutdown" below | `None` |
+| `trading_mode` | `IBC_TRADING_MODE`, `--trading-mode` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
+| `read_only_login` | `IBC_READ_ONLY_LOGIN` | TWS-only; **not yet wired to any behavior** (loaded, unused — see TODO.md) | `false` |
+| `read_only_api` | `IBC_READ_ONLY_API` | `true`/`false` sets it; omit to leave unchanged. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` |
+| `accept_incoming_connections` | `IBC_ACCEPT_INCOMING_CONNECTIONS` | `manual`/`accept`/`reject` | `"manual"` |
+| `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | `manual`/`primary`/`primaryoverride`/`secondary` | `"manual"` |
+| `login_dialog_display_timeout` | `IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog | `60.0` |
+| `mfa_timeout` | `IBC_MFA_TIMEOUT` | IB's 2FA timeout in seconds | `180.0` |
+| `relogin_after_mfa_timeout` | `IBC_RELOGIN_AFTER_MFA_TIMEOUT` | Restart login if 2FA times out | `false` |
+| `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | Bounds the post-2FA wait when relogin enabled | `60.0` |
+| `auto_restart_time` | `IBC_AUTO_RESTART_TIME` | `"hh:mm AM/PM"` daily auto-restart time. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` |
+| `auto_logoff_time` | `IBC_AUTO_LOGOFF_TIME` | `"hh:mm AM/PM"` daily auto-logoff time; same "Lock and Exit" radio-button pair as `auto_restart_time` -- if both are set, `auto_restart_time` wins | `None` |
+| `cold_restart_time` | `IBC_COLD_RESTART_TIME` | TWS and Gateway. `"HH:MM"` 24-hour local time; every Sunday, ibcontroller closes the instance tidily and relaunches with a full fresh login, forcing IBKR's weekly Sunday 01:00 US/Eastern token-invalidation reauth -- not a GUI setting, see "Scheduled shutdown" below | `None` |
+| `closedown_at` | `IBC_CLOSEDOWN_AT` | TWS and Gateway. `"HH:MM"` (daily) or `"<Weekday> HH:MM"` (weekly); closes the instance tidily at that time, no relaunch -- not a GUI setting, see "Scheduled shutdown" below | `None` |
 
 #### `tws_version` auto-detection
 
@@ -301,7 +301,7 @@ are applied once, right after login, from two layers combined into one list:
   applies it last, matching IBC's own stated precedence).
 - **Your own `ibkr_settings.toml`** — anything else: any other Global Configuration
   checkbox or text field, activated by pointing `[settings] file = "..."` (or
-  `IBCONTROLLER_SETTINGS_FILE`) at a real file (rename `ibkr_settings.toml.example` to
+  `IBC_SETTINGS_FILE`) at a real file (rename `ibkr_settings.toml.example` to
   start from the bundled worked examples, e.g. the `api_precautions_*` toggles).
 
 An entry looks like this:
@@ -351,13 +351,13 @@ value_from_config = "read_only_api"
 ## Logging
 
 ibcontroller writes all of its log/trace files into one shared log directory
-(resolved by `app_dirs.py`, or overridden with `IBCONTROLLER_APP_DIR` for
+(resolved by `app_dirs.py`, or overridden with `IBC_APP_DIR` for
 container mode). Every file is named with the `{instance}` name, so two instances
 (e.g. `paper` and `live`) can run in parallel in the same directory without ever
 interleaving — matched by `tail -f` on the right filename, no subdirectory per
 instance.
 
-**`IBCONTROLLER_LOG_SINK`** (`"std"`/`"file"`, default `"std"`) controls where
+**`IBC_LOG_SINK`** (`"std"`/`"file"`, default `"std"`) controls where
 ibcontroller's own log and TWS/Gateway's own stdout/stderr go — console
 (`"std"`) or file (`"file"`), exclusive, not both. This is the setting that
 matters for Docker: with the default `"std"`, both streams show up in
@@ -379,10 +379,10 @@ scrollback.
 
 ### Log levels
 
-`IBCONTROLLER_LOG_LEVEL` (`debug`/`info`/`warning`/`error`, default `info`) controls
+`IBC_LOG_LEVEL` (`debug`/`info`/`warning`/`error`, default `info`) controls
 both the Python app log and (via `-Dibcontroller.log.level`) the Java agent log:
 
-| `IBCONTROLLER_LOG_LEVEL` | Python `logging` | Java JUL |
+| `IBC_LOG_LEVEL` | Python `logging` | Java JUL |
 | --- | --- | --- |
 | `debug` | `DEBUG` | `FINE` |
 | `info` | `INFO` | `INFO` |

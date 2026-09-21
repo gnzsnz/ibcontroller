@@ -29,7 +29,7 @@ return_when=FIRST_COMPLETED)`), all converging on one exit path:
   alive -- a distinct failure mode from process-exit, also raced across every
   phase.
 - **LOGIN_FAILED**: `watch_for_unprompted_windows` raises
-  (`recognisers.LoginFailedError`, or `login.LoginError` from the 2FA-timeout
+  (`recognisers.LoginFailedError`, or `login.LoginError` from the MFA-timeout
   watchdog).
 - **COLD_RESTART**: `Config.cold_restart_time` reached (TWS and Gateway
   alike, see `schedule.py`) -- a self-scheduled tidy close-down followed by a
@@ -162,7 +162,7 @@ def _build_registry(
             LoginFailedRecognizer(labels.login_failed),
             TooManyFailedLoginAttemptsRecognizer(
                 labels.too_many_failed_login_attempts,
-                config.relogin_after_2fa_timeout,
+                config.relogin_after_mfa_timeout,
                 manager.schedule_retry,
             ),
         ]
@@ -213,7 +213,7 @@ async def _apply_declarative_settings(
         launched.dispatcher,
         labels.settings,
         program=config.program,
-        timeout=config.second_factor_authentication_timeout,
+        timeout=config.mfa_timeout,
         main_window_id=main_window_id,
     )
     try:

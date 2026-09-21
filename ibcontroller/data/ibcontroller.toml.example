@@ -9,8 +9,8 @@
 # ibcontroller.config.load_config() refuses to start if it finds one here. They use a
 # single pair regardless of trading_mode below (the mode says which account to
 # authenticate as; it does not select different credential variables):
-#   IBCONTROLLER_USERID     / IBCONTROLLER_PASSWORD
-# Each also accepts a _FILE-suffixed variant (e.g. IBCONTROLLER_PASSWORD_FILE=/run/secrets/pass)
+#   IBC_USERID     / IBC_PASSWORD
+# Each also accepts a _FILE-suffixed variant (e.g. IBC_PASSWORD_FILE=/run/secrets/pass)
 # that reads the value from a file instead -- Docker/Compose secrets, not the env var itself.
 #
 # A .env file also works, via `ibcontroller run --dotenv <path>` -- it only fills in
@@ -19,7 +19,7 @@
 #
 # This file is copied here by `ibcontroller init` (or automatically by `ibcontroller run`
 # the first time it's missing) with every key commented out below -- as shipped, it
-# changes nothing versus built-in defaults. Only IBCONTROLLER_USERID/IBCONTROLLER_PASSWORD
+# changes nothing versus built-in defaults. Only IBC_USERID/IBC_PASSWORD
 # are actually required to run -- everything else here has a safe default or is
 # auto-detected from the real install.
 #
@@ -31,27 +31,27 @@
 # to settings.py's own allow-list if it's meant to drive a declarative setting via
 # "value_from_config" -- see ibkr_settings.toml.example.
 
-# Socket/instance name (env: IBCONTROLLER_INSTANCE). Optional: when unset,
+# Socket/instance name (env: IBC_INSTANCE). Optional: when unset,
 # defaults to "{program}-{trading_mode}" (e.g. "gateway-paper").
 # instance = "dev"
 
-# "gateway" or "tws" (env: IBCONTROLLER_PROGRAM)
+# "gateway" or "tws" (env: IBC_PROGRAM)
 # Default "gateway"
 # program = "gateway"
 
-# Installed TWS/Gateway version, e.g. "10.50" (env: IBCONTROLLER_TWS_VERSION). Omit this
+# Installed TWS/Gateway version, e.g. "10.50" (env: IBC_TWS_VERSION). Omit this
 # key (the default) to auto-detect it from tws_path -- if more than one version is
 # installed, the greatest is picked (optionally narrowed by tws_channel below); set this
 # explicitly to pin one instead.
 # tws_version = "10.50"
 
 # Which update channel to prefer when auto-detecting tws_version -- "stable" or "latest"
-# (env: IBCONTROLLER_TWS_CHANNEL), as labeled by the install itself
+# (env: IBC_TWS_CHANNEL), as labeled by the install itself
 # (.install4j/i4jparams.conf). Ignored when tws_version is set explicitly.
 # Default "stable"
 # tws_channel = "stable"
 
-# Override the install path launcher.py would otherwise infer (env: IBCONTROLLER_TWS_PATH)
+# Override the install path launcher.py would otherwise infer (env: IBC_TWS_PATH)
 # tws_path = "~/Jts"
 # tws_path = ""
 
@@ -61,19 +61,19 @@
 # tws_settings_path =
 
 # TWS/Gateway is "live" or "paper" -- defaults to "paper" (the safe, non-monetary mode)
-# when unset (env: IBCONTROLLER_TRADING_MODE)
+# when unset (env: IBC_TRADING_MODE)
 # Default "paper"
 # trading_mode = "paper"
 
 # Which ibkr_settings.toml to apply at startup (settings.py's own
 # apply_settings_from_file) -- see ibkr_settings.toml.example. Omit this key (the
 # default) to apply nothing declaratively.
-# (env: IBCONTROLLER_SETTINGS_FILE)
+# (env: IBC_SETTINGS_FILE)
 # settings_file = "~/.config/ibkr_settings.toml"
 
-# Where ibcontroller's own log and trace files live (env: IBCONTROLLER_LOG_DIR).
+# Where ibcontroller's own log and trace files live (env: IBC_LOG_DIR).
 # Optional: when unset, defaults to the platformdirs user-log dir (or
-# $IBCONTROLLER_APP_DIR/log in docker mode). Every instance's files (log, trace,
+# $IBC_APP_DIR/log in docker mode). Every instance's files (log, trace,
 # gateway stdout) land flat in this one directory.
 # log_dir = "~/.local/share/ibcontroller"
 # log_dir = ""
@@ -81,7 +81,7 @@
 # Where ibcontroller's own log and Gateway/TWS's own console output go: "std"
 # (console only) or "file" (only, under log_dir) -- exclusive, not both. Doesn't
 # affect the wire trace above, which stays file-only regardless of this setting.
-# (env: IBCONTROLLER_LOG_SINK)
+# (env: IBC_LOG_SINK)
 # Default "std"
 # log_sink = "std"
 
@@ -90,11 +90,11 @@
 # matching window event, to ibcontroller-{instance}.log at INFO. Built-in
 # replacement for poking the agent socket directly with socat/nc.
 # diagnostic_scope: which windows qualify -- "known" (recognised by a built-in or
-# declarative recogniser), "unknown", or "all" (env: IBCONTROLLER_DIAGNOSTIC_SCOPE)
+# declarative recogniser), "unknown", or "all" (env: IBC_DIAGNOSTIC_SCOPE)
 # Default "known"
 # diagnostic_scope = "known"
 # diagnostic_when: which events trigger a dump -- "open", "openclose", or "never"
-# (off) (env: IBCONTROLLER_DIAGNOSTIC_WHEN)
+# (off) (env: IBC_DIAGNOSTIC_WHEN)
 # Default "never"
 # diagnostic_when = "open"
 
@@ -104,13 +104,13 @@
 # read_only_login = false
 
 # IBC: ReadOnlyApi -- true/false sets it
-# (env: IBCONTROLLER_READ_ONLY_API)
+# (env: IBC_READ_ONLY_API)
 # Default "false"
 # read_only_api = false
 
 # IBC: ExistingSessionDetectedAction -- how ibcontroller itself reacts to Gateway's
 # "existing session detected" dialog: manual/primary/primaryoverride/secondary
-# (env: IBCONTROLLER_EXISTING_SESSION_ACTION)
+# (env: IBC_EXISTING_SESSION_ACTION)
 # Default "manual"
 # existing_session_action = "manual"
 
@@ -120,25 +120,25 @@
 # dialogs. If set to 'reject', ibcontroller automatically rejects incoming API
 # connection dialogs. If set to 'manual', the user must decide whether to accept
 # or reject incoming API connection dialogs. The default is 'manual'.
-# (env: IBCONTROLLER_ACCEPT_INCOMING_CONNECTIONS)
+# (env: IBC_ACCEPT_INCOMING_CONNECTIONS)
 # accept_incoming_connections = "manual"
 
 # --- Login/2FA timeout and retry settings -- ibcontroller's own policy, not written to
-# --- Gateway/TWS itself (though second_factor_authentication_timeout mirrors IBKR's
+# --- Gateway/TWS itself (though mfa_timeout mirrors IBKR's
 # --- real external 2FA window).
 # IBC: LoginDialogDisplayTimeout, default 60
 # login_dialog_display_timeout = 60.0
 # IBC: SecondFactorAuthenticationTimeout, default 180
-# second_factor_authentication_timeout = 180.0
+# mfa_timeout = 180.0
 # IBC: ReloginAfterSecondFactorAuthenticationTimeout, default false
-# relogin_after_2fa_timeout = false
+# relogin_after_mfa_timeout = false
 # IBC: SecondFactorAuthenticationExitInterval, default 60
-# second_factor_authentication_exit_interval = 60.0
+# mfa_exit_interval = 60.0
 
 # IBC: AutoRestartTime -- same name, same "hh:mm AM/PM" format (e.g. "08:00 AM"), a
 # single space between the two parts. Drives settings.py's "auto_restart_time" action
 # (see ibkr_settings.toml.example) -- omit this key (the default) to leave Gateway's
-# existing Auto Restart setting unchanged (env: IBCONTROLLER_AUTO_RESTART_TIME)
+# existing Auto Restart setting unchanged (env: IBC_AUTO_RESTART_TIME)
 # Default None - not set
 # auto_restart_time = "08:00 AM"
 
@@ -147,7 +147,7 @@
 # If you set BOTH keys, auto_restart_time wins (builtin_settings.toml applies it
 # last, matching IBC's own precedence) -- set only one of the two in practice.
 # Omit this key (the default) to leave the existing setting unchanged
-# (env: IBCONTROLLER_AUTO_LOGOFF_TIME)
+# (env: IBC_AUTO_LOGOFF_TIME)
 # Default None - not set
 # auto_logoff_time = "08:00 AM"
 
@@ -159,20 +159,20 @@
 # ibcontroller closes the instance tidily and relaunches with a full fresh login
 # (via ibcontroller's own launch_instance, not IBC's native-launcher File > Restart),
 # forcing the weekly reauth IBKR requires around Sunday 01:00 US/Eastern token
-# invalidation (env: IBCONTROLLER_COLD_RESTART_TIME)
+# invalidation (env: IBC_COLD_RESTART_TIME)
 # Default None - not set
 # cold_restart_time = "07:05"
 
 # IBC: ClosedownAt -- "HH:MM" (every day) or "<Weekday> HH:MM" (one day a week,
 # Weekday a full English name, Monday..Sunday). At this time, ibcontroller closes
 # the instance tidily with no relaunch -- you're responsible for restarting it
-# yourself (env: IBCONTROLLER_CLOSEDOWN_AT)
+# yourself (env: IBC_CLOSEDOWN_AT)
 # Default None - not set
 # closedown_at = "22:00"
 # closedown_at = "Friday 22:00"
 
 # JVM heap for TWS/Gateway at launch, e.g. "1024m"/"4g". Overrides the -Xmx
 # line in the installed .vmoptions file (ibgateway.vmoptions/tws.vmoptions);
-# bare size, no -Xmx prefix (env: IBCONTROLLER_JAVA_HEAP_SIZE)
+# bare size, no -Xmx prefix (env: IBC_JAVA_HEAP_SIZE)
 # Default None - leave the installed file's value untouched
 # java_heap_size = "2g"
