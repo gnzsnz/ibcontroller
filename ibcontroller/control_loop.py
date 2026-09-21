@@ -620,9 +620,6 @@ async def _run_one_cycle(  # noqa: PLR0915
             await process_done
         _log_transition(state, StartupState.SHUTTING_DOWN)
         state = StartupState.SHUTTING_DOWN
-        watcher.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watcher
         diagnostics_watcher.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await diagnostics_watcher
@@ -632,5 +629,8 @@ async def _run_one_cycle(  # noqa: PLR0915
             logged_in=manager.is_logged_in(),
             labels=labels.shutdown,
         )
+        watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watcher
     logger.info("IBController > control loop cycle stopped: %s", cause.name)
     return cause, launched.settings_dir

@@ -782,6 +782,14 @@ async def launch_instance(
         *plan.command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
+        # New session/process group: a terminal Ctrl-C's SIGINT is delivered to the
+        # whole foreground process group. Without this, the JVM child gets it
+        # directly, races our own signal handler, and exits via its own
+        # Shutdown/Terminator hook (returncode 128+SIGINT) instead of via
+        # clean_shutdown's File/Close -- skipping Gateway/TWS's own UI-close path
+        # (and its "Shutdown progress" dialog) entirely. This makes Ctrl-C reach
+        # the child only through clean_shutdown, same as a real File/Close.
     )
     # Must stay drained for the process's whole life: Gateway logs continuously
     # (log4j, stderr=STDOUT too), and once the OS pipe buffer fills, any Java
@@ -885,7 +893,11 @@ async def clean_shutdown(
 
     try:
         await asyncio.wait_for(launched.process.wait(), timeout=timeout)
-        logger.info("IBController > shut down cleanly via %s", target)
+        logger.info(
+            "IBController > shut down cleanly via %s (returncode=%s)",
+            target,
+            launched.process.returncode,
+        )
     except TimeoutError:
         logger.warning(
             "IBController > clean shutdown via %s did not exit within %ss -- "
