@@ -74,11 +74,11 @@ And the `ibcontroller run` parameters:
  Run one ibcontroller instance until it stops (Ctrl-C for a graceful shutdown, or Gateway/TWS exiting or restarting on its own). Scaffolds the config directory first if it's
  missing, same as `ibcontroller init`.
 
- `--trading-mode`/`--tws-path`/`--tws-channel`/`--tws-settings-path`/`--instance`
- let one invocation pick these `Config` fields directly, overriding TOML/env for
- this run only -- e.g. `ibcontroller run --trading-mode=live --dotenv=.env-live`
- and `ibcontroller run --trading-mode=paper --dotenv=.env-paper` run side by side
- from one shared config.
+ `--trading-mode`/`--tws-path`/`--tws-channel`/`--program`/`--tws-settings-path`/
+ `--instance` let one invocation pick these `Config` fields directly, overriding
+ TOML/env for this run only -- e.g. `ibcontroller run --trading-mode=live
+ --dotenv=.env-live` and `ibcontroller run --trading-mode=paper
+ --dotenv=.env-paper` run side by side from one shared config.
 
 ╭─ Options ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ --dotenv                   <path>        Optional .env file to load into the environment before reading config (only fills variables not already set).                          │
@@ -87,6 +87,7 @@ And the `ibcontroller run` parameters:
 │ --trading-mode             <live|paper>  Override Config.trading_mode ('live'/'paper') for this invocation.                                                                     │
 │ --tws-path                 <path>        Override Config.tws_path (the TWS/Gateway install-path inference) for this invocation.                                                 │
 │ --tws-channel              <str>         Override Config.tws_channel ('stable'/'latest', filters install auto-detection) for this invocation.                                   │
+│ --program                  <str>         Override Config.program ('gateway'/'tws') for this invocation.                                                                         │
 │ --tws-settings-path        <path>        Override Config.tws_settings_path (where TWS/Gateway stores its own settings) for this invocation.                                     │
 │ --instance                 <str>         Override Config.instance (per-instance log/trace/socket names) for this invocation. Defaults to '{program}-{trading_mode}', so         │
 │                                          --trading-mode alone is usually enough to keep paper/live instances apart.                                                             │
@@ -177,7 +178,7 @@ allowing `None`. `Config`'s schema is closed — an unknown key in
 | TOML key | Env var | CLI flag | Description | Default |
 | --- | --- | --- | --- | --- |
 | `instance` | `IBCONTROLLER_INSTANCE` | `--instance` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) |
-| `program` | `IBCONTROLLER_PROGRAM` | — | `"gateway"` or `"tws"` | `"gateway"` |
+| `program` | `IBCONTROLLER_PROGRAM` | `--program` | `"gateway"` or `"tws"` | `"gateway"` |
 | `tws_version` | `IBCONTROLLER_TWS_VERSION` | — | Installed TWS/Gateway version, e.g. `"10.50"` | `None` — auto-detected (see below) |
 | `tws_channel` | `IBCONTROLLER_TWS_CHANNEL` | `--tws-channel` | `"stable"`/`"latest"`; narrows auto-detection to one update channel | `"stable"` |
 | `tws_path` | `IBCONTROLLER_TWS_PATH` | `--tws-path` | Override TWS/gateway install-path inference | `None` |

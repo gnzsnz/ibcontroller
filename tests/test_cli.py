@@ -81,8 +81,8 @@ def test_run_reports_shutdown_cause_on_success(tmp_path, monkeypatch):
 
 
 def test_run_field_flags_become_cli_overrides(tmp_path, monkeypatch):
-    """--trading-mode/--tws-path/--tws-channel/--tws-settings-path/--instance reach
-    run_async as cli_overrides, unset ones dropped."""
+    """--trading-mode/--tws-path/--tws-channel/--program/--tws-settings-path/
+    --instance reach run_async as cli_overrides, unset ones dropped."""
     app_dir = tmp_path / "app"
     monkeypatch.setenv("IBCONTROLLER_APP_DIR", str(app_dir))
     captured = {}
@@ -102,6 +102,7 @@ def test_run_field_flags_become_cli_overrides(tmp_path, monkeypatch):
             "--trading-mode=live",
             "--tws-path=/opt/tws",
             "--tws-channel=latest",
+            "--program=tws",
             "--tws-settings-path=/opt/tws-settings",
             "--instance=custom",
         ],
@@ -112,6 +113,7 @@ def test_run_field_flags_become_cli_overrides(tmp_path, monkeypatch):
         "trading_mode": "live",
         "tws_path": "/opt/tws",
         "tws_channel": "latest",
+        "program": "tws",
         "tws_settings_path": "/opt/tws-settings",
         "instance": "custom",
     }
