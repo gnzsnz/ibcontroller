@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 
+import attrs
 import pytest
 
 from ibcontroller.config import ConfigError, TradingMode, load_config
@@ -158,6 +159,23 @@ def test_empty_cli_overrides_do_not_affect_config(monkeypatch, tmp_path):
         config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path, cli_overrides={}
     )
     assert config.trading_mode is TradingMode.PAPER
+
+
+def test_load_config_prints_one_line_per_key_credentials_masked(
+    monkeypatch, tmp_path, capsys
+):
+    """gitea #45: once loaded, Config is printed to stdout, one `key=value` line per
+    field, with userid/password masked (Secret.__str__ already returns '*******')."""
+    monkeypatch.setenv("IBC_USERID", "secret-user")
+    monkeypatch.setenv("IBC_PASSWORD", "secret-pass")
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    out = capsys.readouterr().out
+    for field in attrs.fields(type(config)):
+        assert f"{field.name}=" in out
+    assert "secret-user" not in out
+    assert "secret-pass" not in out
+    assert "userid=*******" in out
+    assert "password=*******" in out
 
 
 def test_legacy_section_headers_raise_clearly(monkeypatch, tmp_path):

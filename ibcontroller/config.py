@@ -21,6 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import attrs
 import typed_settings as ts
 from dotenv import load_dotenv
 from typed_settings.converters import Converter
@@ -304,6 +305,16 @@ class Config:
     diagnostic_when: DiagnosticWhen = DiagnosticWhen.NEVER
 
 
+def _format_config(config: Config) -> list[str]:
+    """One `key=value` line per `Config` field, sorted by name -- credentials already
+    masked (`Secret.__str__` returns `'*******'` unconditionally, even for `None`), for
+    startup/diagnostic display (gitea #45)."""
+    return [
+        f"{f.name}={getattr(config, f.name)!s}"
+        for f in sorted(attrs.fields(type(config)), key=lambda f: f.name)
+    ]
+
+
 def load_config(
     config_dir: str | Path,
     log_dir: str | Path | None = None,
@@ -391,5 +402,9 @@ def load_config(
             "credentials not found -- set IBC_USERID and "
             "IBC_PASSWORD in the environment"
         )
+
+    sys.stdout.write("IBController > Config: \n")
+    for line in _format_config(_config):
+        sys.stdout.write(f"IBController > config {line}\n")
 
     return _config
