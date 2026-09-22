@@ -198,7 +198,7 @@ def run(  # noqa: PLR0913, PLR0917 -- one typer.Option per Config field, not
 def version() -> None:
     """Print the installed ibcontroller version."""
     try:
-        typer.echo(_pkg_version("ibcontroller"))
+        typer.echo(_pkg_version("py-ib-controller"))
     except PackageNotFoundError:
         typer.echo("unknown (not installed)")
 
