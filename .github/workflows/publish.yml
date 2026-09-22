@@ -4,51 +4,18 @@ on:
   push:
     tags: ["v*"]
 
+env:
+  PYTHON_VERSION: "3.12"
+  JAVA_VERSION: "17"
+  JAVA_DISTRIBUTION: zulu
+
 jobs:
   check:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13", "3.14"]
-    steps:
-      - uses: actions/checkout@v7
+    uses: ./.github/workflows/ci.yml
 
-      - name: Install uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Restore environment
-        run: uv sync --all-groups
-
-      - name: Set up JDK
-        uses: actions/setup-java@v6
-        with:
-          distribution: zulu
-          java-version: "17"
-
-      - name: Build Java agent jar
-        run: make build
-
-      - name: Pre-commit checks
-        run: uv run pre-commit run --all-files
-
-      - name: Test
-        run: uv run pytest
-
-      - name: Build
-        run: uv build
-
-      - name: Verify jar is packaged in wheel
-        run: python -m zipfile -l dist/*.whl | grep -q ibcontroller-agent.jar
-
-  publish:
+  build:
     needs: check
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      contents: read
-      id-token: write # trusted publishing to PyPI -- no API token in secrets
     steps:
       - name: Checkout full history
         uses: actions/checkout@v7
@@ -61,7 +28,7 @@ jobs:
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v10.1.0
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Restore environment
         run: uv sync --all-groups
@@ -69,11 +36,67 @@ jobs:
       - name: Set up JDK
         uses: actions/setup-java@v6
         with:
-          distribution: zulu
-          java-version: "17"
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
 
       - name: Build jar and Python distribution
         run: make dist
 
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish-to-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write  # trusted publishing to PyPI -- no API token in secrets
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Sign distributions with Sigstore, upload to GitHub Release
+    needs: publish-to-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # mandatory for making GitHub Releases
+      id-token: write  # mandatory for sigstore
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Sign the dists with Sigstore
+        uses: sigstore/gh-action-sigstore-python@v3.5.0
+        with:
+          inputs: >-
+            ./dist/*.tar.gz ./dist/*.whl
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create '${{ github.ref_name }}'
+          --repo '${{ github.repository }}' --notes ""
+
+      - name: Upload artifact signatures to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        # dist/ contains the built packages plus the sigstore-produced
+        # signatures and certificates.
+        run: >-
+          gh release upload '${{ github.ref_name }}' dist/**
+          --repo '${{ github.repository }}'
