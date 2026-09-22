@@ -45,6 +45,7 @@ jobs:
   publish:
     needs: check
     runs-on: ubuntu-latest
+    environment: pypi
     permissions:
       contents: read
       id-token: write # trusted publishing to PyPI -- no API token in secrets
