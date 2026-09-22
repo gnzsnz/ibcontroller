@@ -9,7 +9,7 @@ packages = ["ibcontroller"]
 ibcontroller = ["data/*.json", "data/*.toml", "data/*.example", "*.jar"]
 
 [project]
-name = "ibcontroller"
+name = "py-ib-controller"
 dynamic = ["version"]
 description = "Login/launch controller for TWS and IBKR Gateway, via an in-process Java agent"
 readme = "README.md"
