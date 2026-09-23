@@ -480,9 +480,9 @@ def _read_linux_vmoptions(install4j_dir: Path) -> list[str]:
 
     Unlike the macOS version, `-D` tokens are kept here rather than filtered:
     on Linux this same variable is also the only place some installs carry
-    real `-D` fixes (e.g. Gateway's `-Djdk.xml.elementAttributeLimit`) and a
-    `-DjxBrowserKey`. A harmless duplicate of `_read_jxbrowser_key`'s own
-    value when both fire -- the JVM just takes the last one."""
+    real `-D` fixes (e.g. Gateway's `-Djdk.xml.elementAttributeLimit`) and
+    `-DjxBrowserKey` -- `build_launch_plan` relies on that and skips its own
+    explicit add on Linux, so it only ever appears once."""
     raw = _read_i4j_variable(install4j_dir, "javaOptions")
     if not raw:
         return []
@@ -624,11 +624,14 @@ def build_launch_plan(
     channel = _read_i4j_variable(install4j_dir, "channel") or config.tws_channel
     vm_options.append(f"-Dchannel={channel}")
 
-    jxbrowser_key = _read_jxbrowser_key(install4j_dir)
-    if jxbrowser_key:
-        vm_options.append(f"-DjxBrowserKey={jxbrowser_key}")
-
     if os_name == "macos":
+        # _read_macos_vmoptions strips -D tokens out of Info.plist's VMOptionArray, so
+        # jxBrowserKey needs adding explicitly here; on Linux, _read_linux_vmoptions
+        # below already carries it through the javaOptions blob -- adding it again
+        # there would just be a duplicate -D flag.
+        jxbrowser_key = _read_jxbrowser_key(install4j_dir)
+        if jxbrowser_key:
+            vm_options.append(f"-DjxBrowserKey={jxbrowser_key}")
         app_bundle = _prevent_native_restart(program_path)
         vm_options.extend(_read_macos_vmoptions(app_bundle))
     else:

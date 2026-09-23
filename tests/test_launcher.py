@@ -962,6 +962,30 @@ def test_build_launch_plan_linux_reads_add_opens_from_i4jparams(tmp_path):
     assert "--add-opens=java.desktop/javax.swing=ALL-UNNAMED" in plan.command
 
 
+def test_build_launch_plan_linux_jxbrowser_key_appears_once(tmp_path):
+    """gitea #55: `i4jparams.conf`'s `javaOptions` blob already carries
+    `-DjxBrowserKey` through on Linux (unlike macOS's `Info.plist`, which
+    filters `-D` tokens out) -- `build_launch_plan` must not add a second,
+    explicit copy on top of it."""
+    base = _make_synthetic_install(tmp_path, os_name="linux", program="tws")
+    program_path = base / "10.50"
+    (program_path / ".install4j" / "i4jparams.conf").write_text(
+        '<variable name="javaOptions" value="-DjxBrowserKey=ABC123" />\n'
+    )
+    settings_dir = tmp_path / "settings"
+    config = _config(
+        program="tws",
+        tws_path=str(base),
+        tws_settings_path=str(settings_dir),
+        instance="live",
+    )
+    plan = build_launch_plan(
+        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=tmp_path / "run"
+    )
+
+    assert plan.command.count("-DjxBrowserKey=ABC123") == 1
+
+
 def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(tmp_path, caplog):
     """No TWS install, same-version Gateway install present (gitea #25): the
     plan uses the Gateway install's path, `.install4j`, bundled JRE and
