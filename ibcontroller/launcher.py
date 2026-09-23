@@ -16,7 +16,6 @@ import asyncio
 import functools
 import logging
 import platform
-import plistlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -311,11 +310,10 @@ def _version_sort_key(version: str) -> tuple[int, ...]:
 
 def _read_i4j_variable(install4j_dir: Path, name: str) -> str | None:
     """A plain install4j `<variable name="{name}" value="..." />` entry --
-    distinct from `_read_jxbrowser_key`'s own regex, which pulls a `-D` flag
-    out of the much larger `javaOptions` variable's own value blob (two
-    different shapes in the same `i4jparams.conf` file). Used for `channel`,
-    which each installed version carries its own real value for, not a fixed
-    label."""
+    distinct from `_read_i4j_vmoptions`'s own handling of the much larger
+    `javaOptions` variable's own value blob (two different shapes in the same
+    `i4jparams.conf` file). Used for `channel`, which each installed version
+    carries its own real value for, not a fixed label."""
     conf = install4j_dir / "i4jparams.conf"
     if not conf.is_file():
         return None
@@ -441,48 +439,17 @@ def _read_vmoptions_file(path: Path) -> list[str]:
     return options
 
 
-def _read_jxbrowser_key(install4j_dir: Path) -> str | None:
-    """Passkey (WebAuthn) 2FA renders in an embedded browser (JxBrowser),
-    which needs `-DjxBrowserKey=<license key>` to initialise at all. Read
-    dynamically since the key is version-specific."""
-    conf = install4j_dir / "i4jparams.conf"
-    if not conf.is_file():
-        return None
-    match = re.search(r"DjxBrowserKey=([^\"\s]+)", conf.read_text())
-    return match.group(1) if match else None
-
-
-def _read_macos_vmoptions(app_bundle: Path) -> list[str]:
-    """`--add-opens`/`--add-exports` (JPMS strong encapsulation) live in the
-    `.app` bundle's `Info.plist` (install4j's `JavaVM`/`VMOptionArray`), not
-    in `ibgateway.vmoptions`. Read live from the installed app, not
-    hardcoded, since it can change per version.
-
-    Takes the `.app` bundle's own path directly (not `program_path`): the
-    bundle may already have been renamed by `_prevent_native_restart`, so
-    re-deriving `f"{program_path.name}.app"` here would silently miss it on
-    every relaunch after the first."""
-    app_plist = app_bundle / "Contents" / "Info.plist"
-    if not app_plist.is_file():
-        return []
-    with app_plist.open("rb") as f:
-        data = plistlib.load(f)
-    raw_options = data.get("JavaVM", {}).get("VMOptionArray", [])
-    return [opt for opt in raw_options if "${" not in opt and not opt.startswith("-D")]
-
-
-def _read_linux_vmoptions(install4j_dir: Path) -> list[str]:
-    """`--add-opens`/`--add-exports` (JPMS strong encapsulation) live in
-    install4j's own `javaOptions` variable inside `i4jparams.conf` on Linux,
-    not in `tws.vmoptions`/`ibgateway.vmoptions`. Mirrors
-    `_read_macos_vmoptions`'s role for `Info.plist` on macOS, just a
-    different source file for the same install4j mechanism.
-
-    Unlike the macOS version, `-D` tokens are kept here rather than filtered:
-    on Linux this same variable is also the only place some installs carry
-    real `-D` fixes (e.g. Gateway's `-Djdk.xml.elementAttributeLimit`) and
-    `-DjxBrowserKey` -- `build_launch_plan` relies on that and skips its own
-    explicit add on Linux, so it only ever appears once."""
+def _read_i4j_vmoptions(install4j_dir: Path) -> list[str]:
+    """`--add-opens`/`--add-exports` (JPMS strong encapsulation), the real
+    XML-parser `-D` fixes (e.g. Gateway's `-Djdk.xml.elementAttributeLimit`),
+    and `-DjxBrowserKey` all live in install4j's own `javaOptions` variable
+    inside `i4jparams.conf`, not in `tws.vmoptions`/`ibgateway.vmoptions` --
+    true on both Linux and macOS (checked directly against IBC's own
+    `ibcstart.sh`, which reads this same variable, from this same
+    `{program_path}/.install4j` location, on both platforms uniformly, and
+    never touches macOS's `Info.plist` at all). `-D` tokens are kept here
+    rather than filtered -- this is the only place some installs carry them,
+    so filtering would silently drop real options."""
     raw = _read_i4j_variable(install4j_dir, "javaOptions")
     if not raw:
         return []
@@ -501,9 +468,7 @@ def _prevent_native_restart(program_path: Path) -> Path:
     it back.
 
     Idempotent: a second call after the rename already happened is a no-op,
-    returning the same renamed path. Returns the `.app` bundle's current real
-    path either way, since `_read_macos_vmoptions` needs to read
-    `Info.plist` from wherever it actually lives now, renamed or not.
+    returning the same renamed path.
 
     macOS only, called only under `os_name == "macos"` in `build_launch_plan`
     -- see `_prevent_native_restart_linux` for the Linux equivalent, called
@@ -538,10 +503,10 @@ def _prevent_native_restart_linux(program_path: Path, script_name: str) -> Path:
 
     Idempotent, matching `_prevent_native_restart`: a second call after the
     rename already happened is a no-op, returning the same renamed path.
-    Unlike the macOS version, the return value doesn't need to be read back by
-    a vmoptions reader -- `_read_linux_vmoptions` reads from
-    `.install4j/i4jparams.conf`, which doesn't move when this script is
-    renamed -- so callers only need this for its side effect."""
+    The return value doesn't need to be read back by a vmoptions reader --
+    `_read_i4j_vmoptions` reads from `.install4j/i4jparams.conf`, which
+    doesn't move when this script is renamed -- so callers only need this
+    for its side effect."""
     original = program_path / script_name
     renamed = program_path / f"{script_name}-1"
     if renamed.exists():
@@ -625,19 +590,11 @@ def build_launch_plan(
     vm_options.append(f"-Dchannel={channel}")
 
     if os_name == "macos":
-        # _read_macos_vmoptions strips -D tokens out of Info.plist's VMOptionArray, so
-        # jxBrowserKey needs adding explicitly here; on Linux, _read_linux_vmoptions
-        # below already carries it through the javaOptions blob -- adding it again
-        # there would just be a duplicate -D flag.
-        jxbrowser_key = _read_jxbrowser_key(install4j_dir)
-        if jxbrowser_key:
-            vm_options.append(f"-DjxBrowserKey={jxbrowser_key}")
-        app_bundle = _prevent_native_restart(program_path)
-        vm_options.extend(_read_macos_vmoptions(app_bundle))
+        _prevent_native_restart(program_path)
     else:
         script_name = "ibgateway" if resolved_program == "gateway" else "tws"
         _prevent_native_restart_linux(program_path, script_name)
-        vm_options.extend(_read_linux_vmoptions(install4j_dir))
+    vm_options.extend(_read_i4j_vmoptions(install4j_dir))
 
     # Agent-side logging (java.util.logging, AgentMain.configureLogging, 2026-09-08):
     # its own per-instance file under the same shared log dir Python uses, so the

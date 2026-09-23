@@ -10,7 +10,6 @@ import asyncio
 import contextlib
 import functools
 import logging
-import plistlib
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Any
@@ -37,9 +36,7 @@ from ibcontroller.launcher import (
     _prevent_native_restart_linux,
     _program_path,
     _read_i4j_variable,
-    _read_jxbrowser_key,
-    _read_linux_vmoptions,
-    _read_macos_vmoptions,
+    _read_i4j_vmoptions,
     _read_vmoptions_file,
     _resolve_program_path,
     _resolve_tws_path,
@@ -347,76 +344,31 @@ def test_read_vmoptions_file_missing_returns_empty(tmp_path):
     assert _read_vmoptions_file(tmp_path / "does-not-exist.vmoptions") == []
 
 
-def test_read_jxbrowser_key_found(tmp_path):
-    install4j_dir = tmp_path / ".install4j"
-    install4j_dir.mkdir()
-    (install4j_dir / "i4jparams.conf").write_text(
-        "...DjxBrowserKey=ABC123 more stuff..."
-    )
-    assert _read_jxbrowser_key(install4j_dir) == "ABC123"
-
-
-def test_read_jxbrowser_key_missing_file(tmp_path):
-    install4j_dir = tmp_path / ".install4j"
-    install4j_dir.mkdir()
-    assert _read_jxbrowser_key(install4j_dir) is None
-
-
-def test_read_jxbrowser_key_absent_in_file(tmp_path):
-    install4j_dir = tmp_path / ".install4j"
-    install4j_dir.mkdir()
-    (install4j_dir / "i4jparams.conf").write_text("nothing relevant here")
-    assert _read_jxbrowser_key(install4j_dir) is None
-
-
-def test_read_macos_vmoptions_filters_templates_and_dprops(tmp_path):
-    program_path = tmp_path / "IB Gateway 10.50"
-    app_bundle = program_path / "IB Gateway 10.50.app"
-    app_dir = app_bundle / "Contents"
-    app_dir.mkdir(parents=True)
-    plist_data = {
-        "JavaVM": {
-            "VMOptionArray": [
-                "--add-opens=java.desktop/javax.swing=ALL-UNNAMED",
-                "-Dsome.prop=value",
-                "${SOME_TEMPLATE_VAR}",
-                "--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
-            ]
-        }
-    }
-    with (app_dir / "Info.plist").open("wb") as f:
-        plistlib.dump(plist_data, f)
-
-    options = _read_macos_vmoptions(app_bundle)
-    assert options == [
-        "--add-opens=java.desktop/javax.swing=ALL-UNNAMED",
-        "--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
-    ]
-
-
-def test_read_macos_vmoptions_missing_plist_returns_empty(tmp_path):
-    assert _read_macos_vmoptions(tmp_path / "IB Gateway 10.50.app") == []
-
-
-def test_read_linux_vmoptions_keeps_dprops_filters_templates(tmp_path):
+def test_read_i4j_vmoptions_keeps_dprops_filters_templates(tmp_path):
+    """gitea #56: `-D` tokens (including `-DjxBrowserKey` and the
+    `jdk.xml.*` XML-parser hardening limits) must be kept, not filtered --
+    this same variable is the only place some installs carry them, on
+    Linux and macOS alike (confirmed live against a real macOS install:
+    `i4jparams.conf`'s `javaOptions` there carries the identical shape)."""
     install4j_dir = tmp_path / ".install4j"
     install4j_dir.mkdir()
     (install4j_dir / "i4jparams.conf").write_text(
         '<variable name="javaOptions" value="--add-opens=java.desktop/'
         "javax.swing=ALL-UNNAMED -Djdk.xml.elementAttributeLimit=10000 "
-        '${SOME_TEMPLATE_VAR}" />'
+        '-DjxBrowserKey=ABC123 ${SOME_TEMPLATE_VAR}" />'
     )
 
-    options = _read_linux_vmoptions(install4j_dir)
+    options = _read_i4j_vmoptions(install4j_dir)
 
     assert options == [
         "--add-opens=java.desktop/javax.swing=ALL-UNNAMED",
         "-Djdk.xml.elementAttributeLimit=10000",
+        "-DjxBrowserKey=ABC123",
     ]
 
 
-def test_read_linux_vmoptions_missing_file_returns_empty(tmp_path):
-    assert _read_linux_vmoptions(tmp_path / ".install4j") == []
+def test_read_i4j_vmoptions_missing_file_returns_empty(tmp_path):
+    assert _read_i4j_vmoptions(tmp_path / ".install4j") == []
 
 
 def test_prevent_native_restart_renames_the_app_bundle(tmp_path):
@@ -509,10 +461,9 @@ def _make_synthetic_install(tmp_path, *, os_name: str, program: str = "gateway")
         java.write_text("")
         app_dir = program_path / f"{program_path.name}.app" / "Contents"
         app_dir.mkdir(parents=True)
-        with (app_dir / "Info.plist").open("wb") as f:
-            plistlib.dump(
-                {"JavaVM": {"VMOptionArray": ["--add-opens=x/y=ALL-UNNAMED"]}}, f
-            )
+        (install4j_dir / "i4jparams.conf").write_text(
+            '<variable name="javaOptions" value="--add-opens=x/y=ALL-UNNAMED" />\n'
+        )
     else:
         java = program_path / "jre" / "bin" / "java"
         java.parent.mkdir(parents=True)
@@ -732,6 +683,35 @@ def test_build_launch_plan_macos_gateway(tmp_path):
     assert (program_path / "IB Gateway 10.50-1.app").is_dir()
 
 
+def test_build_launch_plan_macos_keeps_real_dprops_from_i4jparams(tmp_path):
+    """gitea #56: real `-D` fixes (XML-parser hardening limits,
+    `jxBrowserKey`) live in `i4jparams.conf`'s `javaOptions` on macOS too
+    (confirmed live against a real Gateway install) -- must survive into the
+    command, not be dropped the way the old `Info.plist`-based reader
+    dropped every `-D` token unconditionally."""
+    base = _make_synthetic_install(tmp_path, os_name="macos")
+    program_path = base / "IB Gateway 10.50"
+    (program_path / ".install4j" / "i4jparams.conf").write_text(
+        '<variable name="javaOptions" value="--add-opens=x/y=ALL-UNNAMED '
+        "-Djdk.xml.elementAttributeLimit=10000 "
+        '-DjxBrowserKey=ABC123" />\n'
+    )
+    settings_dir = tmp_path / "settings"
+    config = _config(
+        program="gateway",
+        tws_path=str(base),
+        tws_settings_path=str(settings_dir),
+        instance="paper",
+    )
+    plan = build_launch_plan(
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+    )
+
+    assert "-Djdk.xml.elementAttributeLimit=10000" in plan.command
+    assert "-DjxBrowserKey=ABC123" in plan.command
+    assert plan.command.count("-DjxBrowserKey=ABC123") == 1
+
+
 def test_build_launch_plan_java_heap_size_overrides_vmoptions_file(tmp_path):
     base = _make_synthetic_install(tmp_path, os_name="macos")
     settings_dir = tmp_path / "settings"
@@ -882,10 +862,10 @@ def test_build_launch_plan_adds_restart_flag_when_hash_given(tmp_path):
 
 def test_build_launch_plan_macos_gateway_survives_relaunch_after_rename(tmp_path):
     """A second `build_launch_plan` call (matching a real relaunch-after-
-    restart) must still find the real VM options even though the bundle is
-    already renamed from the first call -- confirms `_read_macos_vmoptions`
-    reads from wherever `_prevent_native_restart` says the bundle actually is,
-    not a hardcoded original name."""
+    restart) must still find the real VM options even though the `.app`
+    bundle is already renamed from the first call -- `_read_i4j_vmoptions`
+    reads from `install4j_dir`, a sibling of the bundle, not the bundle
+    itself, so a rename can't break it."""
     base = _make_synthetic_install(tmp_path, os_name="macos")
     settings_dir = tmp_path / "settings"
     config = _config(
@@ -963,10 +943,9 @@ def test_build_launch_plan_linux_reads_add_opens_from_i4jparams(tmp_path):
 
 
 def test_build_launch_plan_linux_jxbrowser_key_appears_once(tmp_path):
-    """gitea #55: `i4jparams.conf`'s `javaOptions` blob already carries
-    `-DjxBrowserKey` through on Linux (unlike macOS's `Info.plist`, which
-    filters `-D` tokens out) -- `build_launch_plan` must not add a second,
-    explicit copy on top of it."""
+    """gitea #55: `-DjxBrowserKey` comes solely from `i4jparams.conf`'s
+    `javaOptions` blob (via `_read_i4j_vmoptions`) -- `build_launch_plan`
+    must not add a second, explicit copy on top of it."""
     base = _make_synthetic_install(tmp_path, os_name="linux", program="tws")
     program_path = base / "10.50"
     (program_path / ".install4j" / "i4jparams.conf").write_text(
@@ -1013,7 +992,9 @@ def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(tmp_path, cap
     assert "jclient.LoginFrame" in plan.command
     assert "ibgateway.GWClient" not in plan.command
     assert "-Xmx768m" in plan.command  # from ibgateway.vmoptions
-    assert "--add-opens=x/y=ALL-UNNAMED" in plan.command  # from the Gateway Info.plist
+    assert (
+        "--add-opens=x/y=ALL-UNNAMED" in plan.command
+    )  # from the Gateway i4jparams.conf
     assert "Trader Workstation" not in plan.command
     assert f"-DjtsConfigDir={settings_dir}" in plan.command
     assert "[IBGateway]" not in (settings_dir / "jts.ini").read_text()
