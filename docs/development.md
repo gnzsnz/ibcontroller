@@ -87,7 +87,7 @@ as it can be: `javac` + `jar`, wired through a small `Makefile`.
 
 ## TWS / IBKR Gateway itself
 
-Download from IBKR directly [gateway](`https://www.interactivebrokers.com/en/trading/ibgateway-latest.php`) or [TWS](https://www.interactivebrokers.com/en/trading/download-tws.php). Then install.
+Download from IBKR directly [gateway](https://www.interactivebrokers.com/en/trading/ibgateway-latest.php) or [TWS](https://www.interactivebrokers.com/en/trading/download-tws.php). Then install.
 
 After the first run, `ibcontroller` renames the gateway/TWS script. This is required to manage restarts.
 
@@ -123,3 +123,10 @@ Day-to-day cycle: `make build` after any agent-side change, `uv run pytest` for 
 source .venv/bin/activate
 ibcontroller run --dotenv=.env-paper --trading-mode=paper --program=gateway
 ```
+
+## Architecture
+
+`ibcontroller` follows a layered architecture with separation of concerns between layers.
+Any contribution must follow this separation of concerns.
+
+![ibcontroller schematic architecture](Architecture.svg)

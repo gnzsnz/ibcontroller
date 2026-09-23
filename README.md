@@ -6,18 +6,32 @@ Heavily inspired by [IBC](https://github.com/IbcAlpha/IBC) project, now archived
 
 ## What it does?
 
-- Finds ibgateway/TWS installation, JRE and launchs it.
+- Finds ibgateway/TWS installation, JRE and launch it.
 - Automates user/password entry, waits for MFA.
-- Automates ibgatewa/TWS settings.
+- Automates ibgateway/TWS settings.
 - Manages pop-ups and automatically accept.
-
 - Manages ibgateway/TWS restarts.
 
 It provides a "**declarative**" engine, so settings and pop-ups can be "declared" by configuration entries.
 
 ## How to use it
 
+To use `ibcontroller` the recommended way is to install with uv/pipx or pip:
+
 ```bash
+# install with uv/pipx
+uv tool install py-ib-controller
+
+# with pip
+uv pip install py-ib-controller
+```
+
+To build from source, this is the short version, for a detailed guide please check the [development guide](./docs/development.md).
+
+```bash
+# 0. Fetch the code
+git clone https://github.com/gnzsnz/ibcontroller.git
+cd ibcontroller
 # 1. Build the Java agent jar and install the package (editable, for a source checkout)
 make dist
 uv sync
@@ -25,11 +39,7 @@ uv sync
 # 2. Scaffold a starter config directory (platformdirs default, or $IBC_APP_DIR)
 uv run ibcontroller init
 
-# 3. Export IBC_USERID / IBC_PASSWORD (see Credentials below) -- the
-#    only settings actually required. Everything else in the base ibcontroller.toml
-#    is commented out and already safe to run as-is: trading_mode defaults to "paper",
-#    and tws_version is auto-detected from standard tws_path.
-
+# 3. Export IBC_USERID / IBC_PASSWORD or create an .env file (see Credentials below).
 # 4. Run it -- Ctrl-C for a graceful shutdown
 uv run ibcontroller run
 ```
@@ -38,8 +48,6 @@ uv run ibcontroller run
 `ibcontroller.toml` is missing (same effect as running `init` first), so it can also be
 run directly on a fresh install -- it will still fail with a clear error naming whichever
 setting is actually missing (in practice, just the two credential env vars).
-
-`ibcontroller version` prints the installed package version.
 
 ### CLI parameters
 
@@ -116,7 +124,9 @@ environment variables, with precedence `defaults < TOML file < .env < environmen
 can be loaded from a `.env` file. Credentials are environment-variable-only and must
 never appear in the config file.
 
-A sample file with all settings is provided as an [example](./ibcontroller.env).
+A sample file with all environment settings is provided as an [example](./ibcontroller.env).
+In the same way a sample `.toml` file with all config is
+[available](./ibcontroller/data/ibcontroller.toml.example).
 
 `ibcontroller init` (or the first `ibcontroller run`) copies starter templates into the
 config directory: `ibcontroller.toml` (every key commented out -- safe to run as-is,
@@ -241,7 +251,7 @@ malformed value is logged and skipped rather than aborting the other one.
 
 - `cold_restart_time` -- `"HH:MM"`, 24-hour, local time. Every **Sunday** at this time,
   ibcontroller closes the instance tidily and relaunches with a full fresh login forcing the weekly
- reauth IBKR requires around Sunday 01:00 US/Eastern token invalidation.
+ re-auth IBKR requires around Sunday 01:00 US/Eastern token invalidation.
 - `closedown_at` -- `"HH:MM"` (every day) or `"<Weekday> HH:MM"` (one day a week,
   `Weekday` a full English name, `Monday`..`Sunday`). Closes the instance tidily at that
   time, with no relaunch -- you're responsible for restarting it yourself.
