@@ -26,6 +26,10 @@ uv tool install py-ib-controller
 uv pip install py-ib-controller
 ```
 
+Give it a spin, `ib-controller run --dotenv=.env-paper --trading-mode=paper --program=gateway --tws-channel latest`
+
+!(ibcontroller demo)[https://github.com/user-attachments/assets/b97f7180-29d9-4e09-b32f-8be838dff0e2]
+
 To build from source, this is the short version, for a detailed guide please check the [development guide](./docs/development.md).
 
 ```bash
