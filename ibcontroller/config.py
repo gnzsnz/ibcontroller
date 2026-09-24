@@ -131,6 +131,14 @@ def _log_level_converter(raw: object) -> int:
     return _LOG_LEVELS[name]
 
 
+def _log_dir_converter(raw: object) -> str:
+    """Expands `~` regardless of source (factory default, TOML file, env var, CLI) --
+    without this, `Path(log_dir)` downstream (logging_setup.py, launcher.py) treats a
+    literal `~` as a relative path component and creates a `~` directory instead of
+    expanding to the home directory."""
+    return str(Path(str(raw)).expanduser())
+
+
 class TradingMode(StrEnum):
     LIVE = "live"
     PAPER = "paper"
@@ -280,7 +288,9 @@ class Config:
     # (DictLoader), so the config file's `log_dir` and the IBC_LOG_DIR env var
     # genuinely override it. See load_config for the loader order.
     trace_enabled: bool = False
-    log_dir: str = ts.option(factory=lambda: str(resolve_app_dirs()[1]))
+    log_dir: str = ts.option(
+        factory=lambda: str(resolve_app_dirs()[1]), converter=_log_dir_converter
+    )
     # Logging level for ibcontroller's own log file (not the raw wire trace).
     # Was previously unannotated (`log_level = logging.INFO`), which meant attrs
     # never turned it into a real field at all -- not configurable, silently fixed

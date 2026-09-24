@@ -7,6 +7,7 @@ loader, not a mock."""
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import attrs
 import pytest
@@ -43,6 +44,17 @@ def test_env_var_overrides_toml_value(monkeypatch, tmp_path):
     monkeypatch.setenv("IBC_TRADING_MODE", "live")
     config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
     assert config.trading_mode is TradingMode.LIVE
+
+
+def test_log_dir_tilde_is_expanded(monkeypatch, tmp_path):
+    """A literal `~` in `log_dir` (TOML) must be expanded to the home directory here --
+    downstream `Path(log_dir)` calls (logging_setup.py, launcher.py) don't expanduser()
+    themselves, so an unexpanded `~` becomes a literal `~` directory, confirmed live."""
+    _set_credentials(monkeypatch)
+    toml_path = _write_toml(tmp_path, 'log_dir = "~/some/sub/dir"\n')
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+    assert "~" not in config.log_dir
+    assert config.log_dir == str(Path("~/some/sub/dir").expanduser())
 
 
 def test_missing_credentials_raise_config_error(monkeypatch, tmp_path):
