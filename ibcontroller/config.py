@@ -131,12 +131,17 @@ def _log_level_converter(raw: object) -> int:
     return _LOG_LEVELS[name]
 
 
-def _log_dir_converter(raw: object) -> str:
+def _expand_user(raw: object) -> str:
     """Expands `~` regardless of source (factory default, TOML file, env var, CLI) --
-    without this, `Path(log_dir)` downstream (logging_setup.py, launcher.py) treats a
-    literal `~` as a relative path component and creates a `~` directory instead of
-    expanding to the home directory."""
+    without this, a bare `Path(...)` downstream treats a literal `~` as a relative path
+    component and creates a `~` directory instead of expanding to the home directory
+    (gitea #57). Single point of truth for every path-typed Config field, so no
+    consumption site needs its own `.expanduser()` call."""
     return str(Path(str(raw)).expanduser())
+
+
+def _optional_path_converter(raw: object) -> str | None:
+    return None if raw is None else _expand_user(raw)
 
 
 class TradingMode(StrEnum):
@@ -216,7 +221,9 @@ class Config:
     # The IBKR settings file to load (if any) -- see `ibkr_settings.toml.example`.
     # Defaults to `None` (inert) until a user points `[settings] file` at a renamed
     # copy of the example file. See module docstring for why this is deliberate.
-    settings_file: str | None = None
+    settings_file: str | None = ts.option(
+        default=None, converter=_optional_path_converter
+    )
     # instance default: f"{program}-{trading_mode.value}".
     instance: str = "{program}-{trading_mode}"
     program: str = "gateway"  # "gateway" or "tws"
@@ -228,11 +235,13 @@ class Config:
     # installs (not a strict enum). Defaults to "stable", the safer pick when several
     # channels are installed side by side.
     tws_channel: str = "stable"
-    tws_path: str | None = None
+    tws_path: str | None = ts.option(default=None, converter=_optional_path_converter)
     # Where TWS/Gateway itself stores its settings (IBC's own TWS_SETTINGS_PATH) --
     # deliberately NOT the same as tws_path (the install location). None defaults,
     # per instance, in launcher.py's resolve_tws_settings_path.
-    tws_settings_path: str | None = None
+    tws_settings_path: str | None = ts.option(
+        default=None, converter=_optional_path_converter
+    )
     # IBC-key-compatible settings (file or env, never a secret).
     trading_mode: TradingMode = TradingMode.PAPER
     # IBC: ReadOnlyLogin -- loaded but not yet wired to any behavior.
@@ -289,7 +298,7 @@ class Config:
     # genuinely override it. See load_config for the loader order.
     trace_enabled: bool = False
     log_dir: str = ts.option(
-        factory=lambda: str(resolve_app_dirs()[1]), converter=_log_dir_converter
+        factory=lambda: str(resolve_app_dirs()[1]), converter=_expand_user
     )
     # Logging level for ibcontroller's own log file (not the raw wire trace).
     # Was previously unannotated (`log_level = logging.INFO`), which meant attrs

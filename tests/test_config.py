@@ -57,6 +57,32 @@ def test_log_dir_tilde_is_expanded(monkeypatch, tmp_path):
     assert config.log_dir == str(Path("~/some/sub/dir").expanduser())
 
 
+@pytest.mark.parametrize("field", ["tws_path", "tws_settings_path", "settings_file"])
+def test_optional_path_fields_tilde_is_expanded(monkeypatch, tmp_path, field):
+    """`tws_path`/`tws_settings_path`/`settings_file` share `log_dir`'s converter
+    (gitea #57, consolidating what used to be inconsistent per-field handling) --
+    a literal `~` must be expanded here too, not left for a consumption site to
+    forget."""
+    _set_credentials(monkeypatch)
+    toml_path = _write_toml(tmp_path, f'{field} = "~/some/sub/path"\n')
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+    value = getattr(config, field)
+    assert value is not None
+    assert "~" not in value
+    assert value == str(Path("~/some/sub/path").expanduser())
+
+
+def test_optional_path_fields_default_none_is_preserved(monkeypatch, tmp_path):
+    """The path converter must pass `None` through unchanged -- these fields are
+    optional and their absence carries meaning (auto-detect/no-op), not an empty
+    string or expanded cwd."""
+    _set_credentials(monkeypatch)
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.tws_path is None
+    assert config.tws_settings_path is None
+    assert config.settings_file is None
+
+
 def test_missing_credentials_raise_config_error(monkeypatch, tmp_path):
     # dotenv_path="" points load_dotenv() at a nonexistent file instead of letting
     # it search upward and pick up the repo's real, gitignored .env.
