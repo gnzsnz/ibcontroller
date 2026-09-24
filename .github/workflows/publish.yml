@@ -95,21 +95,22 @@ jobs:
             ./dist/*.tar.gz ./dist/*.whl
 
       - name: Generate changelog
+        id: git-cliff
         uses: orhun/git-cliff-action@v4
         with:
           # no cliff.toml -- git-cliff's built-in default config already
           # groups Conventional Commits (feat/fix/docs/...) correctly
           args: --latest --tag ${{ github.ref_name }} --strip header
-          output: CHANGELOG_release.md
 
       - name: Assemble release notes
         env:
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
+          CHANGELOG: ${{ steps.git-cliff.outputs.content }}
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
           {
-            cat CHANGELOG_release.md
+            echo "$CHANGELOG"
             echo
             echo "## Installation"
             echo
