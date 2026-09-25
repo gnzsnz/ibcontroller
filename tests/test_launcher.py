@@ -774,10 +774,56 @@ def test_build_launch_plan_reads_channel_dynamically(tmp_path):
     assert "-Dchannel=latest" not in plan.command
 
 
-def test_build_launch_plan_channel_falls_back_to_config_when_not_found(tmp_path):
+def test_build_launch_plan_channel_falls_back_to_config_when_not_found(
+    tmp_path, caplog
+):
     """No `channel` in the real install's `i4jparams.conf` -- falls back to
-    `Config.tws_channel` (default "stable"), not a hardcoded literal (tea #35)."""
+    `Config.tws_channel` (default "stable"), not a hardcoded literal (tea #35),
+    and warns about it (tea #58)."""
     base = _make_synthetic_install(tmp_path, os_name="macos")  # no i4jparams.conf
+    config = _config(
+        program="gateway",
+        tws_path=str(base),
+        tws_settings_path=str(tmp_path / "settings"),
+        instance="paper",
+    )
+    with caplog.at_level("WARNING"):
+        plan = build_launch_plan(
+            config,
+            tmp_path / "agent.jar",
+            os_name="macos",
+            runtime_dir=tmp_path / "run",
+        )
+    assert "-Dchannel=stable" in plan.command
+    assert "no 'channel' variable" in caplog.text
+
+
+def test_build_launch_plan_channel_from_install_does_not_warn(tmp_path, caplog):
+    base = _make_synthetic_install(tmp_path, os_name="macos")
+    (base / "IB Gateway 10.50" / ".install4j" / "i4jparams.conf").write_text(
+        '<variable name="channel" value="latest" />\n'
+    )
+    config = _config(
+        program="gateway",
+        tws_path=str(base),
+        tws_settings_path=str(tmp_path / "settings"),
+        instance="paper",
+    )
+    with caplog.at_level("WARNING"):
+        build_launch_plan(
+            config,
+            tmp_path / "agent.jar",
+            os_name="macos",
+            runtime_dir=tmp_path / "run",
+        )
+    assert "no 'channel' variable" not in caplog.text
+
+
+def test_build_launch_plan_sets_install_dir_with_trailing_slash(tmp_path):
+    """IB's launcher passes `-DinstallDir=$prg_dir/`; without it TWS logs
+    `'installDir' system property is not set` and keeps a per-settings-dir
+    `locales.jar` (tea #58)."""
+    base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
         program="gateway",
         tws_path=str(base),
@@ -787,7 +833,7 @@ def test_build_launch_plan_channel_falls_back_to_config_when_not_found(tmp_path)
     plan = build_launch_plan(
         config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
     )
-    assert "-Dchannel=stable" in plan.command
+    assert f"-DinstallDir={base / 'IB Gateway 10.50'}/" in plan.command
 
 
 def test_build_launch_plan_omits_restart_flag_when_hash_not_given(tmp_path):
