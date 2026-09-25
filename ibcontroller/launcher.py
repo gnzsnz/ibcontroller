@@ -586,7 +586,15 @@ def build_launch_plan(
         # on "last -Xmx wins" JVM behavior.
         vm_options = [opt for opt in vm_options if not opt.startswith("-Xmx")]
         vm_options.append(f"-Xmx{config.java_heap_size}")
-    channel = _read_i4j_variable(install4j_dir, "channel") or config.tws_channel
+    channel = _read_i4j_variable(install4j_dir, "channel")
+    if channel is None:
+        channel = config.tws_channel
+        logger.warning(
+            "IBController > no 'channel' variable in %s -- using "
+            "tws_channel=%s for -Dchannel",
+            install4j_dir / "i4jparams.conf",
+            channel,
+        )
     vm_options.append(f"-Dchannel={channel}")
 
     if os_name == "macos":
@@ -620,6 +628,8 @@ def build_launch_plan(
         str(java_bin),
         *vm_options,
         f"-DjtsConfigDir={settings_dir}",
+        # IB's own launcher passes "$prg_dir/" (trailing slash); str(Path) drops it.
+        f"-DinstallDir={program_path}/",
         *([f"-Drestart={restart_hash}"] if restart_hash is not None else []),
         "-cp",
         classpath,
