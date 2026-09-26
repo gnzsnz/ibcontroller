@@ -72,6 +72,7 @@ class LaunchPlan:
     command_socket_path: str
     event_socket_path: str
     settings_dir: str
+    program_path: Path
 
 
 @dataclass(frozen=True)
@@ -644,6 +645,7 @@ def build_launch_plan(
         command_socket_path=command_socket_path,
         event_socket_path=event_socket_path,
         settings_dir=str(settings_dir),
+        program_path=program_path,
     )
 
 
@@ -750,6 +752,12 @@ async def launch_instance(
     )
     process = await asyncio.create_subprocess_exec(
         *plan.command,
+        cwd=plan.program_path,
+        # Matches the real native install4j launcher (its classpath/JRE paths
+        # are relative to program_path, e.g. "./jars/...", confirmed via the
+        # installed .app's i4jlauncher.config) -- without this, relative paths
+        # install4j itself writes (e.g. restarter.log) land wherever
+        # ibcontroller was invoked from instead.
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
