@@ -70,12 +70,14 @@
 # default) to apply nothing declaratively.
 # (env: IBC_SETTINGS_FILE)
 # settings_file = "~/.config/ibkr_settings.toml"
+# settings_file = "~/Library/Application Support/ibcontroller/ibkr_settings.toml"
 
 # Where ibcontroller's own log and trace files live (env: IBC_LOG_DIR).
 # Optional: when unset, defaults to the platformdirs user-log dir (or
 # $IBC_APP_DIR/log in docker mode). Every instance's files (log, trace,
 # gateway stdout) land flat in this one directory.
 # log_dir = "~/.local/share/ibcontroller"
+# log_dir = "~/Library/Logs/ibcontroller"
 # log_dir = ""
 
 # Where ibcontroller's own log and Gateway/TWS's own console output go: "std"
