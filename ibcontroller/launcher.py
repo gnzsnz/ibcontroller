@@ -18,6 +18,7 @@ import functools
 import logging
 import platform
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -504,16 +505,17 @@ def _prevent_native_restart(program_path: Path) -> Path:
     it back.
 
     Idempotent: a second call after the rename already happened is a no-op,
-    returning the same renamed path.
+    returning the same renamed path. A fresh bundle next to an existing
+    renamed one (e.g. after an in-place update) replaces it.
 
     macOS only, called only under `os_name == "macos"` in `build_launch_plan`
     -- see `_prevent_native_restart_linux` for the Linux equivalent, called
     under the `else` branch there."""
     original = program_path / f"{program_path.name}.app"
     renamed = program_path / f"{program_path.name}-1.app"
-    if renamed.is_dir():
-        return renamed
     if original.is_dir():
+        if renamed.is_dir():
+            shutil.rmtree(renamed)  # rename onto a non-empty dir fails
         original.rename(renamed)
         logger.warning(
             "renamed %s -> %s to prevent Gateway's own restart logic from "
@@ -522,7 +524,7 @@ def _prevent_native_restart(program_path: Path) -> Path:
             renamed,
         )
         return renamed
-    return original
+    return renamed if renamed.is_dir() else original
 
 
 def _prevent_native_restart_linux(program_path: Path, script_name: str) -> Path:
@@ -538,17 +540,16 @@ def _prevent_native_restart_linux(program_path: Path, script_name: str) -> Path:
     the instance back.
 
     Idempotent, matching `_prevent_native_restart`: a second call after the
-    rename already happened is a no-op, returning the same renamed path.
+    rename already happened is a no-op, returning the same renamed path. A
+    fresh script next to an existing renamed one replaces it.
     The return value doesn't need to be read back by a vmoptions reader --
     `_read_i4j_vmoptions` reads from `.install4j/i4jparams.conf`, which
     doesn't move when this script is renamed -- so callers only need this
     for its side effect."""
     original = program_path / script_name
     renamed = program_path / f"{script_name}-1"
-    if renamed.exists():
-        return renamed
     if original.exists():
-        original.rename(renamed)
+        original.replace(renamed)
         logger.warning(
             "renamed %s -> %s to prevent %s's own restart logic from "
             "relaunching itself outside ibcontroller's control",
@@ -557,7 +558,7 @@ def _prevent_native_restart_linux(program_path: Path, script_name: str) -> Path:
             script_name,
         )
         return renamed
-    return original
+    return renamed if renamed.exists() else original
 
 
 def build_launch_plan(

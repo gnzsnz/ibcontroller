@@ -437,6 +437,23 @@ def test_prevent_native_restart_is_idempotent(tmp_path):
     assert second.is_dir()
 
 
+def test_prevent_native_restart_replaces_stale_renamed_bundle(tmp_path):
+    program_path = tmp_path / "IB Gateway 10.50"
+    original = program_path / "IB Gateway 10.50.app"
+    renamed = program_path / "IB Gateway 10.50-1.app"
+    original.mkdir(parents=True)
+    (original / "new").write_text("new")
+    renamed.mkdir()
+    (renamed / "old").write_text("old")
+
+    result = _prevent_native_restart(program_path)
+
+    assert result == renamed
+    assert not original.exists()
+    assert (renamed / "new").exists()
+    assert not (renamed / "old").exists()
+
+
 def test_prevent_native_restart_missing_bundle_returns_original_path(tmp_path):
     program_path = tmp_path / "IB Gateway 10.50"
     result = _prevent_native_restart(program_path)
@@ -467,6 +484,21 @@ def test_prevent_native_restart_linux_is_idempotent(tmp_path):
 
     assert first == second
     assert second.is_file()
+
+
+def test_prevent_native_restart_linux_replaces_stale_renamed_script(tmp_path):
+    program_path = tmp_path / "ibgateway" / "10.50"
+    program_path.mkdir(parents=True)
+    original = program_path / "ibgateway"
+    renamed = program_path / "ibgateway-1"
+    original.write_text("new")
+    renamed.write_text("old")
+
+    result = _prevent_native_restart_linux(program_path, "ibgateway")
+
+    assert result == renamed
+    assert not original.exists()
+    assert renamed.read_text() == "new"
 
 
 def test_prevent_native_restart_linux_missing_script_returns_original_path(tmp_path):
