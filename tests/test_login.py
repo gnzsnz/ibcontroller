@@ -36,18 +36,20 @@ from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
 from ibcontroller.login import (
     LoginError,
+    LoginFrameTimeoutError,
     LoginManager,
     LoginState,
+    MfaTimeoutError,
     find_autorestart_hash,
     is_restart,
 )
 from ibcontroller.recognisers import (
     DeclarativeDismissRecognizer,
     ExistingSessionRecognizer,
-    LoginFailedError,
     LoginFailedRecognizer,
     RecognizerRegistry,
     TooManyFailedLoginAttemptsRecognizer,
+    TransientLoginError,
     watch_for_unprompted_windows,
 )
 from tests.fakes import FakeCommandServer, FakeEventServer
@@ -424,9 +426,12 @@ async def test_mfa_is_handled_inline_then_reaches_logged_in(
     assert manager.state is LoginState.LOGGED_IN
 
 
-async def test_login_frame_never_appears_raises_login_error(
+async def test_login_frame_never_appears_raises_login_frame_timeout_error(
     sock_path, event_sock_path, tmp_path
 ):
+    """`LoginFrameTimeoutError`, not the generic `LoginError` -- matches IBC's
+    own error code 1112 and is what `control_loop.run_control_loop` matches
+    on to always relaunch (gitea #60), regardless of any config."""
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -434,7 +439,7 @@ async def test_login_frame_never_appears_raises_login_error(
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(_config(), LABELS, dispatcher, settings_dir=tmp_path)
         try:
-            with pytest.raises(LoginError):
+            with pytest.raises(LoginFrameTimeoutError):
                 await manager.run(login_timeout=0.2, outcome_timeout=1.0)
         finally:
             await dispatcher.stop()
@@ -499,11 +504,13 @@ async def test_existing_session_handled_by_watcher_while_login_still_waits(
 async def test_login_failed_is_raised_by_the_watcher_not_by_run(
     sock_path, event_sock_path, tmp_path
 ):
-    """The real behavioural consequence of the fix: `LoginFailedError` no
-    longer propagates from `LoginManager.run()` (its own filter never
-    captures "Login failed" at all) -- it propagates from the separate
-    watcher task instead, since that's the only thing left dispatching to the
-    registry. `run()` itself just keeps waiting until its own timeout."""
+    """The real behavioural consequence of the fix: `TransientLoginError`
+    (gitea #62 -- "Login failed" is IB's wording for a server disconnect, not
+    rejected credentials) never propagates from `LoginManager.run()` (its own
+    filter never captures "Login failed" at all) -- it propagates from the
+    separate watcher task instead, since that's the only thing left
+    dispatching to the registry. `run()` itself just keeps waiting until its
+    own timeout."""
     responder = _tracking_responder([])
     async with (
         FakeCommandServer(sock_path, responder),
@@ -528,7 +535,7 @@ async def test_login_failed_is_raised_by_the_watcher_not_by_run(
                     ),
                 ],
             )
-            with pytest.raises(LoginFailedError):
+            with pytest.raises(TransientLoginError):
                 await asyncio.wait_for(watcher, timeout=5.0)
             assert manager.state is LoginState.LOGGING_IN  # run() never saw it
         finally:
@@ -628,14 +635,14 @@ async def test_mfa_watchdog_succeeds_within_exit_interval(
     assert manager.state is LoginState.LOGGED_IN
 
 
-async def test_mfa_watchdog_raises_when_main_window_never_appears(
+async def test_gateway_mfa_watchdog_raises_when_main_window_never_appears(
     sock_path, event_sock_path, tmp_path
 ):
     """Ported from IBC's `restartAfterTime` -- IBC exits/restarts the JVM if
-    login hasn't completed within `mfa_exit_interval`
-    of 2FA closing; we have no restart primitive at this layer, so this raises
-    `LoginError` instead, matching how `LoginFailedError` is already treated as
-    a real failure signal for whoever eventually supervises Login."""
+    login hasn't completed within `mfa_exit_interval` of 2FA closing. Raises
+    `MfaTimeoutError`, distinct from the generic `LoginError` (gitea #60) --
+    `Config.mfa_timeout_action` decides whether `control_loop.run_control_loop`
+    lets this propagate (`exit`) or relaunches on it (`restart`)."""
     responder = _tracking_responder([])
     async with (
         FakeCommandServer(sock_path, responder),
@@ -671,7 +678,55 @@ async def test_mfa_watchdog_raises_when_main_window_never_appears(
                     # no splash-closed event -- the watchdog must time out
                 ],
             )
-            with pytest.raises(LoginError):
+            with pytest.raises(MfaTimeoutError):
+                await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+
+async def test_tws_mfa_watchdog_raises_when_main_window_never_appears(
+    sock_path, event_sock_path, tmp_path
+):
+    """TWS equivalent of the Gateway watchdog test above -- 2FA closes within
+    `mfa_timeout`, but no main window ever appears, so `_after_mfa_closed_tws`'s
+    own `mfa_exit_interval` watchdog times out and raises `MfaTimeoutError`."""
+    responder = _tracking_responder([])
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        config = _config(
+            program="tws",
+            relogin_after_mfa_timeout=True,
+            mfa_timeout=5.0,
+            mfa_exit_interval=0.05,
+        )
+        manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
+        try:
+            task = asyncio.ensure_future(
+                manager.run(login_timeout=5.0, outcome_timeout=5.0)
+            )
+            await _feed(
+                dispatcher,
+                [
+                    _window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE),
+                    _window_event(
+                        2,
+                        "window_opened",
+                        "twslaunch.jauthentication.bh",
+                        "Second Factor Authentication",
+                    ),
+                    _window_event(
+                        3,
+                        "window_closed",
+                        "twslaunch.jauthentication.bh",
+                        "Second Factor Authentication",
+                    ),
+                    # no main-window event -- the watchdog must time out
+                ],
+            )
+            with pytest.raises(MfaTimeoutError):
                 await asyncio.wait_for(task, timeout=5.0)
         finally:
             await dispatcher.stop()
@@ -1127,8 +1182,9 @@ async def test_tws_outcome_wait_is_bounded_by_outcome_timeout(
                 dispatcher,
                 [_window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE)],
             )
-            with pytest.raises(LoginError):
+            with pytest.raises(LoginError) as exc_info:
                 await asyncio.wait_for(task, timeout=2.0)
+            assert not isinstance(exc_info.value, MfaTimeoutError)
         finally:
             await dispatcher.stop()
 
@@ -1160,8 +1216,14 @@ async def test_gateway_outcome_wait_is_bounded_by_outcome_timeout(
                 dispatcher,
                 [_window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway")],
             )
-            with pytest.raises(LoginError):
+            with pytest.raises(LoginError) as exc_info:
                 await asyncio.wait_for(task, timeout=2.0)
+            assert not isinstance(exc_info.value, MfaTimeoutError)
+            # No 2FA dialog was ever seen (live-caught, gitea #62: a wifi-down
+            # run blamed "mfa_timeout" even though no push was ever sent) --
+            # the message must say so, not cite mfa_timeout.
+            assert "no 2FA dialog seen" in str(exc_info.value)
+            assert "mfa_timeout" not in str(exc_info.value)
         finally:
             await dispatcher.stop()
 
@@ -1174,8 +1236,9 @@ async def test_gateway_2fa_close_wait_uses_remaining_deadline_not_full_budget(
     original deadline -- 2FA opening late in the budget granted a second full
     budget's worth of extra waiting, past what `LoginError`'s own message
     claims. 2FA opens ~0.3s into a 0.4s `outcome_timeout` and never closes --
-    `run()` must raise `LoginError` close to the original ~0.4s deadline, not
-    ~0.4s plus another full 0.4s on top."""
+    `run()` must raise close to the original ~0.4s deadline, not ~0.4s plus
+    another full 0.4s on top. An unanswered push is `MfaTimeoutError` (exit
+    75), not the plain `LoginError` (gitea #60)."""
     responder = _tracking_responder([])
     async with (
         FakeCommandServer(sock_path, responder),
@@ -1203,7 +1266,7 @@ async def test_gateway_2fa_close_wait_uses_remaining_deadline_not_full_budget(
                     "Second Factor Authentication",
                 )
             )
-            with pytest.raises(LoginError):
+            with pytest.raises(MfaTimeoutError):
                 # A generous outer bound -- if the bug were still present,
                 # this would need ~0.8s (two full budgets); 0.6s only leaves
                 # room for the original ~0.4s deadline plus scheduling slack.
@@ -1222,9 +1285,9 @@ async def test_tws_2fa_close_wait_uses_remaining_deadline_not_full_budget(
     2FA-closed wait inside `_wait_for_outcome_tws`'s loop used to pass the
     full `mfa_timeout` again instead of what's left
     of `outcome_timeout`'s own deadline. 2FA opens ~0.3s into a 0.4s
-    `outcome_timeout` and never closes -- `run()` must raise `LoginError`
-    close to the original ~0.4s deadline, not ~0.4s plus another full
-    `mfa_timeout` on top."""
+    `outcome_timeout` and never closes -- `run()` must raise
+    `MfaTimeoutError` close to the original ~0.4s deadline, not ~0.4s plus
+    another full `mfa_timeout` on top."""
     responder = _tracking_responder([])
     async with (
         FakeCommandServer(sock_path, responder),
@@ -1252,7 +1315,7 @@ async def test_tws_2fa_close_wait_uses_remaining_deadline_not_full_budget(
                     "Second Factor Authentication",
                 )
             )
-            with pytest.raises(LoginError):
+            with pytest.raises(MfaTimeoutError):
                 # Same generous-but-bounded outer window as Gateway's mirror
                 # test above -- would need ~0.4s plus a full
                 # mfa_timeout if the bug regressed.

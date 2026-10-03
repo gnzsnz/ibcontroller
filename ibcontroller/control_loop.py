@@ -19,18 +19,24 @@ Shutdown has six causes, raced together (`asyncio.wait(...,
 return_when=FIRST_COMPLETED)`), all converging on one exit path:
 
 - **REQUESTED**: caller cancels this coroutine's own task.
-- **PROCESS_EXITED**: `launched.process.wait()` returns -- a manual close, or
-  a scheduled daily restart (confirmed live: it kills the whole JVM, not an
-  in-place UI restart). Raced against every phase of the cycle, not just the
-  post-login `READY` wait, so a process dying during login or settings
-  application is classified the same way instead of hanging on a login-side
-  timeout that's either unbounded or unrelated to the process being gone.
+- **PROCESS_CLOSED** / **PROCESS_EXITED**: `launched.process.wait()` returns
+  -- `PROCESS_CLOSED` for returncode 0 (Gateway/TWS chose to exit: a manual
+  File>Close, auto-logoff), `PROCESS_EXITED` otherwise (crash, kill). Either
+  can be a scheduled daily restart (confirmed live: it kills the whole JVM,
+  not an in-place UI restart), decided by the `autorestart` marker. Raced
+  against every phase of the cycle, not just the post-login `READY` wait, so
+  a process dying during login or settings application is classified the
+  same way instead of hanging on a login-side timeout that's either unbounded
+  or unrelated to the process being gone.
 - **CONNECTION_LOST**: `Dispatcher.tasks` ends while the process is still
   alive -- a distinct failure mode from process-exit, also raced across every
   phase.
-- **LOGIN_FAILED**: `watch_for_unprompted_windows` raises
-  (`recognisers.LoginFailedError`, or `login.LoginError` from the MFA-timeout
-  watchdog).
+- **LOGIN_FAILED**: not currently produced -- `recognisers.LoginFailedError`/
+  `TransientLoginError` (from `watch_for_unprompted_windows`) and
+  `login.LoginError` (the MFA-timeout watchdog) always propagate as
+  exceptions instead, the same way regardless of which phase raised them,
+  including the post-login `READY` wait (gitea #62). Kept defined/mapped
+  (cli.py's `_CAUSE_EXIT_CODES`) as a safety net only.
 - **COLD_RESTART**: `Config.cold_restart_time` reached (TWS and Gateway
   alike, see `schedule.py`) -- a self-scheduled tidy close-down followed by a
   full fresh relogin via `launch_instance` (no restart hash, deliberately not
@@ -54,7 +60,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ibcontroller.agent_client import AgentClientError
-from ibcontroller.config import Config
+from ibcontroller.config import Config, MfaTimeoutAction
 from ibcontroller.diagnostics import watch_for_diagnostics
 from ibcontroller.labels import Labels, load_labels
 from ibcontroller.launcher import (
@@ -66,7 +72,9 @@ from ibcontroller.launcher import (
 from ibcontroller.logging_setup import stop_logging
 from ibcontroller.login import (
     LoginError,
+    LoginFrameTimeoutError,
     LoginManager,
+    MfaTimeoutError,
     find_autorestart_hash,
     is_restart,
 )
@@ -74,10 +82,14 @@ from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
     DeclarativeDismissRecognizer,
     ExistingSessionRecognizer,
+    GatewayConnectionFailedRecognizer,
+    LoginErrorRecognizer,
     LoginFailedError,
     LoginFailedRecognizer,
     RecognizerRegistry,
     TooManyFailedLoginAttemptsRecognizer,
+    TransientLoginError,
+    UnrecognizedCredentialsRecognizer,
     watch_for_unprompted_windows,
 )
 from ibcontroller.schedule import ScheduledAction, next_scheduled_shutdown
@@ -95,15 +107,17 @@ from ibcontroller.settings import (
 logger = logging.getLogger(__name__)
 
 # Known "operational" failure modes reachable from within a cycle (a real
-# login/settings/launch failure) -- `cli.py` extends this with the config-load
+# login/launch failure) -- `cli.py` extends this with the config-load
 # failures that happen before a cycle even starts (`ConfigError`/`RuntimeError`)
 # and reports the whole set as a clean one-line message, not a traceback.
 # Shared here so `_run_one_cycle`'s own logging can tell an anticipated
-# failure apart from a genuine bug too.
+# failure apart from a genuine bug too. `SettingsError` is deliberately not
+# here -- a failed `_apply_declarative_settings` is always caught and logged
+# locally (`_apply_declarative_settings_or_log`), it never reaches this level.
 OPERATIONAL_ERRORS = (
-    LoginError,
+    LoginError,  # covers LoginFrameTimeoutError/MfaTimeoutError too
     LoginFailedError,
-    SettingsError,
+    TransientLoginError,  # relaunched by run_control_loop, never reaches cli.py
     LauncherError,
     AgentClientError,
 )
@@ -111,11 +125,27 @@ OPERATIONAL_ERRORS = (
 
 class ShutdownCause(Enum):
     REQUESTED = auto()
+    PROCESS_CLOSED = auto()
     PROCESS_EXITED = auto()
     CONNECTION_LOST = auto()
     LOGIN_FAILED = auto()
     COLD_RESTART = auto()
     TIDY_CLOSEDOWN = auto()
+
+
+# Either way the JVM is gone -- a scheduled restart can end as both.
+_PROCESS_GONE = frozenset({ShutdownCause.PROCESS_CLOSED, ShutdownCause.PROCESS_EXITED})
+
+
+def _process_gone_cause(returncode: int | None) -> ShutdownCause:
+    """Returncode 0 means Gateway/TWS exited by choice (File>Close,
+    auto-logoff); anything else is a crash or kill -- IBC's `ibcstart.sh`
+    passes the same distinction through as its own exit status."""
+    return (
+        ShutdownCause.PROCESS_CLOSED
+        if returncode == 0
+        else ShutdownCause.PROCESS_EXITED
+    )
 
 
 class StartupState(Enum):
@@ -160,6 +190,9 @@ def _build_registry(
                 config.accept_incoming_connections,
             ),
             LoginFailedRecognizer(labels.login_failed),
+            LoginErrorRecognizer(labels.login_error),
+            UnrecognizedCredentialsRecognizer(labels.unrecognized_credentials),
+            GatewayConnectionFailedRecognizer(labels.gateway_connection_failed),
             TooManyFailedLoginAttemptsRecognizer(
                 labels.too_many_failed_login_attempts,
                 config.relogin_after_mfa_timeout,
@@ -265,7 +298,8 @@ async def run_control_loop(
     wrapped around the entire JVM invocation) around one lap of
     `_run_one_cycle`. Gateway/TWS restarts on a schedule daily and that
     restart kills the whole JVM, so a naive single-lap loop would stop on the
-    first restart. On `PROCESS_EXITED`, checks the `autorestart` marker file
+    first restart. On `PROCESS_CLOSED`/`PROCESS_EXITED`, checks the
+    `autorestart` marker file
     (`login.is_restart`) -- if present, Gateway expects a relaunch that skips
     full authentication, so loop back to `launch_instance`; if absent, this
     was a genuine unscheduled exit and the loop stops for good. Every other
@@ -277,6 +311,20 @@ async def run_control_loop(
     -- matching IBC's own `ibcstart.sh` and ibctl; the marker's mere presence
     is not sufficient on its own.
 
+    Three more cases relaunch, unbounded (IBC parity -- no retry cap, see
+    #60): `LoginFrameTimeoutError` (the login frame itself never appeared --
+    IBC error code 1112, always relaunched, not gated by any config) keeps
+    the current `restart_hash`, matching `ibcstart.sh`'s no-op branch for
+    1112, so a frame timeout after a scheduled restart still relogins
+    silently. `MfaTimeoutError` when `Config.mfa_timeout_action` is
+    `RESTART` relaunches with a full fresh login (`restart_hash=None`);
+    `EXIT`, the default, re-raises instead so the caller sees it.
+    `recognisers.TransientLoginError` (a "Login failed"/"Login Error"
+    dialog, or a Gateway "Connection to server failed" reason that isn't a
+    known credential/account one -- gitea #62) always relaunches with a full
+    fresh login, matching IBC's own unconditional cold-restart for these
+    dialogs.
+
     Cancelling this coroutine's own task requests a graceful stop at any
     point, including mid-relaunch, and always returns
     `ShutdownCause.REQUESTED` rather than propagating `CancelledError` --
@@ -286,9 +334,36 @@ async def run_control_loop(
     restart_hash: str | None = None
     try:
         while True:
-            cause, settings_dir = await _run_one_cycle(
-                config, agent_jar, labels, restart_hash=restart_hash
-            )
+            try:
+                cause, settings_dir = await _run_one_cycle(
+                    config, agent_jar, labels, restart_hash=restart_hash
+                )
+            except LoginFrameTimeoutError as exc:
+                logger.warning(
+                    "IBController > login frame never appeared -- relaunching "
+                    "(restart hash=%s): %s",
+                    restart_hash,
+                    exc,
+                )
+                continue
+            except MfaTimeoutError as exc:
+                if config.mfa_timeout_action is not MfaTimeoutAction.RESTART:
+                    raise
+                restart_hash = None
+                logger.warning(
+                    "IBController > mfa_timeout_action=restart -- relaunching "
+                    "with a full fresh login: %s",
+                    exc,
+                )
+                continue
+            except TransientLoginError as exc:
+                restart_hash = None
+                logger.warning(
+                    "IBController > transient login failure -- relaunching "
+                    "with a full fresh login: %s",
+                    exc,
+                )
+                continue
             if cause is ShutdownCause.COLD_RESTART:
                 restart_hash = None
                 logger.warning(
@@ -296,9 +371,7 @@ async def run_control_loop(
                     "with a full fresh login (no restart hash)"
                 )
                 continue
-            if cause is ShutdownCause.PROCESS_EXITED and await _is_restart_with_grace(
-                settings_dir
-            ):
+            if cause in _PROCESS_GONE and await _is_restart_with_grace(settings_dir):
                 restart_hash = await find_autorestart_hash(settings_dir)
                 logger.warning(
                     "Gateway restarted on its own schedule (autorestart marker "
@@ -404,21 +477,31 @@ async def _run_phase_watching_process(
     process_done: asyncio.Task,
     dispatcher_tasks: Sequence[asyncio.Task],
     process: _HasReturncode,
+    watcher: asyncio.Task[None] | None = None,
 ) -> None:
     """Runs `phase` (login or settings application) racing it against
     `process_done`/`dispatcher_tasks` via `_wait_for_first_completion` --
     the same mechanism the READY-state wait already uses for `watcher`/
     `scheduled_shutdown`, extended to cover the phases that run before it.
 
+    `watcher`, when given, is raced too (gitea #62): a credential/transient
+    dialog caught by `recognisers.watch_for_unprompted_windows` during login
+    must abort the phase immediately, not wait out `phase`'s own timeout.
+    Not owned by this function -- it keeps running for the rest of the
+    cycle, so it's never cancelled here, only `phase` is.
+
     If `phase` finishes first, awaits it to completion, propagating its
     result or exception unchanged -- a login/settings failure that isn't
-    caused by the process dying is not a `ShutdownCause`. If the process or
-    a dispatcher task finishes first instead, cancels `phase` and raises
+    caused by the process dying is not a `ShutdownCause`. Same for
+    `watcher` finishing first: its exception (`recognisers.LoginFailedError`/
+    `TransientLoginError`) propagates unchanged too. If the process or a
+    dispatcher task finishes first instead, cancels `phase` and raises
     `_PhaseAborted` with the matching cause."""
     phase_task = asyncio.ensure_future(phase)
+    main_tasks = [phase_task, watcher] if watcher is not None else [phase_task]
     try:
         finished = await _wait_for_first_completion(
-            main_tasks=[phase_task],
+            main_tasks=main_tasks,
             process_done=process_done,
             dispatcher_tasks=dispatcher_tasks,
             process=process,
@@ -426,8 +509,11 @@ async def _run_phase_watching_process(
         if finished is phase_task:
             await phase_task
             return
+        if watcher is not None and finished is watcher:
+            await watcher
+            return
         cause = (
-            ShutdownCause.PROCESS_EXITED
+            _process_gone_cause(process.returncode)
             if process.returncode is not None
             else ShutdownCause.CONNECTION_LOST
         )
@@ -527,6 +613,7 @@ async def _run_one_cycle(  # noqa: PLR0915
                 process_done=process_done,
                 dispatcher_tasks=launched.dispatcher.tasks,
                 process=launched.process,
+                watcher=watcher,
             )
             logger.info("IBController > login completed, state=%s", manager.state)
 
@@ -539,6 +626,7 @@ async def _run_one_cycle(  # noqa: PLR0915
                 process_done=process_done,
                 dispatcher_tasks=launched.dispatcher.tasks,
                 process=launched.process,
+                watcher=watcher,
             )
 
             _log_transition(state, StartupState.READY)
@@ -560,9 +648,12 @@ async def _run_one_cycle(  # noqa: PLR0915
                     await scheduled_shutdown
 
             if finished is watcher:
-                exc = watcher.exception()
-                cause = ShutdownCause.LOGIN_FAILED
-                logger.warning("background watcher ended, raising=%r", exc)
+                # Re-raise the recogniser's own exception unchanged (same as
+                # `_run_phase_watching_process`'s watcher branch above) --
+                # a credential/transient dialog can show up after login
+                # completes too (e.g. a reconnect attempt), and must be
+                # classified the same way regardless of phase (gitea #62).
+                await watcher
             elif finished is scheduled_shutdown:
                 cause = scheduled_shutdown.result()
                 logger.warning(
@@ -576,7 +667,7 @@ async def _run_one_cycle(  # noqa: PLR0915
                 # own -- `returncode` is ground truth, and
                 # `_wait_for_first_completion` already gave it a short grace
                 # period to catch up before returning.
-                cause = ShutdownCause.PROCESS_EXITED
+                cause = _process_gone_cause(launched.process.returncode)
                 logger.warning(
                     "agent process exited on its own (returncode=%s)",
                     launched.process.returncode,

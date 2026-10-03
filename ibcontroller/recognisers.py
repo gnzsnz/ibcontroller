@@ -39,8 +39,11 @@ from ibcontroller.labels import (
     AcceptIncomingConnectionLabels,
     DismissRule,
     ExistingSessionLabels,
+    GatewayConnectionFailedLabels,
+    LoginErrorLabels,
     LoginFailedLabels,
     TooManyFailedLoginAttemptsLabels,
+    UnrecognizedCredentialsLabels,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +51,8 @@ logger = logging.getLogger(__name__)
 _WAIT_PATTERN = re.compile(
     r"Please wait (?:(\d+) minutes? )?(?:& )?(?:(\d+) seconds?)?"
 )
+
+_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
 
 def _parse_wait_seconds(message: str) -> float:
@@ -60,11 +65,29 @@ def _parse_wait_seconds(message: str) -> float:
     return float(minutes * 60 + seconds + 3)
 
 
+def _strip_html(text: str) -> str:
+    """Strips HTML tags from an IB `JTextPane` message (always HTML, e.g.
+    `<html>...<br><br>...</html>`), collapsing the whitespace left behind."""
+    return re.sub(r"\s+", " ", _HTML_TAG_PATTERN.sub(" ", text)).strip()
+
+
 class LoginFailedError(Exception):
-    """Raised by `LoginFailedRecognizer.handle` after dismissing a real
-    "Login failed" dialog -- signals that a cold restart is needed. Not
-    raised for a bug in this recogniser, which propagates as whatever
-    exception it actually is."""
+    """Raised for a real credential/account rejection (wrong password,
+    wrong username for the trading mode, a known non-brokerage reason) --
+    signals exit 77 (no retry, account-lockout risk -- gitea #60/#62). Not
+    raised for a bug in a recogniser, which propagates as whatever exception
+    it actually is."""
+
+
+class TransientLoginError(Exception):
+    """Raised for a login-blocking dialog that is a server-side condition,
+    not a credential rejection (a "Login failed"/"Login Error" dialog, or a
+    Gateway "Connection to server failed" reason not in `known_reasons` --
+    e.g. a stale restart token). `run_control_loop` catches this and
+    relaunches unbounded with a full fresh login, the same shape as a
+    scheduled `ShutdownCause.COLD_RESTART` -- matches IBC's own unconditional
+    cold-restart for these dialogs (gitea #62). Never reaches `cli.py`'s
+    exit-code table under normal operation."""
 
 
 class Recognizer(Protocol):
@@ -138,10 +161,12 @@ class TooManyFailedLoginAttemptsRecognizer:
 
     When `relogin_enabled` is `True`, dismisses the dialog and calls
     `schedule_retry` with the wait time (in seconds) parsed from the
-    message. When `False`, the dialog is left untouched for manual
-    handling. `schedule_retry` is a plain, synchronous callable -- it's
-    expected to schedule the actual retry as a background task, since
-    `handle()` returns immediately without waiting out the cooldown."""
+    message. When `False`, this state won't resolve itself -- the dialog is
+    left on screen (IBC parity) and `LoginFailedError` is raised (exit 77,
+    not a retry -- gitea #62). `schedule_retry` is a plain, synchronous
+    callable -- it's expected to schedule the actual retry as a background
+    task, since `handle()` returns immediately without waiting out the
+    cooldown."""
 
     def __init__(
         self,
@@ -173,10 +198,9 @@ class TooManyFailedLoginAttemptsRecognizer:
     ) -> None:
         if not self._relogin_enabled:
             logger.warning(
-                "too many failed login attempts -- relogin disabled, "
-                "dialog left for manual handling"
+                "too many failed login attempts -- relogin disabled, stopping"
             )
-            return
+            raise LoginFailedError("too many failed login attempts, relogin disabled")
         message = self._matched_text(components) or ""
         wait_seconds = _parse_wait_seconds(message)
         logger.warning(
@@ -191,9 +215,11 @@ class TooManyFailedLoginAttemptsRecognizer:
 
 
 class LoginFailedRecognizer:
-    """Matches a "Login failed" dialog by window title. Dismisses it and
-    raises `LoginFailedError` -- the restart itself isn't this recogniser's
-    job, only signalling that one is needed."""
+    """Matches a "Login failed" dialog by window title (ported from IBC's
+    `LoginFailedDialogHandler`). IB reuses this title for a "server
+    disconnected" condition, not rejected credentials (IBC's own commit
+    history -- gitea #62). Dismisses it and raises `TransientLoginError`,
+    matching IBC's own unconditional cold-restart for this dialog."""
 
     def __init__(self, labels: LoginFailedLabels) -> None:
         self._labels = labels
@@ -212,8 +238,121 @@ class LoginFailedRecognizer:
             self._labels.dismiss_button,
             window_id=event.window.window_id,
         )
-        logger.warning("IBController > login failed -- cold restart required")
-        raise LoginFailedError("login failed; cold restart required")
+        logger.warning("IBController > login failed -- transient, relaunching")
+        raise TransientLoginError("login failed; server disconnected")
+
+
+class LoginErrorRecognizer:
+    """Matches a "Login Error" dialog by window title (ported from IBC's
+    `LoginErrorDialogHandler`, e.g. "Login failed - Server disconnected,
+    please try again") -- always a transient server condition, never a
+    credential rejection. No prior ibcontroller equivalent (gitea #62).
+    Logs every text component (HTML stripped), as IBC does, dismisses it,
+    and raises `TransientLoginError`."""
+
+    def __init__(self, labels: LoginErrorLabels) -> None:
+        self._labels = labels
+
+    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
+        return self._labels.title in (event.window.title or "")
+
+    async def handle(
+        self,
+        event: WindowEvent,
+        components: list[Component],
+        dispatcher: Dispatcher,
+    ) -> None:
+        texts = []
+        for c in components:
+            raw = c.text if c.text is not None else c.accessible_name
+            if raw is not None:
+                texts.append(_strip_html(raw))
+        logger.warning("IBController > login error: %s", " | ".join(texts))
+        await click(
+            dispatcher,
+            self._labels.dismiss_button,
+            window_id=event.window.window_id,
+        )
+        raise TransientLoginError("login error dialog; server disconnected")
+
+
+class UnrecognizedCredentialsRecognizer:
+    """Matches the "Unrecognized Username or Password" dialog by window
+    title -- a real rejected login, distinct from `LoginFailedRecognizer`'s
+    dialog despite the similar name. No IBC equivalent (IBC never handles
+    this one, leaves it on screen -- gitea #62). Dismisses it and raises
+    `LoginFailedError`."""
+
+    def __init__(self, labels: UnrecognizedCredentialsLabels) -> None:
+        self._labels = labels
+
+    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
+        return self._labels.title in (event.window.title or "")
+
+    async def handle(
+        self,
+        event: WindowEvent,
+        components: list[Component],
+        dispatcher: Dispatcher,
+    ) -> None:
+        await click(
+            dispatcher,
+            self._labels.dismiss_button,
+            window_id=event.window.window_id,
+        )
+        logger.warning(
+            "IBController > unrecognized username or password -- login rejected"
+        )
+        raise LoginFailedError("unrecognized username or password")
+
+
+class GatewayConnectionFailedRecognizer:
+    """Matches Gateway's generic `JDialog` titled "Gateway" (ported from
+    IBC's `GatewayDialogHandler`) whose text, HTML-stripped, starts with
+    `labels.message_prefix` -- that title is reused for unrelated dialogs
+    too, so the prefixed text is the real signal, not the title alone.
+
+    Always dismisses and logs the text, like IBC. A reason listed in
+    `labels.known_reasons` (e.g. "multiple Paper Trading users") is a
+    credential/account problem -- raises `LoginFailedError` (exit 77, no
+    retry). Any other reason (e.g. a stale restart token, IBC's own known
+    cause for this dialog) is transient -- raises `TransientLoginError`
+    (gitea #62)."""
+
+    def __init__(self, labels: GatewayConnectionFailedLabels) -> None:
+        self._labels = labels
+
+    def _stripped_text(self, components: list[Component]) -> str | None:
+        for c in components:
+            raw = c.text if c.text is not None else c.accessible_name
+            if raw is None:
+                continue
+            stripped = _strip_html(raw)
+            if stripped.startswith(self._labels.message_prefix):
+                return stripped
+        return None
+
+    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
+        if self._labels.title not in (event.window.title or ""):
+            return False
+        return self._stripped_text(components) is not None
+
+    async def handle(
+        self,
+        event: WindowEvent,
+        components: list[Component],
+        dispatcher: Dispatcher,
+    ) -> None:
+        text = self._stripped_text(components) or ""
+        logger.warning("IBController > %s", text)
+        await click(
+            dispatcher,
+            self._labels.dismiss_button,
+            window_id=event.window.window_id,
+        )
+        if any(reason in text for reason in self._labels.known_reasons):
+            raise LoginFailedError(f"gateway connection failed: {text}")
+        raise TransientLoginError(f"gateway connection failed: {text}")
 
 
 class ExistingSessionRecognizer:

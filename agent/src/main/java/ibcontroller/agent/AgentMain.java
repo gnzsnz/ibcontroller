@@ -133,6 +133,14 @@ public final class AgentMain {
      * Python and read here -- the agent never invents paths or levels itself. When
      * {@code ibcontroller.logfile} is absent (e.g. {@code make run}), logs go to
      * stderr only, same as before this mechanism existed.
+     *
+     * <p>Rotation (gitea #32): {@code -Dibcontroller.logfile.maxbytes=<N>} and
+     * {@code -Dibcontroller.logfile.backupcount=<N>} mirror Python's own
+     * {@code log_max_bytes}/{@code log_backup_count}. {@code FileHandler}'s own
+     * fd can't be rotated externally (the JVM keeps writing to a renamed/unlinked
+     * inode), so this uses its 4-arg constructor, which does native generation
+     * rotation on the JVM's own thread. {@code maxbytes=0} (the default if the
+     * property is absent) keeps the old unbounded, append-only file.
      */
     private static void configureLogging() throws Exception {
         Logger root = Logger.getLogger("");
@@ -145,7 +153,14 @@ public final class AgentMain {
 
         String logFile = System.getProperty("ibcontroller.logfile");
         if (logFile != null && !logFile.isEmpty()) {
-            FileHandler fileHandler = new FileHandler(logFile, true);
+            int maxBytes = Integer.parseInt(
+                    System.getProperty("ibcontroller.logfile.maxbytes", "0"));
+            int backupCount = Integer.parseInt(
+                    System.getProperty("ibcontroller.logfile.backupcount", "0"));
+            FileHandler fileHandler =
+                    maxBytes > 0
+                            ? new FileHandler(logFile, maxBytes, Math.max(backupCount, 1), true)
+                            : new FileHandler(logFile, true);
             fileHandler.setFormatter(new SimpleFormatter());
             root.addHandler(fileHandler);
         } else {

@@ -12,7 +12,13 @@ from pathlib import Path
 import attrs
 import pytest
 
-from ibcontroller.config import ConfigError, TradingMode, load_config
+from ibcontroller.config import (
+    ConfigError,
+    MissingCredentialsError,
+    TradingMode,
+    _default_time_zone,
+    load_config,
+)
 
 
 def _write_toml(tmp_path, text):
@@ -88,12 +94,41 @@ def test_missing_credentials_raise_config_error(monkeypatch, tmp_path):
     # it search upward and pick up the repo's real, gitignored .env.
     monkeypatch.delenv("IBC_USERID", raising=False)
     monkeypatch.delenv("IBC_PASSWORD", raising=False)
-    with pytest.raises(ConfigError, match="credentials not found"):
+    with pytest.raises(MissingCredentialsError, match="credentials not found"):
         load_config(
             config_dir=tmp_path,
             log_dir=tmp_path,
             dotenv_path=tmp_path / "nonexistent.env",
         )
+
+
+def test_invalid_value_from_env_is_not_missing_credentials_error(monkeypatch, tmp_path):
+    """Gitea #63: `cli.py` must only show the credentials hint for a real
+    missing-credentials failure -- any other bad value is a plain
+    `ConfigError`, not `MissingCredentialsError`."""
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("IBC_TRADING_MODE", "xyz")
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert not isinstance(exc_info.value, MissingCredentialsError)
+
+
+def test_invalid_enum_value_from_env_names_the_field(monkeypatch, tmp_path):
+    """Gitea #63: the field name must survive, not just the group summary
+    ("N errors occured ... (N sub-exception)")."""
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("IBC_TRADING_MODE", "xyz")
+    with pytest.raises(ConfigError, match="trading_mode") as exc_info:
+        load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert "sub-exception" not in str(exc_info.value)
+
+
+def test_invalid_enum_value_from_toml_names_the_field(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    _write_toml(tmp_path, 'trading_mode = "xyz"\n')
+    with pytest.raises(ConfigError, match="trading_mode") as exc_info:
+        load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert "sub-exception" not in str(exc_info.value)
 
 
 def test_log_level_converts_name_to_constant(monkeypatch, tmp_path):
@@ -106,8 +141,24 @@ def test_log_level_converts_name_to_constant(monkeypatch, tmp_path):
 def test_log_level_rejects_bad_name(monkeypatch, tmp_path):
     _set_credentials(monkeypatch)
     monkeypatch.setenv("IBC_LOG_LEVEL", "bogus")
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError, match="log_level"):
         load_config(config_dir=tmp_path, log_dir=tmp_path)
+
+
+def test_log_rotation_fields_default(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.log_max_bytes == 10_485_760
+    assert config.log_backup_count == 5
+
+
+def test_log_rotation_fields_env_override(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("IBC_LOG_MAX_BYTES", "1048576")
+    monkeypatch.setenv("IBC_LOG_BACKUP_COUNT", "3")
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.log_max_bytes == 1_048_576
+    assert config.log_backup_count == 3
 
 
 def test_tws_settings_path_field(monkeypatch, tmp_path):
@@ -214,6 +265,74 @@ def test_load_config_prints_one_line_per_key_credentials_masked(
     assert "secret-pass" not in out
     assert "userid=*******" in out
     assert "password=*******" in out
+
+
+def test_empty_env_var_optional_field_falls_back_to_none(monkeypatch, tmp_path):
+    """gitea #67: `IBC_XYZ=` must be treated as absent, matching IBC's own
+    getString(key, "").equals("") convention -- not fed through as a real value."""
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("IBC_AUTO_LOGOFF_TIME", "")
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.auto_logoff_time is None
+
+
+def test_empty_env_var_non_optional_field_falls_back_to_default(monkeypatch, tmp_path):
+    """Same bug (#67), non-Optional side: an empty value used to raise ConfigError
+    instead of falling back to the field's default."""
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("IBC_MFA_EXIT_INTERVAL", "")
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.mfa_exit_interval == 60.0
+
+
+def test_empty_password_file_falls_back_to_plain_var(monkeypatch, tmp_path):
+    """An empty secrets file (`IBC_PASSWORD_FILE` pointing at a blank file) must not
+    win over -- or be accepted in place of -- a real `IBC_PASSWORD`."""
+    _set_credentials(monkeypatch)
+    secret_path = tmp_path / "password.txt"
+    secret_path.write_text("\n")
+    monkeypatch.setenv("IBC_PASSWORD_FILE", str(secret_path))
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.password.get_secret_value() == "pass"
+
+
+def test_default_time_zone_falls_back_to_etc_localtime(monkeypatch, tmp_path):
+    monkeypatch.delenv("TZ", raising=False)
+    zoneinfo_target = tmp_path / "zoneinfo" / "Europe" / "Zurich"
+    zoneinfo_target.parent.mkdir(parents=True)
+    zoneinfo_target.write_text("")
+    localtime = tmp_path / "localtime"
+    localtime.symlink_to(zoneinfo_target)
+    monkeypatch.setattr(
+        "ibcontroller.config.Path",
+        lambda p: localtime if p == "/etc/localtime" else Path(p),
+    )
+    assert _default_time_zone() == "Europe/Zurich"
+
+
+def test_default_time_zone_none_when_unresolved(monkeypatch):
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.setattr(
+        "ibcontroller.config.Path", lambda p: Path("/nonexistent/localtime")
+    )
+    assert _default_time_zone() is None
+
+
+def test_time_zone_defaults_from_tz_env_var(monkeypatch, tmp_path):
+    """gitea #68: no IBC_TIME_ZONE needed -- the container's own TZ (already the
+    Docker convention) is picked up automatically."""
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("TZ", "Europe/Zurich")
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.time_zone == "Europe/Zurich"
+
+
+def test_time_zone_env_var_overrides_tz_default(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("TZ", "Europe/Zurich")
+    monkeypatch.setenv("IBC_TIME_ZONE", "America/New_York")
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.time_zone == "America/New_York"
 
 
 def test_legacy_section_headers_raise_clearly(monkeypatch, tmp_path):

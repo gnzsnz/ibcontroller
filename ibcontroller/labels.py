@@ -85,7 +85,48 @@ class AcceptIncomingConnectionLabels:
 
 @attrs.define(frozen=True)
 class LoginFailedLabels:
+    """The "Login failed" dialog -- despite the wording, IB reuses this
+    title for a "server disconnected" condition, not rejected credentials
+    (IBC's own commit history, gitea #62). See
+    `recognisers.LoginFailedRecognizer`."""
+
     title: str
+    dismiss_button: str
+
+
+@attrs.define(frozen=True)
+class LoginErrorLabels:
+    """The "Login Error" dialog (ported from IBC's `LoginErrorDialogHandler`)
+    -- a transient server condition, never a credential rejection. See
+    `recognisers.LoginErrorRecognizer`."""
+
+    title: str
+    dismiss_button: str
+
+
+@attrs.define(frozen=True)
+class UnrecognizedCredentialsLabels:
+    """The "Unrecognized Username or Password" dialog -- a real rejected
+    login, distinct from `LoginFailedLabels`'s dialog despite the similar
+    name. See `recognisers.UnrecognizedCredentialsRecognizer`."""
+
+    title: str
+    dismiss_button: str
+
+
+@attrs.define(frozen=True)
+class GatewayConnectionFailedLabels:
+    """The generic `JDialog` titled "Gateway" IBKR reuses for several
+    unrelated purposes (ported from IBC's `GatewayDialogHandler`); only the
+    ones whose text starts with `message_prefix` are a login outcome.
+    `known_reasons` lists the reason substrings (checked against the
+    HTML-stripped text) that mean a credential/account problem -- anything
+    else is transient (e.g. a stale restart token). See
+    `recognisers.GatewayConnectionFailedRecognizer`."""
+
+    title: str
+    message_prefix: str
+    known_reasons: list[str]
     dismiss_button: str
 
 
@@ -197,6 +238,9 @@ class Labels:
     existing_session: ExistingSessionLabels
     accept_incoming_connection: AcceptIncomingConnectionLabels
     login_failed: LoginFailedLabels
+    login_error: LoginErrorLabels
+    unrecognized_credentials: UnrecognizedCredentialsLabels
+    gateway_connection_failed: GatewayConnectionFailedLabels
     too_many_failed_login_attempts: TooManyFailedLoginAttemptsLabels
     settings: SettingsLabels
     shutdown: ShutdownLabels

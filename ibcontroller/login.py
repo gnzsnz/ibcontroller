@@ -97,6 +97,21 @@ class LoginError(Exception):
     other condition this module can't recover from on its own."""
 
 
+class LoginFrameTimeoutError(LoginError):
+    """The login frame never appeared within `login_dialog_display_timeout`
+    -- matches IBC's own error code 1112, always relaunched unconditionally
+    by `control_loop.run_control_loop` (not gated by any config field)."""
+
+
+class MfaTimeoutError(LoginError):
+    """Login did not complete once the 2FA dialog had appeared: either the
+    push went unanswered until the login deadline, or login still hadn't
+    completed `mfa_exit_interval` seconds after 2FA closed (IBC's own
+    `SecondFactorAuthenticationExitInterval` watchdog).
+    `Config.mfa_timeout_action` decides what `control_loop.run_control_loop`
+    does with it: `exit` propagates as-is, `restart` relaunches instead."""
+
+
 async def find_autorestart_hash(settings_dir: str | Path) -> str | None:
     """Locates Gateway/TWS's own `autorestart` marker file under
     `settings_dir` and returns the account-hash subdirectory name it lives
@@ -201,7 +216,7 @@ class LoginManager:
                 timeout=login_timeout,
             )
         except TimeoutError as exc:
-            raise LoginError(
+            raise LoginFrameTimeoutError(
                 f"login frame never appeared within {login_timeout}s "
                 f"(expected one of {titles})"
             ) from exc
@@ -312,11 +327,20 @@ class LoginManager:
             else:
                 await self._wait_for_outcome_tws(outcome_timeout)
         except TimeoutError as exc:
-            raise LoginError(
+            # 2FA dialog seen: an unanswered or stalled 2FA, not a hung login
+            # (e.g. no network -- the message must say which, not always
+            # blame "mfa_timeout" when no 2FA dialog ever appeared).
+            if self.state is LoginState.MFA_IN_PROGRESS:
+                message = (
+                    f"login did not complete within {outcome_timeout}s of "
+                    "the 2FA dialog appearing (mfa_timeout)"
+                )
+                raise MfaTimeoutError(message) from exc
+            message = (
                 f"login did not complete within {outcome_timeout}s of "
-                "credentials being submitted "
-                "(mfa_timeout)"
-            ) from exc
+                "credentials being submitted, no 2FA dialog seen"
+            )
+            raise LoginError(message) from exc
 
     async def _wait_for_outcome_tws(self, timeout: float | None = None) -> None:
         """Loops over `window_opened` events (other than the login frame's
@@ -426,7 +450,7 @@ class LoginManager:
             try:
                 await self._wait_for_outcome_tws(self._config.mfa_exit_interval)
             except TimeoutError as exc:
-                raise LoginError(
+                raise MfaTimeoutError(
                     "login did not complete within "
                     f"{self._config.mfa_exit_interval}s "
                     "of second factor authentication completing (IBC's own "
@@ -555,7 +579,7 @@ class LoginManager:
                     timeout=self._config.mfa_exit_interval,
                 )
             except TimeoutError as exc:
-                raise LoginError(
+                raise MfaTimeoutError(
                     "login did not complete within "
                     f"{self._config.mfa_exit_interval}s "
                     "of second factor authentication completing (IBC's own "

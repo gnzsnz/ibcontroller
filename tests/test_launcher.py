@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import time
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Any
@@ -24,6 +25,7 @@ from ibcontroller.config import Config, TradingMode
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
 from ibcontroller.launcher import (
+    AgentStartupError,
     LaunchedInstance,
     LauncherError,
     _build_classpath,
@@ -40,6 +42,7 @@ from ibcontroller.launcher import (
     _read_vmoptions_file,
     _resolve_program_path,
     _resolve_tws_path,
+    _terminate_and_wait,
     _version_sort_key,
     _wait_for_ready,
     build_launch_plan,
@@ -155,6 +158,44 @@ def test_ensure_jts_ini_no_rewrite_when_already_correct(tmp_path):
     _ensure_jts_ini(tmp_path, is_gateway=True)
     assert path.read_text() == before
     assert path.stat().st_mtime_ns == before_mtime
+
+
+def test_ensure_jts_ini_writes_time_zone_when_given(tmp_path):
+    _ensure_jts_ini(tmp_path, is_gateway=False, time_zone="Europe/Zurich")
+    lines = (tmp_path / "jts.ini").read_text().splitlines()
+    assert "TimeZone=Europe/Zurich" in lines
+
+
+def test_ensure_jts_ini_omits_time_zone_when_unresolved(tmp_path):
+    _ensure_jts_ini(tmp_path, is_gateway=False, time_zone=None)
+    lines = (tmp_path / "jts.ini").read_text().splitlines()
+    assert not any(line.startswith("TimeZone=") for line in lines)
+
+
+def test_ensure_jts_ini_never_overwrites_existing_time_zone_when_auto_detected(
+    tmp_path, monkeypatch
+):
+    """gitea #68: a value matching what `_default_time_zone` would auto-detect
+    is treated as a guess, same as s3store -- never reverts an existing line."""
+    monkeypatch.setenv("TZ", "Europe/Zurich")
+    (tmp_path / "jts.ini").write_text("[Logon]\nTimeZone=America/New_York\n")
+    _ensure_jts_ini(tmp_path, is_gateway=False, time_zone="Europe/Zurich")
+    lines = (tmp_path / "jts.ini").read_text().splitlines()
+    assert "TimeZone=America/New_York" in lines
+    assert "TimeZone=Europe/Zurich" not in lines
+
+
+def test_ensure_jts_ini_overwrites_time_zone_when_explicitly_set(tmp_path, monkeypatch):
+    """gitea #68: a value that differs from what `_default_time_zone` would
+    auto-detect right now means the user explicitly set IBC_TIME_ZONE (or
+    ibcontroller.toml's time_zone) -- that deliberate choice does overwrite a
+    stale existing line."""
+    monkeypatch.setenv("TZ", "UTC")
+    (tmp_path / "jts.ini").write_text("[Logon]\nTimeZone=America/New_York\n")
+    _ensure_jts_ini(tmp_path, is_gateway=False, time_zone="Europe/Zurich")
+    lines = (tmp_path / "jts.ini").read_text().splitlines()
+    assert "TimeZone=Europe/Zurich" in lines
+    assert "TimeZone=America/New_York" not in lines
 
 
 def test_build_launch_plan_creates_jts_ini(tmp_path):
@@ -1209,6 +1250,18 @@ async def test_wait_for_ready_times_out_when_nothing_ever_listens(sock_path):
         await _wait_for_ready(str(sock_path), timeout=0.5)
 
 
+async def test_wait_for_ready_fails_fast_when_process_already_exited(sock_path):
+    """A JVM that exits before binding its socket (e.g. the previous instance
+    still held it) must fail within one poll as `AgentStartupError`, not after
+    the full `timeout` as a generic `LauncherError` (gitea #60, case 13)."""
+    process = _FakeProcess(returncode=1)
+    start = time.monotonic()
+    with pytest.raises(AgentStartupError, match="returncode=1"):
+        # pyrefly: ignore [bad-argument-type]
+        await _wait_for_ready(str(sock_path), timeout=5.0, process=process)
+    assert time.monotonic() - start < 1.0
+
+
 # --- _drain_stdout (async, off-loop write via configure_gateway_stdout) -------------
 
 
@@ -1272,6 +1325,7 @@ class _FakeProcess:
     def __init__(self, returncode: int | None) -> None:
         self.returncode = returncode
         self.terminated = False
+        self.killed = False
         self._wait_event = asyncio.Event()
         if returncode is not None:
             self._wait_event.set()
@@ -1286,9 +1340,49 @@ class _FakeProcess:
         self.terminated = True
         self._wait_event.set()
 
+    def kill(self) -> None:
+        if self.returncode is not None:
+            raise ProcessLookupError()
+        self.killed = True
+        self._wait_event.set()
+
     async def wait(self) -> int:
         await self._wait_event.wait()
         return self.returncode if self.returncode is not None else -15
+
+
+class _FakeProcessIgnoringSigterm(_FakeProcess):
+    """A process that survives SIGTERM -- only `kill()` unblocks `wait()`."""
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+
+async def test_terminate_and_wait_returns_only_after_exit():
+    process = _FakeProcess(returncode=None)
+    # pyrefly: ignore [bad-argument-type]
+    await _terminate_and_wait(process, timeout=1.0)
+    assert process.terminated
+    assert not process.killed
+    assert process._wait_event.is_set()
+
+
+async def test_terminate_and_wait_kills_when_sigterm_is_ignored():
+    process = _FakeProcessIgnoringSigterm(returncode=None)
+    # pyrefly: ignore [bad-argument-type]
+    await _terminate_and_wait(process, timeout=0.05)
+    assert process.terminated
+    assert process.killed
+
+
+async def test_terminate_and_wait_is_a_noop_on_an_exited_process():
+    """The never-ready path hit `ProcessLookupError` signalling a JVM that had
+    already exited (gitea #60, case 13) -- the fake raises it if signalled."""
+    process = _FakeProcess(returncode=1)
+    # pyrefly: ignore [bad-argument-type]
+    await _terminate_and_wait(process, timeout=0.05)
+    assert not process.terminated
+    assert not process.killed
 
 
 async def _start_dispatcher(cmd_sock, event_sock) -> Dispatcher:

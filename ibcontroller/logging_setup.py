@@ -86,6 +86,16 @@ class _FlushFileHandler(logging.FileHandler):
         self.flush()
 
 
+class _FlushRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """RotatingFileHandler that flushes after every record -- same
+    reasoning as `_FlushFileHandler` above, just on the rotating base class so
+    rollover can still happen (`FileHandler` itself never rotates)."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        self.flush()
+
+
 def _stop_listeners(key: str | None = None) -> None:
     """Stop (drain, then join) every QueueListener registered under `key`, or
     every listener when `key` is None; closes each listener's handlers, which
@@ -99,14 +109,36 @@ def _stop_listeners(key: str | None = None) -> None:
 
 
 def _queued_file_handler(
-    path: Path, *, key: str, mode: str = "a", fmt: str = _FORMAT
+    path: Path,
+    *,
+    key: str,
+    mode: str = "a",
+    fmt: str = _FORMAT,
+    max_bytes: int = 0,
+    backup_count: int = 0,
 ) -> logging.handlers.QueueHandler:
     """Build one QueueHandler/QueueListener pair for `path` -- the QueueHandler
     is what callers attach to a logger (a synchronous `queue.put()`), the
-    QueueListener owns the real `_FlushFileHandler` and runs it on its own
-    thread. The listener is registered under `key` so `_stop_listeners`/reconfig
-    can find it."""
-    handler = _FlushFileHandler(path, mode=mode, encoding="utf-8")
+    QueueListener owns the real file handler and runs it on its own thread.
+    The listener is registered under `key` so `_stop_listeners`/reconfig can
+    find it.
+
+    `max_bytes > 0` swaps the plain `_FlushFileHandler` for
+    `_FlushRotatingFileHandler`, rotating at `max_bytes` and keeping
+    `backup_count` old files; rollover runs on the listener thread, so it's
+    single-threaded per stream and the queue absorbs its cost. `max_bytes=0`
+    (the default) keeps the old unbounded-file behaviour."""
+    handler: _FlushFileHandler | _FlushRotatingFileHandler
+    if max_bytes > 0:
+        handler = _FlushRotatingFileHandler(
+            path,
+            mode=mode,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+    else:
+        handler = _FlushFileHandler(path, mode=mode, encoding="utf-8")
     handler.setFormatter(logging.Formatter(fmt))
     q = queue.Queue()
     listener = logging.handlers.QueueListener(q, handler)
@@ -130,6 +162,8 @@ def configure_logging(
     log_dir: str | Path | None = None,
     filename: str = "ibcontroller.log",
     sink: str = "std",
+    max_bytes: int = 0,
+    backup_count: int = 0,
 ) -> None:
     """Configures the `ibcontroller` logger hierarchy (every submodule's
     `logging.getLogger(__name__)` is a child of it, e.g. `ibcontroller.dispatch`)
@@ -155,6 +189,10 @@ def configure_logging(
     uses for socket filenames (`ibcontroller-agent-{instance}-{cmd,events}.sock`,
     one shared runtime directory) -- one consistent scheme across all per-instance
     files.
+
+    `max_bytes > 0` rotates the file at that size, keeping `backup_count` old
+    ones; `max_bytes=0` (the default) is the old unbounded-file
+    behaviour. Ignored when `sink="std"`.
     """
     logger = logging.getLogger("ibcontroller")
     _stop_listeners("app")
@@ -171,7 +209,14 @@ def configure_logging(
             path = Path(log_dir)
             path.mkdir(parents=True, exist_ok=True)
             logger.addHandler(
-                _queued_file_handler(path / filename, key="app", mode="a", fmt=_FORMAT)
+                _queued_file_handler(
+                    path / filename,
+                    key="app",
+                    mode="a",
+                    fmt=_FORMAT,
+                    max_bytes=max_bytes,
+                    backup_count=backup_count,
+                )
             )
     else:
         raise ValueError(f"sink: expected 'std' or 'file', got {sink!r}")
@@ -182,6 +227,8 @@ def configure_trace(
     instance: str,
     enabled: bool,
     trace_dir: str | Path | None = None,
+    max_bytes: int = 0,
+    backup_count: int = 0,
 ) -> None:
     """Configures one instance's two trace streams, `ibcontroller.trace.{instance}`
     child loggers `.cmd` and `.event` -- the loggers `dispatch.py`'s `Dispatcher`
@@ -200,7 +247,10 @@ def configure_trace(
 
     Safe to call more than once for the same instance -- previous listeners for
     that instance are stopped first. Reconfiguring a different instance leaves
-    this one's streams untouched."""
+    this one's streams untouched.
+
+    `max_bytes`/`backup_count`: same rotation contract as `configure_logging`.
+    """
     key = f"trace:{instance}"
     _stop_listeners(key)
     cmd_logger = logging.getLogger(f"ibcontroller.trace.{instance}.cmd")
@@ -220,7 +270,12 @@ def configure_trace(
     event_logger.setLevel(logging.DEBUG)
     cmd_logger.addHandler(
         _queued_file_handler(
-            path / f"cmd-{instance}.jsonl", key=key, mode="w", fmt=_MESSAGE_ONLY_FORMAT
+            path / f"cmd-{instance}.jsonl",
+            key=key,
+            mode="w",
+            fmt=_MESSAGE_ONLY_FORMAT,
+            max_bytes=max_bytes,
+            backup_count=backup_count,
         )
     )
     event_logger.addHandler(
@@ -229,12 +284,19 @@ def configure_trace(
             key=key,
             mode="w",
             fmt=_MESSAGE_ONLY_FORMAT,
+            max_bytes=max_bytes,
+            backup_count=backup_count,
         )
     )
 
 
 def configure_gateway_stdout(
-    instance: str, log_dir: str | Path, *, sink: str = "std"
+    instance: str,
+    log_dir: str | Path,
+    *,
+    sink: str = "std",
+    max_bytes: int = 0,
+    backup_count: int = 0,
 ) -> logging.Logger:
     """Configures one instance's logger for the launched process's raw stdout
     (Gateway/TWS's own console/log4j output). `sink="file"` writes it, queued,
@@ -249,6 +311,9 @@ def configure_gateway_stdout(
 
     Safe to call more than once for the same instance -- previous listeners for
     that instance are stopped first, matching `configure_trace`'s own contract.
+
+    `max_bytes`/`backup_count`: same rotation contract as `configure_logging`;
+    ignored when `sink="std"`.
     """
     key = f"stdout:{instance}"
     _stop_listeners(key)
@@ -270,6 +335,8 @@ def configure_gateway_stdout(
                 key=key,
                 mode="a",
                 fmt=_MESSAGE_ONLY_FORMAT,
+                max_bytes=max_bytes,
+                backup_count=backup_count,
             )
         )
     else:

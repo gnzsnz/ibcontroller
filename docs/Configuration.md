@@ -60,6 +60,7 @@ Settings related to TWS/ibgateway.
 | `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | What to do when an existing session is detected -- see below | `"manual"` |
 | `auto_restart_time` | `IBC_AUTO_RESTART_TIME` | Daily auto-restart time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
 | `auto_logoff_time` | `IBC_AUTO_LOGOFF_TIME` | Daily auto-logoff time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
+| `time_zone` | `IBC_TIME_ZONE` | IANA zone name, e.g. `"Europe/Zurich"`, written to `jts.ini`'s `TimeZone` -- see below | auto-detected |
 
 ### Accept Incoming Connection
 
@@ -129,6 +130,21 @@ Time above, just selecting "Auto logoff" instead of "Auto restart". Omit this
 key (the default) to leave the existing setting unchanged. If both keys are
 set, Auto Restart Time wins -- set only one of the two in practice.
 
+### Time Zone
+
+**key:** `time_zone`
+**Environment variable:** `IBC_TIME_ZONE`
+
+IANA zone name, e.g. `"Europe/Zurich"`, written to `jts.ini`'s `TimeZone` key
+(under `[Logon]`) before every launch. No setup needed in the common case:
+auto-detected from the container's own `TZ` environment variable first, then
+from `/etc/localtime`'s zoneinfo symlink target; set `IBC_TIME_ZONE`
+explicitly only when the desired TWS/Gateway session time zone should differ
+from the host/container's own. Never overwrites a `TimeZone` line already
+present in `jts.ini` -- a value found there was set deliberately, either by
+you or by an earlier run of ibcontroller itself. Leaves the key untouched if
+nothing resolves.
+
 ### Cold Restart Time
 
 **key:** `cold_restart_time`
@@ -169,6 +185,7 @@ TWS/Gateway itself.
 | `mfa_timeout` | `IBC_MFA_TIMEOUT` | The real 2FA budget in seconds, mirroring IBKR's own external limit | `180.0` |
 | `relogin_after_mfa_timeout` | `IBC_RELOGIN_AFTER_MFA_TIMEOUT` | Restart the login attempt if 2FA times out (instead of giving up) | `false` |
 | `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | Bounds the wait after a timed-out 2FA when relogin is enabled | `60.0` |
+| `mfa_timeout_action` | `IBC_MFA_TIMEOUT_ACTION` | What to do when the 2FA push goes unanswered until `mfa_timeout` or `mfa_exit_interval` expires: `exit` (exit 75) or `restart` (relaunch with a fresh login) | `exit` |
 
 ## Diagnostics
 

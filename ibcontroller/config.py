@@ -63,6 +63,12 @@ class ConfigError(Exception):
     credentials) so callers (`cli.py`) only ever need to catch one type."""
 
 
+class MissingCredentialsError(ConfigError):
+    """Raised only when `IBC_USERID`/`IBC_PASSWORD` themselves are unset --
+    distinct from every other `ConfigError` so `cli.py` can show its
+    credentials hint only here."""
+
+
 def _find_credential_keys(data: Mapping[str, Any], prefix: str = "") -> list[str]:
     """Recursively searches a nested mapping for any keys that look like credentials.
     Returns the full dotted paths to those keys. Direct port of config_old.py's own
@@ -96,7 +102,11 @@ class _FileBackedEnvLoader(EnvLoader):
     file contents); otherwise falls back to the plain var, same as `EnvLoader`.
     Direct port of config_old.py's own `_env_or_file`, adapted to the `Loader` protocol
     (`__call__(settings_cls, options) -> LoadedSettings`, see loaders.py) rather than
-    a plain function -- typed-settings has no `_FILE` convention of its own."""
+    a plain function -- typed-settings has no `_FILE` convention of its own.
+
+    An empty value (`IBC_XYZ=`) is treated the same as the var being absent, not as a
+    real value. Matching container env-var idioms (Compose's `${VAR:-}`.
+    """
 
     def __call__(self, settings_cls: object, options: object) -> LoadedSettings:
         env = os.environ
@@ -110,8 +120,10 @@ class _FileBackedEnvLoader(EnvLoader):
                     value = secret_path.read_text(encoding="utf-8").strip()
                 except OSError as exc:
                     raise ConfigError(f"{file_varname}={secret_path}: {exc}") from exc
-                set_path(values, option.path, value)  # type: ignore[attr-defined]
-            elif varname in env:
+                if value:
+                    set_path(values, option.path, value)  # type: ignore[attr-defined]
+                    continue
+            if env.get(varname):
                 set_path(values, option.path, env[varname])  # type: ignore[attr-defined]
         return LoadedSettings(values, LoaderMeta(self))
 
@@ -142,6 +154,30 @@ def _expand_user(raw: object) -> str:
 
 def _optional_path_converter(raw: object) -> str | None:
     return None if raw is None else _expand_user(raw)
+
+
+def _default_time_zone() -> str | None:
+    """Auto-detects an IANA zone name (e.g. "Europe/Zurich") with no setup, so
+    Docker's own `TZ` convention (already honored by tzdata/log timestamps)
+    is enough -- checked first, then `/etc/localtime`'s zoneinfo symlink target
+    as a fallback for a deployment that sets a real system timezone but not
+    `TZ` itself. `None` (neither resolves) is a safe no-op: the `time_zone`
+    Config field's IBC_TIME_ZONE env var can still override either way, and
+    an unresolved value simply leaves jts.ini's TimeZone key untouched
+    (gitea #68)."""
+    tz = os.environ.get("TZ")
+    if tz:
+        return tz
+    localtime = Path("/etc/localtime")
+    if not localtime.exists():
+        return None
+    try:
+        parts = localtime.resolve().parts
+    except OSError:
+        return None
+    if "zoneinfo" not in parts:
+        return None
+    return "/".join(parts[parts.index("zoneinfo") + 1 :]) or None
 
 
 class TradingMode(StrEnum):
@@ -199,6 +235,17 @@ class DiagnosticWhen(StrEnum):
     NEVER = "never"
 
 
+class MfaTimeoutAction(StrEnum):
+    """What to do when login does not complete after the 2FA dialog appeared
+    (`login.MfaTimeoutError`): the push went unanswered until `mfa_timeout`,
+    or login still hadn't completed `mfa_exit_interval` seconds after 2FA
+    closed. IBC: --on2fatimeout. EXIT propagates the error (sysexits 75,
+    EX_TEMPFAIL); RESTART relaunches the instance with a full fresh login."""
+
+    EXIT = "exit"
+    RESTART = "restart"
+
+
 class AcceptIncomingConnections(StrEnum):
     """AcceptIncomingConnections is the user's choice for what to do when ibcontroller
     detects incoming API connections (see `AcceptIncomingConnectionsRecognizer` in
@@ -252,6 +299,12 @@ class Config:
     )
     existing_session_action: ExistingSessionAction = ExistingSessionAction.MANUAL
 
+    # jts.ini's TimeZone (IANA name, e.g. "Europe/Zurich") -- written by
+    # launcher._ensure_jts_ini. Auto-detected (gitea #68) so a Docker deployment
+    # needs no setup: the container's own TZ env var, then /etc/localtime's
+    # zoneinfo symlink target; None (unresolved) leaves the jts.ini key untouched.
+    time_zone: str | None = ts.option(factory=_default_time_zone)
+
     # Login/MFA timeout and retry settings
     # IBC: LoginDialogDisplayTimeout
     login_dialog_display_timeout: float = 60.0
@@ -261,6 +314,9 @@ class Config:
     relogin_after_mfa_timeout: bool = False
     # IBC: SecondFactorAuthenticationExitInterval
     mfa_exit_interval: float = 60.0
+    # IBC: --on2fatimeout. Only consulted when relogin_after_mfa_timeout is on
+    # and the mfa_exit_interval watchdog above actually fires.
+    mfa_timeout_action: MfaTimeoutAction = MfaTimeoutAction.EXIT
 
     # AutoRestartTime "hh:mm AM/PM" format (e.g. "08:00 AM")
     auto_restart_time: str | None = None  # None = leave the existing setting unchanged
@@ -316,6 +372,12 @@ class Config:
     # persistent log file instead. Does not affect configure_trace's NDJSON wire
     # trace, which stays file-only regardless (gitea #26).
     log_sink: LogSink = LogSink.STD
+    # Rotation (gitea #32) -- only respected when log_sink="file"; log_max_bytes=0
+    # disables rotation (unbounded files, the old behaviour). Defaults (10 MiB x 5
+    # backups) apply identically to ibcontroller's own log/trace files and, via
+    # launcher.py's -D props, to the Java agent's log file.
+    log_max_bytes: int = ts.option(default=10_485_760, converter=int)
+    log_backup_count: int = ts.option(default=5, converter=int)
 
     # Diagnostics -- see diagnostics.py. Off by default (diagnostic_when=never);
     # an opted-in deployment gets a structure dump logged for each matching
@@ -353,6 +415,10 @@ def load_config(
             sys.stdout.write(f"IBController > env {key}=******\n")
         elif key.startswith(ENV_PREFIX) and key not in ENV_SENSITIVE:
             sys.stdout.write(f"IBController > env {key}={val}\n")
+    # Flush: stdout is fully buffered (not line-buffered) when not a TTY (e.g. under
+    # Docker/`&`), so without this the dump sits in the buffer until process exit --
+    # only visible on shutdown, not at startup when it's actually useful (gitea #TBD).
+    sys.stdout.flush()
 
     _config_file = (
         Path(toml_path) if toml_path else Path(config_dir) / "ibcontroller.toml"
@@ -411,13 +477,18 @@ def load_config(
             converter=CONF_CONVERTER,
         )
     except TsError as exc:
-        raise ConfigError(str(exc)) from exc
+        # `InvalidSettingsError` (the common case -- a bad value) is a native
+        # `ExceptionGroup`: str(exc) is only the one-line summary ("N errors
+        # occured..."), the field name/reason live in .exceptions.
+        sub_errors = getattr(exc, "exceptions", None)
+        message = "\n".join(str(e) for e in sub_errors) if sub_errors else str(exc)
+        raise ConfigError(message) from exc
 
     if (
         _config.userid.get_secret_value() is None
         or _config.password.get_secret_value() is None
     ):
-        raise ConfigError(
+        raise MissingCredentialsError(
             "credentials not found -- set IBC_USERID and "
             "IBC_PASSWORD in the environment"
         )
@@ -425,5 +496,6 @@ def load_config(
     sys.stdout.write("IBController > Config: \n")
     for line in _format_config(_config):
         sys.stdout.write(f"IBController > config {line}\n")
+    sys.stdout.flush()  # same buffering reason as the env dump above
 
     return _config

@@ -19,6 +19,15 @@ def test_bundled_default_loads_and_structures():
     assert labels.accept_incoming_connection.accept_buttons == ["OK", "Yes"]
     assert labels.accept_incoming_connection.reject_buttons == ["No"]
     assert labels.login_failed.title == "Login failed"
+    assert labels.login_error.title == "Login Error"
+    assert labels.unrecognized_credentials.title == "Unrecognized Username or Password"
+    assert labels.gateway_connection_failed.title == "Gateway"
+    assert labels.gateway_connection_failed.message_prefix == (
+        "Connection to server failed:"
+    )
+    assert labels.gateway_connection_failed.known_reasons == [
+        "has multiple Paper Trading users associated with it"
+    ]
     assert {rule.name for rule in labels.dismiss_rules} == {
         "non_brokerage_account",
         "auto_restart_confirmation",

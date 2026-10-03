@@ -13,12 +13,14 @@ for it to answer a real `ping`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import logging
 import platform
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import anyio.to_thread
 
@@ -29,7 +31,7 @@ from ibcontroller.agent_client import (
     AgentEventConnection,
 )
 from ibcontroller.app_dirs import resolve_runtime_dir
-from ibcontroller.config import Config
+from ibcontroller.config import Config, _default_time_zone
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import ShutdownLabels
 from ibcontroller.logging_setup import (
@@ -59,6 +61,26 @@ _MACOS_PROGRAM_NAMES = {
 class LauncherError(Exception):
     """Anything about assembling or launching the agent process -- a missing
     install, no JRE found, or the agent never becoming ready."""
+
+
+class AgentStartupError(LauncherError):
+    """The agent JVM exited before answering its first `ping` -- e.g. the
+    previous instance still held the command socket. Transient, unlike the
+    install/JRE problems `LauncherError` otherwise covers."""
+
+
+class _ChildProcess(Protocol):
+    """The slice of `asyncio.subprocess.Process` this module signals and
+    waits on -- narrowed so tests can pass a lightweight stand-in."""
+
+    @property
+    def returncode(self) -> int | None: ...
+
+    def terminate(self) -> None: ...
+
+    def kill(self) -> None: ...
+
+    async def wait(self) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -167,7 +189,9 @@ def _ensure_ini_settings(
     return lines, changed
 
 
-def _ensure_jts_ini(settings_dir: Path, *, is_gateway: bool) -> None:
+def _ensure_jts_ini(
+    settings_dir: Path, *, is_gateway: bool, time_zone: str | None = None
+) -> None:
     """Ensures `jts.ini` contains a known-good minimal set of settings
     *before* Gateway/TWS ever starts, avoiding the "Use SSL encryption"
     dialog (and a Locale/proxy-message quirk) entirely rather than reacting
@@ -181,22 +205,33 @@ def _ensure_jts_ini(settings_dir: Path, *, is_gateway: bool) -> None:
     Gateway shows a login form with a structure this project doesn't expect
     and can't find the trading mode selector in.
 
+    `time_zone` (`Config.time_zone`, gitea #68) is written as `TimeZone`
+    under `[Logon]` only when resolved. Whether it overwrites an existing
+    line depends on where the value came from: if it matches what
+    `_default_time_zone` would auto-detect right now, it's treated as a
+    guess and never overwrites (`overwrite=False`, same reasoning as
+    `s3store` below); if it differs, the user explicitly set `IBC_TIME_ZONE`
+    (or `time_zone` in `ibcontroller.toml`), and that deliberate choice does
+    overwrite a stale value. Comparing against a fresh `_default_time_zone()`
+    call -- rather than threading an "explicit" flag through `Config` -- keeps
+    this a launcher-only decision; `config.py` still just resolves values.
+
     Deliberately does not set `TrustedIPs`/`LocalServerPort` -- ibcontroller
     has no config field for either yet, and a settings-file line it can't
     populate correctly would be worse than not adding it at all."""
     path = settings_dir / "jts.ini"
     lines = path.read_text().splitlines() if path.is_file() else []
 
-    lines, changed = _ensure_ini_settings(
-        lines,
-        "[Logon]",
-        [
-            ("s3store", "true", False),
-            ("Locale", "en", True),
-            ("displayedproxymsg", "1", True),
-            ("UseSSL", "true", True),
-        ],
-    )
+    logon_settings = [
+        ("s3store", "true", False),
+        ("Locale", "en", True),
+        ("displayedproxymsg", "1", True),
+        ("UseSSL", "true", True),
+    ]
+    if time_zone:
+        explicit = time_zone != _default_time_zone()
+        logon_settings.append(("TimeZone", time_zone, explicit))
+    lines, changed = _ensure_ini_settings(lines, "[Logon]", logon_settings)
     if is_gateway:
         lines, gw_changed = _ensure_ini_settings(
             lines, "[IBGateway]", [("ApiOnly", "true", True)]
@@ -553,7 +588,11 @@ def build_launch_plan(
     tws_path = _resolve_tws_path(config, os_name)
     settings_dir = resolve_tws_settings_path(config)
     settings_dir.mkdir(parents=True, exist_ok=True)
-    _ensure_jts_ini(settings_dir, is_gateway=config.program.lower() == "gateway")
+    _ensure_jts_ini(
+        settings_dir,
+        is_gateway=config.program.lower() == "gateway",
+        time_zone=config.time_zone,
+    )
     tws_version = config.tws_version or _detect_tws_version(
         tws_path, os_name, config.program.lower(), config.tws_channel
     )
@@ -616,6 +655,11 @@ def build_launch_plan(
     vm_options.append(
         f"-Dibcontroller.log.level={logging.getLevelName(config.log_level)}"
     )
+    # Rotation -- mirrors Python's own log_max_bytes/log_backup_count;
+    # read by AgentMain.configureLogging, which uses them for FileHandler's
+    # generation-rotation constructor instead of the plain append-only one.
+    vm_options.append(f"-Dibcontroller.logfile.maxbytes={config.log_max_bytes}")
+    vm_options.append(f"-Dibcontroller.logfile.backupcount={config.log_backup_count}")
 
     entry_class = _ENTRY_CLASSES[program]
     command_socket_path = str(
@@ -649,16 +693,30 @@ def build_launch_plan(
     )
 
 
-async def _wait_for_ready(command_socket_path: str, timeout: float) -> None:
+async def _wait_for_ready(
+    command_socket_path: str,
+    timeout: float,
+    *,
+    process: _ChildProcess | None = None,
+) -> None:
     """Matches this project's own L1 framing exactly: "ping succeeding means
     the agent process is up." Retries a real `ping`, not just a raw connect --
     a bare connect succeeding doesn't prove the agent's own accept loop has
     picked the connection up yet (AF_UNIX accepts into the kernel backlog
-    regardless), `ping` does."""
+    regardless), `ping` does.
+
+    When `process` is given, raises `AgentStartupError` as soon as it has
+    exited instead of probing a socket nothing will ever answer until
+    `timeout`."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     last_error: Exception | None = None
     while loop.time() < deadline:
+        if process is not None and process.returncode is not None:
+            raise AgentStartupError(
+                f"agent process exited (returncode={process.returncode}) before "
+                f"answering ping on {command_socket_path}"
+            ) from last_error
         probe = AgentCommandConnection(command_socket_path)
         try:
             await probe.connect()
@@ -672,6 +730,26 @@ async def _wait_for_ready(command_socket_path: str, timeout: float) -> None:
     raise LauncherError(
         f"agent at {command_socket_path} did not respond to ping within {timeout}s"
     ) from last_error
+
+
+async def _terminate_and_wait(process: _ChildProcess, *, timeout: float = 5.0) -> None:
+    """SIGTERM, then SIGKILL if still alive after `timeout`. Returns only once
+    the process has exited, so a relaunch never races the old JVM for its
+    command socket. A no-op on a process that already exited."""
+    if process.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError):  # exited since the check above
+        process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+    except TimeoutError:
+        logger.warning(
+            "IBController > process did not exit within %ss of SIGTERM -- killing",
+            timeout,
+        )
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        await process.wait()
 
 
 async def _drain_stdout(
@@ -728,14 +806,22 @@ async def launch_instance(
         log_dir=config.log_dir,
         filename=f"ibcontroller-{config.instance}.log",
         sink=config.log_sink,
+        max_bytes=config.log_max_bytes,
+        backup_count=config.log_backup_count,
     )
     configure_trace(
         instance=config.instance,
         enabled=config.trace_enabled,
         trace_dir=config.log_dir,
+        max_bytes=config.log_max_bytes,
+        backup_count=config.log_backup_count,
     )
     stdout_logger = configure_gateway_stdout(
-        config.instance, config.log_dir, sink=config.log_sink
+        config.instance,
+        config.log_dir,
+        sink=config.log_sink,
+        max_bytes=config.log_max_bytes,
+        backup_count=config.log_backup_count,
     )
     plan = await anyio.to_thread.run_sync(
         functools.partial(
@@ -775,10 +861,10 @@ async def launch_instance(
     # explicit cancellation needed.
     stdout_drain_task = asyncio.ensure_future(_drain_stdout(process, stdout_logger))
     try:
-        await _wait_for_ready(plan.command_socket_path, ready_timeout)
+        await _wait_for_ready(plan.command_socket_path, ready_timeout, process=process)
     except LauncherError:
         logger.warning("instance %s never became ready, terminating", config.instance)
-        process.terminate()
+        await _terminate_and_wait(process)
         raise
 
     cmd_conn = AgentCommandConnection(plan.command_socket_path)
@@ -841,7 +927,9 @@ async def clean_shutdown(
     still running" branch, where the process genuinely is still alive. The
     `except` below is broadened to `OSError` as defense in depth for the
     narrower race of the process dying between the `returncode` check and
-    the command actually being sent.
+    the command actually being sent. Every hard-terminate waits for the
+    process to exit (`_terminate_and_wait`) -- `run_control_loop` may
+    relaunch immediately, and a still-alive JVM holds the command socket.
     """
     if launched.process.returncode is not None:
         logger.info(
@@ -855,7 +943,7 @@ async def clean_shutdown(
         logger.info(
             "IBController > shutting down (never logged in) -- terminating directly"
         )
-        launched.process.terminate()
+        await _terminate_and_wait(launched.process)
         await launched.dispatcher.stop()
         return
 
@@ -883,5 +971,5 @@ async def clean_shutdown(
             target,
             timeout,
         )
-        launched.process.terminate()
+        await _terminate_and_wait(launched.process)
     await launched.dispatcher.stop()

@@ -121,6 +121,32 @@ ibcontroller run --trading-mode=paper --dotenv=.env-paper
 `--app-dir` (also accepted by `init`) overrides `IBC_APP_DIR` for one
 invocation, for pointing each instance's config/log/run dirs somewhere different too.
 
+### Exit codes
+
+`ibcontroller run` exits with a [BSD sysexits](https://man.freebsd.org/cgi/man.cgi?query=sysexits)
+code, grouped by what a supervisor (a container's `restart:` policy, systemd's
+`Restart=`) should do about it -- the specific cause is always in the logs and in the
+`stopped: <CAUSE>` line.
+
+| Code | Meaning | Supervisor action |
+| --- | --- | --- |
+| `0` | Intentional stop (Ctrl-C, `closedown_at`, Gateway/TWS closed normally, e.g. File>Close) | Do not restart |
+| `1` | Unhandled exception (a bug) | Restart, report |
+| `2` | CLI usage error | Fix the command |
+| `78` (`EX_CONFIG`) | Deployment error (bad config, install not found) | Do not retry |
+| `77` (`EX_NOPERM`) | Credentials rejected | Do not retry (lockout risk) |
+| `75` (`EX_TEMPFAIL`) | 2FA not approved in time, `mfa_timeout_action=exit` | Retry per policy |
+| `69` (`EX_UNAVAILABLE`) | Transient runtime failure (process crashed or killed, connection lost, JVM exited before becoming ready, login timed out with no 2FA dialog) | Retry |
+
+`77`/`78` work with systemd's `RestartPreventExitStatus=`.
+
+Some login-blocking dialogs IB reports as a server-side condition -- not a credential
+rejection -- never reach this table at all: a "Login failed"/"Login Error" dialog, or a
+Gateway "Connection to server failed" reason other than a known credential/account one
+(e.g. a stale restart token), make ibcontroller relaunch in-process with a full fresh
+login, unbounded, the same way a scheduled `cold_restart_time` does -- the container
+itself never exits or restarts for these.
+
 ## Configuration
 
 `ibcontroller` is configured through a **flat** TOML file (no `[section]` headers) and/or
@@ -202,6 +228,8 @@ allowing `None`. `Config`'s schema is closed — an unknown key in
 | `log_dir` | `IBC_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default |
 | `log_level` | `IBC_LOG_LEVEL` | `debug`/`info`/`warning`/`error` | `info` |
 | `log_sink` | `IBC_LOG_SINK` | `"std"` (console only) or `"file"` (only, under `log_dir`) — exclusive, not both. Covers `ibcontroller-{instance}.log` and `gateway-{instance}.log` only; the Java agent log and the wire trace are always file, unaffected — see "Logging" below | `"std"` |
+| `log_max_bytes` | `IBC_LOG_MAX_BYTES` | Rotate log/trace files at this size in bytes; `0` disables rotation. Only respected when `log_sink="file"` | `10485760` (10 MiB) |
+| `log_backup_count` | `IBC_LOG_BACKUP_COUNT` | Number of rotated backups to keep. Only respected when `log_sink="file"` | `5` |
 | `diagnostic_scope` | `IBC_DIAGNOSTIC_SCOPE` | `"known"`/`"unknown"`/`"all"` — which windows get a structure dump logged (see `docs/Configuration.md`'s "Diagnostics") | `"known"` |
 | `diagnostic_when` | `IBC_DIAGNOSTIC_WHEN` | `"open"`/`"openclose"`/`"never"` — when to log a structure dump | `"never"` |
 | (env only) | `IBC_APP_DIR`, `--app-dir` | Override file locations (config/log/run) for container mode; `--app-dir`/`init`/`run` set the env var for the invocation, same effect |
@@ -219,8 +247,10 @@ TWS/ibgateway settings
 | `mfa_timeout` | `IBC_MFA_TIMEOUT` | IB's 2FA timeout in seconds | `180.0` |
 | `relogin_after_mfa_timeout` | `IBC_RELOGIN_AFTER_MFA_TIMEOUT` | Restart login if 2FA times out | `false` |
 | `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | Bounds the post-2FA wait when relogin enabled | `60.0` |
+| `mfa_timeout_action` | `IBC_MFA_TIMEOUT_ACTION` | `exit` (exit 75, see "Exit codes" above) or `restart` (relaunch with a fresh login) when the 2FA push goes unanswered until `mfa_timeout` or `mfa_exit_interval` fires | `"exit"` |
 | `auto_restart_time` | `IBC_AUTO_RESTART_TIME` | `"hh:mm AM/PM"` daily auto-restart time. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` |
 | `auto_logoff_time` | `IBC_AUTO_LOGOFF_TIME` | `"hh:mm AM/PM"` daily auto-logoff time; same "Lock and Exit" radio-button pair as `auto_restart_time` -- if both are set, `auto_restart_time` wins | `None` |
+| `time_zone` | `IBC_TIME_ZONE` | IANA zone name, e.g. `"Europe/Zurich"`, written to `jts.ini`'s `TimeZone`. Auto-detected from `TZ`, then `/etc/localtime` -- no setup needed in the common case; never overwrites an existing `TimeZone` line | auto-detected |
 | `cold_restart_time` | `IBC_COLD_RESTART_TIME` | TWS and Gateway. `"HH:MM"` 24-hour local time; every Sunday, ibcontroller closes the instance tidily and relaunches with a full fresh login, forcing IBKR's weekly Sunday 01:00 US/Eastern token-invalidation reauth -- not a GUI setting, see "Scheduled shutdown" below | `None` |
 | `closedown_at` | `IBC_CLOSEDOWN_AT` | TWS and Gateway. `"HH:MM"` (daily) or `"<Weekday> HH:MM"` (weekly); closes the instance tidily at that time, no relaunch -- not a GUI setting, see "Scheduled shutdown" below | `None` |
 
@@ -387,9 +417,16 @@ scrollback.
 | --- | --- | --- | --- |
 | `ibcontroller-{instance}.log` | ibcontroller app control flow | `log_sink=file` (else console) | `log_level` (default `info`) |
 | `gateway-{instance}.log` | TWS/Gateway own stdout/stderr | `log_sink=file` (else console) | TWS/Gateway's own |
-| `ibcontroller-java-agent-{instance}.log` | Java agent (in-process JUL) | always file, not affected by `log_sink` | `log_level` (see mapping below) |
+| `ibcontroller-java-agent-{instance}.log` (see rotation note below) | Java agent (in-process JUL) | always file, not affected by `log_sink` | `log_level` (see mapping below) |
 | `cmd-{instance}.jsonl` | raw wire: commands sent + results, NDJSON | `trace_enabled`; always file, not affected by `log_sink` | always (DEBUG emit, gated separately) |
 | `events-{instance}.jsonl` | raw wire: every event message received, NDJSON | `trace_enabled`; always file, not affected by `log_sink` | always (DEBUG emit, gated separately) |
+
+**Rotation** (`IBC_LOG_MAX_BYTES`/`IBC_LOG_BACKUP_COUNT`, default 10 MiB x 5
+backups, **on by default**) applies to every file above in file mode. Set
+`IBC_LOG_MAX_BYTES=0` to disable it (unbounded files). Python's files keep
+their usual name active, with `.1`/`.2`/... as old backups. The Java agent log
+is the opposite: once rotation is on, the active file is
+`ibcontroller-java-agent-{instance}.log.0`, not the unsuffixed name.
 
 ### Log levels
 

@@ -29,6 +29,20 @@
     "title": "Login failed",
     "dismiss_button": "OK"
   },
+  "login_error": {
+    "title": "Login Error",
+    "dismiss_button": "OK"
+  },
+  "unrecognized_credentials": {
+    "title": "Unrecognized Username or Password",
+    "dismiss_button": "OK"
+  },
+  "gateway_connection_failed": {
+    "title": "Gateway",
+    "message_prefix": "Connection to server failed:",
+    "known_reasons": ["has multiple Paper Trading users associated with it"],
+    "dismiss_button": "OK"
+  },
   "dismiss_rules": [
     {
       "name": "non_brokerage_account",

@@ -149,6 +149,49 @@ def test_configure_trace_instances_do_not_cross_write(tmp_path):
     assert '"who": "paper"' not in live_text
 
 
+def test_configure_logging_rotates_at_max_bytes(tmp_path):
+    configure_logging(log_dir=tmp_path, sink="file", max_bytes=200, backup_count=2)
+    logger = logging.getLogger("ibcontroller")
+    for i in range(50):
+        logger.info("line number %d padded to force rollover", i)
+    stop_logging()
+
+    assert (tmp_path / "ibcontroller.log").exists()
+    assert (tmp_path / "ibcontroller.log.1").exists()
+    # backup_count=2 -- never more than 2 backups plus the live file.
+    assert not (tmp_path / "ibcontroller.log.3").exists()
+
+
+def test_configure_logging_max_bytes_zero_never_rotates(tmp_path):
+    """Default (max_bytes=0) is the old unbounded-file behaviour -- no
+    `.1`/`.2` backups ever appear, however much is written."""
+    configure_logging(log_dir=tmp_path, sink="file")
+    logger = logging.getLogger("ibcontroller")
+    for i in range(50):
+        logger.info("line number %d padded to force rollover", i)
+    stop_logging()
+
+    assert (tmp_path / "ibcontroller.log").exists()
+    assert not (tmp_path / "ibcontroller.log.1").exists()
+
+
+def test_configure_trace_rotates_at_max_bytes(tmp_path):
+    configure_trace(
+        instance="paper",
+        enabled=True,
+        trace_dir=tmp_path,
+        max_bytes=200,
+        backup_count=2,
+    )
+    logger = logging.getLogger("ibcontroller.trace.paper.cmd")
+    for i in range(50):
+        logger.debug('{"line": %d, "padding": "xxxxxxxxxxxxxxxxxxxx"}', i)
+    stop_logging()
+
+    assert (tmp_path / "cmd-paper.jsonl").exists()
+    assert (tmp_path / "cmd-paper.jsonl.1").exists()
+
+
 def test_configure_trace_truncates_stale_files_when_enabled(tmp_path):
     (tmp_path / "cmd-paper.jsonl").write_text("stale content from a dead instance\n")
     configure_trace(instance="paper", enabled=True, trace_dir=tmp_path)

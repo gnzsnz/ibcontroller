@@ -4,6 +4,7 @@ pattern actions.py's own tests use."""
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -22,11 +23,16 @@ from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
     DeclarativeDismissRecognizer,
     ExistingSessionRecognizer,
+    GatewayConnectionFailedRecognizer,
+    LoginErrorRecognizer,
     LoginFailedError,
     LoginFailedRecognizer,
     RecognizerRegistry,
     TooManyFailedLoginAttemptsRecognizer,
+    TransientLoginError,
+    UnrecognizedCredentialsRecognizer,
     _parse_wait_seconds,
+    _strip_html,
     handle_window_opened,
     is_credential_entry,
     watch_for_unprompted_windows,
@@ -244,6 +250,9 @@ async def test_login_failed_recognises_by_title():
 
 
 async def test_login_failed_handle_dismisses_then_raises(sock_path, event_sock_path):
+    """Gitea #62: "Login failed" is IB's own wording for a server disconnect,
+    not rejected credentials -- so it's `TransientLoginError` (unbounded
+    in-process relaunch), not `LoginFailedError`."""
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -251,8 +260,147 @@ async def test_login_failed_handle_dismisses_then_raises(sock_path, event_sock_p
         dispatcher = await _start(sock_path, event_sock_path)
         try:
             recognizer = LoginFailedRecognizer(LABELS.login_failed)
-            with pytest.raises(LoginFailedError):
+            with pytest.raises(TransientLoginError):
                 await recognizer.handle(_event("Login failed"), [], dispatcher)
+        finally:
+            await dispatcher.stop()
+
+
+def test_strip_html_collapses_tags_and_whitespace():
+    raw = (
+        "<html>Connection to server failed:  <br><br>  The specified user has "
+        "multiple Paper Trading users associated with it.<br><br>Please log on "
+        "using one of the Paper Trading users and corresponding password.</html>"
+    )
+    stripped = _strip_html(raw)
+    assert stripped.startswith("Connection to server failed:")
+    assert "multiple Paper Trading users associated with it" in stripped
+    assert "<" not in stripped
+
+
+async def test_login_error_recognises_by_title():
+    recognizer = LoginErrorRecognizer(LABELS.login_error)
+    assert recognizer.recognises(_event("Login Error"), []) is True
+    assert recognizer.recognises(_event("IBKR Gateway"), []) is False
+
+
+async def test_login_error_handle_logs_dismisses_then_raises(
+    sock_path, event_sock_path, caplog
+):
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            recognizer = LoginErrorRecognizer(LABELS.login_error)
+            components = [
+                _component(text="<html>Server disconnected, please try again</html>")
+            ]
+            with (
+                caplog.at_level(logging.WARNING, logger="ibcontroller.recognisers"),
+                pytest.raises(TransientLoginError),
+            ):
+                await recognizer.handle(_event("Login Error"), components, dispatcher)
+        finally:
+            await dispatcher.stop()
+    assert any("Server disconnected" in message for message in caplog.messages)
+
+
+async def test_unrecognized_credentials_recognises_by_title():
+    recognizer = UnrecognizedCredentialsRecognizer(LABELS.unrecognized_credentials)
+    assert (
+        recognizer.recognises(_event("Unrecognized Username or Password"), []) is True
+    )
+    assert recognizer.recognises(_event("IBKR Gateway"), []) is False
+
+
+async def test_unrecognized_credentials_handle_dismisses_then_raises(
+    sock_path, event_sock_path
+):
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            recognizer = UnrecognizedCredentialsRecognizer(
+                LABELS.unrecognized_credentials
+            )
+            with pytest.raises(LoginFailedError):
+                await recognizer.handle(
+                    _event("Unrecognized Username or Password"), [], dispatcher
+                )
+        finally:
+            await dispatcher.stop()
+
+
+def test_gateway_connection_failed_recognises_only_the_prefixed_text():
+    recognizer = GatewayConnectionFailedRecognizer(LABELS.gateway_connection_failed)
+    matching = [
+        _component(
+            class_="javax.swing.JTextPane",
+            text="<html>Connection to server failed: some reason</html>",
+        )
+    ]
+    unrelated_text = [
+        _component(class_="javax.swing.JTextPane", text="<html>Hi</html>")
+    ]
+
+    assert recognizer.recognises(_event("Gateway"), matching) is True
+    assert recognizer.recognises(_event("Gateway"), unrelated_text) is False
+    assert recognizer.recognises(_event("Existing session detected"), matching) is False
+
+
+async def test_gateway_connection_failed_known_reason_raises_login_failed(
+    sock_path, event_sock_path
+):
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            recognizer = GatewayConnectionFailedRecognizer(
+                LABELS.gateway_connection_failed
+            )
+            components = [
+                _component(
+                    class_="javax.swing.JTextPane",
+                    text=(
+                        "<html>Connection to server failed: The specified user "
+                        "has multiple Paper Trading users associated with it."
+                        "</html>"
+                    ),
+                )
+            ]
+            with pytest.raises(LoginFailedError):
+                await recognizer.handle(_event("Gateway"), components, dispatcher)
+        finally:
+            await dispatcher.stop()
+
+
+async def test_gateway_connection_failed_unknown_reason_raises_transient(
+    sock_path, event_sock_path
+):
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            recognizer = GatewayConnectionFailedRecognizer(
+                LABELS.gateway_connection_failed
+            )
+            components = [
+                _component(
+                    class_="javax.swing.JTextPane",
+                    text="<html>Connection to server failed: stale restart token"
+                    "</html>",
+                )
+            ]
+            with pytest.raises(TransientLoginError):
+                await recognizer.handle(_event("Gateway"), components, dispatcher)
         finally:
             await dispatcher.stop()
 
@@ -522,7 +670,7 @@ async def test_registry_dispatch_propagates_builtin_exception(
         dispatcher = await _start(sock_path, event_sock_path)
         try:
             registry = RecognizerRegistry([LoginFailedRecognizer(LABELS.login_failed)])
-            with pytest.raises(LoginFailedError):
+            with pytest.raises(TransientLoginError):
                 await registry.dispatch(_event("Login failed"), [], dispatcher)
         finally:
             await dispatcher.stop()
@@ -806,9 +954,11 @@ def test_too_many_failed_login_attempts_recognises_by_text():
     assert recognizer.recognises(event, non_matching) is False
 
 
-async def test_too_many_failed_login_attempts_disabled_does_nothing(
+async def test_too_many_failed_login_attempts_disabled_raises_login_failed(
     sock_path, event_sock_path
 ):
+    """Gitea #62: this state won't resolve itself, so it must stop the
+    container (77), not wait out `mfa_timeout` and exit 69 (retry)."""
     calls: list[str] = []
 
     def responder(request):
@@ -832,7 +982,8 @@ async def test_too_many_failed_login_attempts_disabled_does_nothing(
                     text="Too many failed login attempts. Please wait 5 seconds."
                 )
             ]
-            await recognizer.handle(_event("Warning"), components, dispatcher)
+            with pytest.raises(LoginFailedError):
+                await recognizer.handle(_event("Warning"), components, dispatcher)
         finally:
             await dispatcher.stop()
 

@@ -26,7 +26,7 @@ from ibcontroller.agent_client import (
     WindowEvent,
     WindowInfo,
 )
-from ibcontroller.config import Config, TradingMode
+from ibcontroller.config import Config, MfaTimeoutAction, TradingMode
 from ibcontroller.control_loop import (
     ShutdownCause,
     StartupState,
@@ -41,13 +41,22 @@ from ibcontroller.control_loop import (
 )
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
-from ibcontroller.login import LoginManager
+from ibcontroller.login import (
+    LoginFrameTimeoutError,
+    LoginManager,
+    MfaTimeoutError,
+)
 from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
     DeclarativeDismissRecognizer,
     ExistingSessionRecognizer,
+    GatewayConnectionFailedRecognizer,
+    LoginErrorRecognizer,
+    LoginFailedError,
     LoginFailedRecognizer,
     TooManyFailedLoginAttemptsRecognizer,
+    TransientLoginError,
+    UnrecognizedCredentialsRecognizer,
 )
 from ibcontroller.schedule import ScheduledAction, ScheduledShutdown
 from tests.fakes import FakeCommandServer, FakeEventServer
@@ -122,6 +131,9 @@ def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
         ExistingSessionRecognizer,
         AcceptIncomingConnectionsRecognizer,
         LoginFailedRecognizer,
+        LoginErrorRecognizer,
+        UnrecognizedCredentialsRecognizer,
+        GatewayConnectionFailedRecognizer,
         TooManyFailedLoginAttemptsRecognizer,
     }
 
@@ -329,6 +341,42 @@ async def test_wait_for_first_completion_returns_watcher_without_grace_delay():
     assert process.returncode is None
 
 
+@pytest.mark.parametrize("exc_type", [LoginFailedError, TransientLoginError])
+async def test_ready_state_watcher_exception_propagates_unchanged(exc_type):
+    """The edge case login succeeds, then the watcher raises later (e.g. a
+    reconnect attempt hits a credential or transient dialog): `_run_one_cycle`'s
+    READY-state wait must propagate the watcher's real exception type, exactly
+    like `_run_phase_watching_process` does during login/settings -- not
+    collapse it into a fixed `ShutdownCause` the way it used to (gitea #62).
+    Exercises the same one-line `if finished is watcher: await watcher` shape
+    the READY block uses, the smallest piece that can be isolated without a
+    real launch/login sequence (this module's own stated testing boundary)."""
+    process = _FakeProcess()
+    process_done = await _never_completing_task()
+    scheduled_shutdown = await _never_completing_task()
+
+    async def _watcher_raises():
+        raise exc_type("post-login failure")
+
+    watcher = asyncio.ensure_future(_watcher_raises())
+    try:
+        finished = await asyncio.wait_for(
+            _wait_for_first_completion(
+                main_tasks=[watcher, scheduled_shutdown],
+                process_done=process_done,
+                dispatcher_tasks=[],
+                process=process,
+            ),
+            timeout=1.0,
+        )
+        assert finished is watcher
+        with pytest.raises(exc_type, match="post-login failure"):
+            await watcher
+    finally:
+        scheduled_shutdown.cancel()
+        process_done.cancel()
+
+
 async def test_run_phase_watching_process_returns_normally_when_phase_wins():
     """The common case: login/settings completes before the process ever
     exits -- no `_PhaseAborted`, `phase`'s own result is what matters."""
@@ -367,14 +415,26 @@ async def test_run_phase_watching_process_propagates_a_real_phase_failure():
         process_done.cancel()
 
 
-async def test_run_phase_watching_process_aborts_on_process_exit():
+@pytest.mark.parametrize(
+    ("returncode", "expected_cause"),
+    [
+        (0, ShutdownCause.PROCESS_CLOSED),  # exited by choice, e.g. File>Close
+        (-9, ShutdownCause.PROCESS_EXITED),  # killed
+    ],
+)
+async def test_run_phase_watching_process_aborts_on_process_exit(
+    returncode, expected_cause
+):
     """Issue #43's shape: the process exits (e.g. the login window is closed
     manually) while `phase` is still waiting on an event that will now never
-    arrive -- must raise `_PhaseAborted(PROCESS_EXITED)` promptly instead of
-    hanging on `phase`'s own (possibly unbounded) timeout, and must cancel
-    the now-pointless `phase` task."""
+    arrive -- must raise `_PhaseAborted` promptly instead of hanging on
+    `phase`'s own (possibly unbounded) timeout, and must cancel the
+    now-pointless `phase` task. Returncode 0 is `PROCESS_CLOSED`, anything
+    else `PROCESS_EXITED`."""
     process = _FakeProcess()
-    process_done = asyncio.ensure_future(_delayed_process_exit(process, delay=0.01))
+    process_done = asyncio.ensure_future(
+        _delayed_process_exit(process, delay=0.01, returncode=returncode)
+    )
     phase_task = asyncio.ensure_future(asyncio.sleep(3600))
     with pytest.raises(_PhaseAborted) as exc_info:
         await asyncio.wait_for(
@@ -386,7 +446,7 @@ async def test_run_phase_watching_process_aborts_on_process_exit():
             ),
             timeout=2.0,
         )
-    assert exc_info.value.cause is ShutdownCause.PROCESS_EXITED
+    assert exc_info.value.cause is expected_cause
     assert phase_task.cancelled()
 
 
@@ -413,6 +473,56 @@ async def test_run_phase_watching_process_aborts_on_connection_lost():
         assert phase_task.cancelled()
     finally:
         process_done.cancel()
+
+
+async def test_run_phase_watching_process_propagates_watcher_failure_immediately():
+    """Gitea #62's root cause 2: a watcher exception during login must abort
+    `phase` right away, not be missed until `phase`'s own (much longer)
+    timeout expires."""
+    process = _FakeProcess()
+    process_done = await _never_completing_task()
+
+    async def _watcher_raises():
+        await asyncio.sleep(0)
+        raise LoginFailedError("unrecognized username or password")
+
+    watcher = asyncio.ensure_future(_watcher_raises())
+    phase_task = asyncio.ensure_future(asyncio.sleep(3600))  # stands in for mfa_timeout
+    try:
+        with pytest.raises(LoginFailedError):
+            await asyncio.wait_for(
+                _run_phase_watching_process(
+                    phase_task,
+                    process_done=process_done,
+                    dispatcher_tasks=[],
+                    process=process,
+                    watcher=watcher,
+                ),
+                timeout=1.0,
+            )
+    finally:
+        process_done.cancel()
+    assert phase_task.cancelled()
+
+
+async def test_run_phase_watching_process_leaves_watcher_running_when_phase_wins():
+    """`watcher` is shared across phases -- it must not be cancelled here,
+    only `phase` is this function's own task to own."""
+    process = _FakeProcess()
+    process_done = await _never_completing_task()
+    watcher = await _never_completing_task()
+    try:
+        await _run_phase_watching_process(
+            asyncio.sleep(0),
+            process_done=process_done,
+            dispatcher_tasks=[],
+            process=process,
+            watcher=watcher,
+        )
+        assert not watcher.done()
+    finally:
+        process_done.cancel()
+        watcher.cancel()
 
 
 async def test_run_control_loop_cold_restart_relaunches_with_no_restart_hash(
@@ -460,6 +570,168 @@ async def test_run_control_loop_tidy_closedown_stops_without_relaunch(monkeypatc
 
     assert cause is ShutdownCause.TIDY_CLOSEDOWN
     assert calls == 1
+
+
+async def test_run_control_loop_login_frame_timeout_always_relaunches(
+    monkeypatch, caplog
+):
+    """`LoginFrameTimeoutError` (IBC error code 1112) always relaunches,
+    unconditionally -- not gated by any config field, unlike `MfaTimeoutError`
+    below (gitea #60)."""
+    calls: list[dict | None] = []
+
+    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+        calls.append(restart_hash)
+        if len(calls) == 1:
+            raise LoginFrameTimeoutError("login frame never appeared")
+        return ShutdownCause.LOGIN_FAILED, f"{gettempdir()}/settings"
+
+    monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
+    monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
+
+    with caplog.at_level(logging.WARNING, logger="ibcontroller.control_loop"):
+        cause = await run_control_loop(_config(), "agent.jar")
+
+    assert cause is ShutdownCause.LOGIN_FAILED
+    assert calls == [None, None]
+    assert any("login frame never appeared" in message for message in caplog.messages)
+
+
+async def test_run_control_loop_relaunches_on_transient_login_error(
+    monkeypatch, caplog
+):
+    """`TransientLoginError` (a "Login failed"/"Login Error" dialog, or an
+    unlisted Gateway "Connection to server failed" reason) always relaunches
+    with a full fresh login, unconditionally -- gitea #62."""
+    calls: list[dict | None] = []
+
+    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+        calls.append(restart_hash)
+        if len(calls) == 1:
+            raise TransientLoginError("login error dialog; server disconnected")
+        return ShutdownCause.LOGIN_FAILED, f"{gettempdir()}/settings"
+
+    monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
+    monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
+
+    with caplog.at_level(logging.WARNING, logger="ibcontroller.control_loop"):
+        cause = await run_control_loop(_config(), "agent.jar")
+
+    assert cause is ShutdownCause.LOGIN_FAILED
+    assert calls == [None, None]
+    assert any("transient login failure" in message for message in caplog.messages)
+
+
+@pytest.mark.parametrize(
+    "cause", [ShutdownCause.PROCESS_CLOSED, ShutdownCause.PROCESS_EXITED]
+)
+async def test_run_control_loop_process_gone_relaunches_only_with_marker(
+    monkeypatch, cause
+):
+    """A scheduled restart can end the JVM with either returncode, so both
+    process-gone causes check the `autorestart` marker; without it the loop
+    stops and returns the cause unchanged."""
+    marker_present = [True, False]
+    calls: list[str | None] = []
+
+    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+        calls.append(restart_hash)
+        return cause, f"{gettempdir()}/settings"
+
+    async def _restart_marker(settings_dir):
+        return marker_present.pop(0)
+
+    async def _fake_find_autorestart_hash(settings_dir):
+        return "abc123"
+
+    monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
+    monkeypatch.setattr(control_loop, "_is_restart_with_grace", _restart_marker)
+    monkeypatch.setattr(
+        control_loop, "find_autorestart_hash", _fake_find_autorestart_hash
+    )
+    monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
+
+    assert await run_control_loop(_config(), "agent.jar") is cause
+    assert calls == [None, "abc123"]
+
+
+async def test_run_control_loop_login_frame_timeout_keeps_restart_hash(monkeypatch):
+    """A frame timeout on the relaunch after a scheduled restart keeps the
+    restart hash, matching `ibcstart.sh`'s no-op branch for IBC error code
+    1112 -- the next lap still relogins silently instead of pushing 2FA."""
+    calls: list[str | None] = []
+
+    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+        calls.append(restart_hash)
+        if len(calls) == 1:
+            return ShutdownCause.PROCESS_EXITED, f"{gettempdir()}/settings"
+        if len(calls) == 2:
+            raise LoginFrameTimeoutError("login frame never appeared")
+        return ShutdownCause.LOGIN_FAILED, f"{gettempdir()}/settings"
+
+    async def _restart_marker_present(settings_dir):
+        return True
+
+    async def _fake_find_autorestart_hash(settings_dir):
+        return "abc123"
+
+    monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
+    monkeypatch.setattr(control_loop, "_is_restart_with_grace", _restart_marker_present)
+    monkeypatch.setattr(
+        control_loop, "find_autorestart_hash", _fake_find_autorestart_hash
+    )
+    monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
+
+    cause = await run_control_loop(_config(), "agent.jar")
+
+    assert cause is ShutdownCause.LOGIN_FAILED
+    assert calls == [None, "abc123", "abc123"]
+
+
+async def test_run_control_loop_mfa_timeout_relaunches_when_action_is_restart(
+    monkeypatch, caplog
+):
+    calls: list[dict | None] = []
+
+    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+        calls.append(restart_hash)
+        if len(calls) == 1:
+            raise MfaTimeoutError("mfa_exit_interval watchdog fired")
+        return ShutdownCause.LOGIN_FAILED, f"{gettempdir()}/settings"
+
+    monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
+    monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
+
+    with caplog.at_level(logging.WARNING, logger="ibcontroller.control_loop"):
+        cause = await run_control_loop(
+            _config(mfa_timeout_action=MfaTimeoutAction.RESTART), "agent.jar"
+        )
+
+    assert cause is ShutdownCause.LOGIN_FAILED
+    assert calls == [None, None]
+    assert any("mfa_timeout_action=restart" in message for message in caplog.messages)
+
+
+async def test_run_control_loop_mfa_timeout_propagates_when_action_is_exit(
+    monkeypatch,
+):
+    """`mfa_timeout_action=exit`, the default -- `MfaTimeoutError` propagates
+    unchanged instead of relaunching, so `cli.py` can map it to exit 75."""
+    calls: list[dict | None] = []
+
+    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+        calls.append(restart_hash)
+        raise MfaTimeoutError("mfa_exit_interval watchdog fired")
+
+    monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
+    monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
+
+    with pytest.raises(MfaTimeoutError):
+        await run_control_loop(
+            _config(mfa_timeout_action=MfaTimeoutAction.EXIT), "agent.jar"
+        )
+
+    assert calls == [None]
 
 
 def _tracking_responder(calls: list[dict]):

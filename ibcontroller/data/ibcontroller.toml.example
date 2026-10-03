@@ -87,6 +87,18 @@
 # Default "std"
 # log_sink = "std"
 
+# Rotation for log/trace files -- only respected when log_sink = "file". ON BY
+# DEFAULT (10 MiB x 5 backups); commenting these out does NOT disable it. Set
+# log_max_bytes = 0 to disable (unbounded files). Java agent log active file
+# becomes ibcontroller-java-agent-{instance}.log.0 once rotation is on -- see
+# "Logging" in README.md.
+# log_max_bytes: rotate at this size in bytes (env: IBC_LOG_MAX_BYTES).
+# Default 10485760 (10 MiB)
+# log_max_bytes = 10485760
+# log_backup_count: number of rotated backups to keep (env: IBC_LOG_BACKUP_COUNT).
+# Default 5
+# log_backup_count = 5
+
 # Diagnostics -- off by default. When enabled, logs a component structure dump
 # (the same primitive settings.py/recognisers.py use to find controls) for each
 # matching window event, to ibcontroller-{instance}.log at INFO. Built-in
@@ -178,3 +190,6 @@
 # bare size, no -Xmx prefix (env: IBC_JAVA_HEAP_SIZE)
 # Default None - leave the installed file's value untouched
 # java_heap_size = "2g"
+
+# Set time zone on jts.ini
+# time_zone = "America/New_York"
