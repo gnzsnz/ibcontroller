@@ -603,8 +603,7 @@ def build_launch_plan(
     if resolved_program != config.program.lower():
         logger.warning(
             "IBController > no %s installation found (tws_version=%s, tws_path=%s) -- "
-            "falling back to the %s installation %s and running it as %s "
-            "(IBC's own ibcstart.sh fallback)",
+            "falling back to the %s installation %s and running it as %s ",
             config.program,
             tws_version,
             tws_path,

@@ -26,16 +26,15 @@
 # IMPORTANT: this schema is closed. Every key here must already be a real field in
 # ibcontroller/config.py -- an unknown key is rejected at startup (a clean error
 # message + non-zero exit, not silently ignored, not a crash-with-traceback). You
-# cannot add a new TWS/Gateway-settings toggle by just adding a key here; that
-# always needs a config.py code change first (a new Config field), plus adding it
-# to settings.py's own allow-list if it's meant to drive a declarative setting via
-# "value_from_config" -- see ibkr_settings.toml.example.
+# cannot add a new TWS/Gateway-settings toggle by just adding a key here.
+# See if  a declarative setting via "value_from_config" in ibkr_settings.toml.
+# Check ibkr_settings.toml.example for working examples.
 
 # Socket/instance name (env: IBC_INSTANCE). Optional: when unset,
 # defaults to "{program}-{trading_mode}" (e.g. "gateway-paper").
 # instance = "dev"
 
-# "gateway" or "tws" (env: IBC_PROGRAM)
+# Program to run "gateway" or "tws" (env: IBC_PROGRAM)
 # Default "gateway"
 # program = "gateway"
 

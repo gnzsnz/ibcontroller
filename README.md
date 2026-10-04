@@ -30,7 +30,9 @@ Give it a spin, `ib-controller run --dotenv=.env-paper --trading-mode=paper --pr
 
 https://github.com/user-attachments/assets/b97f7180-29d9-4e09-b32f-8be838dff0e2
 
-To build from source, this is the short version, for a detailed guide please check the [development guide](./docs/development.md).
+You can check the full list of [cli parameters](#cli-parameters) or [config keys](#configuration).
+
+To it build from source:
 
 ```bash
 # 0. Fetch the code
@@ -48,9 +50,11 @@ uv run ibcontroller init
 uv run ibcontroller run
 ```
 
+For a detailed build guide please check the [development guide](./docs/development.md).
+
 `ibcontroller run` scaffolds the config directory automatically the first time
 `ibcontroller.toml` is missing (same effect as running `init` first), so it can also be
-run directly on a fresh install -- it will still fail with a clear error naming whichever
+run directly on a fresh install. It will still fail with a clear error naming whichever
 setting is actually missing (in practice, just the two credential env vars).
 
 ### CLI parameters
@@ -120,32 +124,6 @@ ibcontroller run --trading-mode=paper --dotenv=.env-paper
 
 `--app-dir` (also accepted by `init`) overrides `IBC_APP_DIR` for one
 invocation, for pointing each instance's config/log/run dirs somewhere different too.
-
-### Exit codes
-
-`ibcontroller run` exits with a [BSD sysexits](https://man.freebsd.org/cgi/man.cgi?query=sysexits)
-code, grouped by what a supervisor (a container's `restart:` policy, systemd's
-`Restart=`) should do about it -- the specific cause is always in the logs and in the
-`stopped: <CAUSE>` line.
-
-| Code | Meaning | Supervisor action |
-| --- | --- | --- |
-| `0` | Intentional stop (Ctrl-C, `closedown_at`, Gateway/TWS closed normally, e.g. File>Close) | Do not restart |
-| `1` | Unhandled exception (a bug) | Restart, report |
-| `2` | CLI usage error | Fix the command |
-| `78` (`EX_CONFIG`) | Deployment error (bad config, install not found) | Do not retry |
-| `77` (`EX_NOPERM`) | Credentials rejected | Do not retry (lockout risk) |
-| `75` (`EX_TEMPFAIL`) | 2FA not approved in time, `mfa_timeout_action=exit` | Retry per policy |
-| `69` (`EX_UNAVAILABLE`) | Transient runtime failure (process crashed or killed, connection lost, JVM exited before becoming ready, login timed out with no 2FA dialog) | Retry |
-
-`77`/`78` work with systemd's `RestartPreventExitStatus=`.
-
-Some login-blocking dialogs IB reports as a server-side condition -- not a credential
-rejection -- never reach this table at all: a "Login failed"/"Login Error" dialog, or a
-Gateway "Connection to server failed" reason other than a known credential/account one
-(e.g. a stale restart token), make ibcontroller relaunch in-process with a full fresh
-login, unbounded, the same way a scheduled `cold_restart_time` does -- the container
-itself never exits or restarts for these.
 
 ## Configuration
 
@@ -296,7 +274,7 @@ US/Eastern invalidation window if that's the intent.
 
 ## Declarative configuration
 
-Beyond `ibcontroller.toml`, three things let you shape ibcontroller's behavior without
+Beyond `ibcontroller.toml`, two things let you shape ibcontroller's behavior without
 writing any Python: **`labels.json`** (window/button text, plus simple pop-up dismissal
 rules) and **`ibkr_settings.toml`** (Global Configuration settings applied to Gateway/TWS
 at startup). Each is covered below.
@@ -498,6 +476,32 @@ or both.
 - All five files carry the instance name and share one flat directory, so two
   instances (e.g. `paper` and `live`) can run in parallel and each tail its own files
   without interleaving, even if copied or globbed out of their directory.
+
+## Exit codes
+
+`ibcontroller run` exits with a [BSD sysexits](https://man.freebsd.org/cgi/man.cgi?query=sysexits)
+code, grouped by what a supervisor (a container's `restart:` policy, systemd's
+`Restart=`) should do about it. The specific cause is always in the logs and in the
+`stopped: <CAUSE>` line.
+
+| Code | Meaning | Supervisor action |
+| --- | --- | --- |
+| `0` | Intentional stop (Ctrl-C, `closedown_at`, Gateway/TWS closed normally, e.g. File>Close) | Do not restart |
+| `1` | Unhandled exception (a bug) | Restart, report |
+| `2` | CLI usage error | Fix the command |
+| `78` (`EX_CONFIG`) | Deployment error (bad config, install not found) | Do not retry |
+| `77` (`EX_NOPERM`) | Credentials rejected | Do not retry (lockout risk) |
+| `75` (`EX_TEMPFAIL`) | 2FA not approved in time, `mfa_timeout_action=exit` | Retry per policy |
+| `69` (`EX_UNAVAILABLE`) | Transient runtime failure (process crashed or killed, connection lost, JVM exited before becoming ready, login timed out with no 2FA dialog) | Retry |
+
+`77`/`78` work with systemd's `RestartPreventExitStatus=`.
+
+Some login-blocking dialogs IB reports as a server-side condition -- not a credential
+rejection -- never reach this table at all: a "Login failed"/"Login Error" dialog, or a
+Gateway "Connection to server failed" reason other than a known credential/account one
+(e.g. a stale restart token), make ibcontroller relaunch in-process with a full fresh
+login, unbounded, the same way a scheduled `cold_restart_time` does -- the container
+itself never exits or restarts for these.
 
 ## License
 

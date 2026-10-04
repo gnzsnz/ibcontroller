@@ -54,31 +54,11 @@
 #                          position, 0-based) within the container below the matched
 #                          label. Defaults to 0.
 #
-# Known gap, not urgent (2026-09-06): some Global Configuration screens use dropdown
-# (JComboBox) controls -- not supported by any action here yet. Nothing declared below
-# needs one; revisit if a real deployment does.
+# Known gap, : some Global Configuration screens use dropdown (JComboBox) controls.
+# Not supported by any action here yet. Nothing declared below
+# needs one.
 
 # --- API precautions (API/Precautions) ------------------------------------------------
-# Live-checked against a real paper Gateway 10.50 account, 2026-09-06 -- NOT identical
-# to IBC's own ConfigureApiPrecautionsTask.java list (see labels.py's own docstring for
-# the full finding). Two real corrections from that live check:
-#   - api_precautions_bypass_us_stocks_market_data_in_shares is NOT a real control on
-#     this account/build at all (raises ElementNotFoundError if declared) -- dropped
-#     here. Likely account/market-data-entitlement gated, not a stale label; a
-#     different account could plausibly have it.
-#   - api_precautions_bypass_route_marketable_to_bbo exists on the real panel but isn't
-#     in IBC's own list -- added below, set to false (disabled) by default per the
-#     user's own instruction, everything else enabled.
-# All 8 entries below are live-confirmed: each one actually landed (selected=True/False
-# read back via a real dump) before Apply was clicked to commit them.
-
-# [[settings]]
-# tree_path = "API/Precautions"
-# action = "toggle"
-# label_ref = "api_precautions_bypass_us_stocks_market_data_in_shares"
-# value = true
-# Commented out, not dropped from labels.json: confirmed live 2026-09-06 that this
-# control does not exist on this paper account/Gateway 10.50 build at all.
 
 [[settings]]
 tree_path = "API/Precautions"
