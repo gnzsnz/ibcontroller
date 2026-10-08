@@ -347,3 +347,22 @@ def test_legacy_section_headers_raise_clearly(monkeypatch, tmp_path):
     )
     with pytest.raises(ConfigError, match=r"gateway\.tws_version"):
         load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+
+
+def test_env_dump_masks_sensitive_ibc_vars(monkeypatch, tmp_path, capsys):
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("IBC_PASSWORD_PAPER", "hunter2")
+    monkeypatch.setenv("IBC_USERID_PAPER", "paperuser")
+    secret = tmp_path / "pass"
+    secret.write_text("filepass")
+    monkeypatch.setenv("IBC_PASSWORD_FILE", str(secret))
+    monkeypatch.setenv("IBC_LOG_LEVEL", "debug")
+    monkeypatch.setenv("OTHER_PASSWORD", "outside-prefix")
+    load_config(config_dir=tmp_path, log_dir=tmp_path)
+    out = capsys.readouterr().out
+    assert "hunter2" not in out
+    assert "paperuser" not in out
+    assert "outside-prefix" not in out
+    assert "env IBC_PASSWORD_PAPER=******" in out
+    assert f"env IBC_PASSWORD_FILE={secret}" in out
+    assert "env IBC_LOG_LEVEL=debug" in out

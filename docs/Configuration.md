@@ -24,6 +24,10 @@ accepts a `_FILE`-suffixed variant that reads the value from a file instead
 (Docker/Compose secrets): `IBC_USERID` / `IBC_PASSWORD`,
 `IBC_USERID_FILE` / `IBC_PASSWORD_FILE`.
 
+The startup `IBC_*` environment dump masks any variable whose name contains
+`PASSWORD`, `USERID`, `SECRET`, `TOKEN`, `TOTP` or `KEY` (e.g.
+`IBC_PASSWORD_PAPER`), except `_FILE` variants, which only hold a path.
+
 ## IBController specific settings
 
 Settings that drive the behaviour of `ibcontroller` itself.

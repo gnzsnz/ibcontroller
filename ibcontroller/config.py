@@ -42,6 +42,17 @@ from ibcontroller.app_dirs import resolve_app_dirs
 
 ENV_PREFIX = "IBC_"
 ENV_SENSITIVE: list[str] = ["IBC_USERID", "IBC_PASSWORD"]
+# Name fragments masked in the env dump; covers vars we don't own (IBC_PASSWORD_PAPER)
+_SENSITIVE_FRAGMENTS = ("PASSWORD", "USERID", "SECRET", "TOKEN", "TOTP", "KEY")
+
+
+def _is_sensitive_env(key: str) -> bool:
+    """True if `key` is masked in the env dump; `_FILE` vars hold paths, not secrets."""
+    if key.endswith("_FILE"):
+        return False
+    upper = key.upper()
+    return key in ENV_SENSITIVE or any(f in upper for f in _SENSITIVE_FRAGMENTS)
+
 
 # Field/TOML key names that must never appear in the config file -- credentials are
 # environment-variable-only (see module docstring). Mirrors config_old.py's own
@@ -411,14 +422,11 @@ def load_config(
     # display the env vars we actually read, but never print credentials in plaintext
     sys.stdout.write("IBController > Environment variable: \n")
     for key, val in env.items():
-        if key in ENV_SENSITIVE:
-            sys.stdout.write(f"IBController > env {key}=******\n")
-        elif key.startswith(ENV_PREFIX) and key not in ENV_SENSITIVE:
-            sys.stdout.write(f"IBController > env {key}={val}\n")
-    # Flush: stdout is fully buffered (not line-buffered) when not a TTY (e.g. under
-    # Docker/`&`), so without this the dump sits in the buffer until process exit --
-    # only visible on shutdown, not at startup when it's actually useful (gitea #TBD).
-    sys.stdout.flush()
+        if not key.startswith(ENV_PREFIX):
+            continue
+        shown = "******" if _is_sensitive_env(key) else val
+        sys.stdout.write(f"IBController > env {key}={shown}\n")
+    sys.stdout.flush()  # buffered when not a TTY (Docker); else shown only at exit
 
     _config_file = (
         Path(toml_path) if toml_path else Path(config_dir) / "ibcontroller.toml"

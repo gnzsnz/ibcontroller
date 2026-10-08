@@ -161,6 +161,11 @@ Each also accepts a `_FILE`-suffixed variant (`IBC_USERID_FILE`,
 `IBC_PASSWORD_FILE`) that reads the value from a file instead —
 Docker/Compose secrets, so a value never has to sit in the process environment.
 
+The startup `IBC_*` environment dump masks any variable whose name contains
+`PASSWORD`, `USERID`, `SECRET`, `TOKEN`, `TOTP` or `KEY` (e.g.
+`IBC_PASSWORD_PAPER`, set by other tooling), except `_FILE` variants, which
+only hold a path.
+
 ### File location
 
 When environment variable `IBC_APP_DIR` is not set, then
