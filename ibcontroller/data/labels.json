@@ -80,7 +80,6 @@
       "api_precautions_bypass_called_bond_warning": "Bypass Called Bond warning for API Orders",
       "api_precautions_bypass_same_action_pair_trade": "Bypass \"same action pair trade\" warning for API orders.",
       "api_precautions_bypass_price_based_volatility": "Bypass price-based volatility risk warning for API Orders.",
-      "api_precautions_bypass_us_stocks_market_data_in_shares": "Bypass US Stocks market data in shares warning for API Orders",
       "api_precautions_bypass_redirect_order_warning": "Bypass Redirect Order warning for Stock API Orders",
       "api_precautions_bypass_no_overfill_protection": "Bypass No Overfill Protection precaution for destinations where implied natively.",
       "api_precautions_bypass_route_marketable_to_bbo": "Bypass Route Marketable to BBO warning for API orders.",
