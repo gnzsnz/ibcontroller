@@ -719,6 +719,7 @@ async def _run_one_cycle(  # noqa: PLR0915
             program=config.program,
             logged_in=manager.is_logged_in(),
             labels=labels.shutdown,
+            main_window_id=manager.main_window_id,
         )
         watcher.cancel()
         with contextlib.suppress(asyncio.CancelledError):

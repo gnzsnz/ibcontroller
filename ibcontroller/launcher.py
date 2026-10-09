@@ -894,6 +894,7 @@ async def clean_shutdown(
     program: str,
     logged_in: bool,
     labels: ShutdownLabels,
+    main_window_id: str | None = None,
     timeout: float = 15.0,
 ) -> None:
     """Shutdown is not a process signal if login has completed -- invokes the
@@ -907,6 +908,11 @@ async def clean_shutdown(
 
     `logged_in` is the caller's own responsibility to know; this layer
     doesn't track login state itself.
+
+    `main_window_id` (`LoginManager.main_window_id`) scopes the menu lookup
+    to the main window's own menu bar, matching IBC's `StopTask`. The
+    unscoped search can resolve another frame's menu bar, which has no exit
+    item (#76). `None` (Gateway) keeps the unscoped search.
 
     Uses `navigate_menu`, not `click`: "Close"/"Exit" are menu items, not
     ordinary buttons -- `click`'s `findByAccessibleName` lookup can never
@@ -953,7 +959,9 @@ async def clean_shutdown(
         else labels.tws_menu_path
     )
     try:
-        await navigate_menu(launched.dispatcher, target, timeout=5.0)
+        await navigate_menu(
+            launched.dispatcher, target, timeout=5.0, window_id=main_window_id
+        )
     except (AgentClientError, TimeoutError, OSError):
         pass  # best-effort -- the wait-then-terminate fallback below is what matters
 

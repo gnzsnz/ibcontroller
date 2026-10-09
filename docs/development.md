@@ -188,7 +188,8 @@ Any contribution must follow this separation of concerns.
 - **Owns:** the action vocabulary (`click`, `type_text`, `toggle`, `navigate_menu`, `expand_tree`,
   `dump`, `wait_for_event`, …) and the label data.
 - **Rules:** the only L5 code that calls `send_command`. L3 exceptions propagate unchanged. Actions
-  take a `window_id` wherever the agent supports one.
+  take a `window_id` wherever the agent supports one. Callers pass it whenever they hold one: the
+  unscoped lookups pick the first matching window, which may be the wrong one (#40, #76).
 
 ### L5 Domains
 

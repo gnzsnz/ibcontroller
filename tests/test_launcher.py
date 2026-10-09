@@ -1557,3 +1557,34 @@ async def test_clean_shutdown_uses_tws_menu_path_for_tws(sock_path, event_sock_p
 
     assert {"cmd": "navigate_menu", "path": "File/Exit"} in calls
     assert {"cmd": "navigate_menu", "path": "File/Close"} not in calls
+
+
+async def test_clean_shutdown_scopes_navigate_menu_to_main_window(
+    sock_path, event_sock_path
+):
+    """The unscoped menu-bar search can resolve a frame other than TWS's main
+    window, whose menu has no `File/Exit` (#76) -- `main_window_id` must reach
+    the agent."""
+    calls: list[dict] = []
+
+    def responder(request):
+        calls.append(request)
+        return {"ok": True, "clicked": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start_dispatcher(sock_path, event_sock_path)
+        process = _FakeProcess(returncode=None)
+        launched = _launched(process, dispatcher, sock_path, event_sock_path)
+        await clean_shutdown(
+            launched,
+            program="tws",
+            logged_in=True,
+            labels=LABELS.shutdown,
+            main_window_id="w2",
+            timeout=0.1,
+        )
+
+    assert {"cmd": "navigate_menu", "path": "File/Exit", "window_id": "w2"} in calls
