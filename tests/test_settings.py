@@ -486,35 +486,35 @@ async def test_apply_settings_auto_restart_time_action(sock_path, event_sock_pat
         finally:
             await dispatcher.stop()
 
-    # The fallback tries the Auto Log Off label first (matching IBC's own
-    # order) -- the fake responder answers "ok" for it, so that's the one
-    # that actually lands here, not the Auto Restart label.
+    # The action's own label is tried first and the fake answers "ok", so the
+    # Auto Log Off fallback is never sent (#77).
     assert {
         "cmd": "set_text_near_label",
-        "label": "Set Auto Log Off Time (HH:MM)",
+        "label": "Set Auto Restart Time (HH:MM)",
         "index": 0,
         "value": "11:59",
     } in calls
+    assert not any(
+        call.get("label") == "Set Auto Log Off Time (HH:MM)" for call in calls
+    )
     assert {"cmd": "set_checkbox", "target": "PM", "checked": True} in calls
     assert {"cmd": "set_checkbox", "target": "Auto restart", "checked": True} in calls
     assert {"cmd": "expand_tree", "path": "Lock and Exit"} in calls
 
 
-async def test_apply_settings_auto_restart_time_falls_back_to_restart_label(
+async def test_apply_settings_auto_restart_time_falls_back_to_logoff_label(
     sock_path, event_sock_path
 ):
-    """Live-caught 2026-09-06: a fresh settings dir defaults to "Auto logoff", so
-    the time field's own label reads "Set Auto Log Off Time (HH:MM)" until "Auto
-    restart" is actually selected. This exercises the other half of the
-    fallback -- the logoff label doesn't exist (an existing settings dir already
-    on "Auto restart"), so the restart label must be tried next."""
+    """A fresh settings dir defaults to "Auto logoff", so the time field reads
+    "Set Auto Log Off Time (HH:MM)" until "Auto restart" is selected -- the
+    restart label doesn't resolve, so the logoff label must be tried next."""
     calls: list[dict] = []
 
     def responder(request):
         calls.append(request)
         if (
             request.get("cmd") == "set_text_near_label"
-            and request.get("label") == "Set Auto Log Off Time (HH:MM)"
+            and request.get("label") == "Set Auto Restart Time (HH:MM)"
         ):
             return {"ok": False, "error": "not_found", "detail": "boom"}
         return {"ok": True}
@@ -541,7 +541,7 @@ async def test_apply_settings_auto_restart_time_falls_back_to_restart_label(
 
     assert {
         "cmd": "set_text_near_label",
-        "label": "Set Auto Restart Time (HH:MM)",
+        "label": "Set Auto Log Off Time (HH:MM)",
         "index": 0,
         "value": "08:00",
     } in calls

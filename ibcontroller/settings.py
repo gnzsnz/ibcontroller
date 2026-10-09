@@ -479,17 +479,17 @@ async def apply_settings_from_file(  # noqa: PLR0912 -- per-entry try/except (be
                     else "auto_logoff_radio"
                 )
                 enable_label = _resolve_control(labels.settings, enable_control)
-                # The time field's own accessible label reflects whichever of
-                # Auto Logoff/Auto Restart is *currently* selected -- a fresh
-                # settings dir defaults to "Auto logoff", so the field reads
-                # "Set Auto Log Off Time (HH:MM)" until "Auto restart" is
-                # actually selected. Tries both labels, since it's the same
-                # physical field either way -- write order is time, then
-                # AM/PM, then the enable radio last.
+                # One time field, labelled by the selected radio -- try the
+                # action's own label first, then the other (#77).
+                first_label, second_label = (
+                    (restart_time_label, logoff_time_label)
+                    if entry.action == "auto_restart_time"
+                    else (logoff_time_label, restart_time_label)
+                )
                 try:
                     await type_text_near_label(
                         dispatcher,
-                        logoff_time_label,
+                        first_label,
                         entry.field_index,
                         time_str,
                         window_id=window_id,
@@ -497,7 +497,7 @@ async def apply_settings_from_file(  # noqa: PLR0912 -- per-entry try/except (be
                 except ElementNotFoundError:
                     await type_text_near_label(
                         dispatcher,
-                        restart_time_label,
+                        second_label,
                         entry.field_index,
                         time_str,
                         window_id=window_id,
