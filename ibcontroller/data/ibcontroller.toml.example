@@ -98,6 +98,9 @@
 # Default 5
 # log_backup_count = 5
 
+# Trace - wire trace every message with agent, true/false
+# trace_enabled = false
+
 # Diagnostics -- off by default. When enabled, logs a component structure dump
 # (the same primitive settings.py/recognisers.py use to find controls) for each
 # matching window event, to ibcontroller-{instance}.log at INFO. Built-in

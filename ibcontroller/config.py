@@ -363,7 +363,6 @@ class Config:
     # caller-supplied `load_config(log_dir=...)` is only a lower-priority default
     # (DictLoader), so the config file's `log_dir` and the IBC_LOG_DIR env var
     # genuinely override it. See load_config for the loader order.
-    trace_enabled: bool = False
     log_dir: str = ts.option(
         factory=lambda: str(resolve_app_dirs()[1]), converter=_expand_user
     )
@@ -389,7 +388,8 @@ class Config:
     # launcher.py's -D props, to the Java agent's log file.
     log_max_bytes: int = ts.option(default=10_485_760, converter=int)
     log_backup_count: int = ts.option(default=5, converter=int)
-
+    # NDJSON wire trace every message with agent; trace is always file-only.
+    trace_enabled: bool = False
     # Diagnostics -- see diagnostics.py. Off by default (diagnostic_when=never);
     # an opted-in deployment gets a structure dump logged for each matching
     # window event, the replacement for socket-poking the agent by hand.
