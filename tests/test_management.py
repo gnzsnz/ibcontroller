@@ -133,6 +133,35 @@ async def test_clean_shutdown_uses_graceful_navigate_menu_when_process_alive(
     assert {"cmd": "navigate_menu", "path": "File/Close"} in calls
 
 
+async def test_clean_shutdown_terminates_when_the_agent_dies_mid_navigate_menu(
+    sock_path, event_sock_path, monkeypatch
+):
+    """The process dying between the `returncode` check and the command being
+    sent surfaces from the connection as `ProtocolError`, not a raw
+    `ConnectionResetError`, so the fallback `terminate()` still runs."""
+    async with (
+        FakeCommandServer(sock_path, lambda _request: {"ok": True, "clicked": True}),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start_dispatcher(sock_path, event_sock_path)
+
+        async def drain():
+            raise ConnectionResetError("reset by peer")
+
+        monkeypatch.setattr(dispatcher.command_conn._writer, "drain", drain)
+        process = FakeProcess(returncode=None)
+        launched = _launched(process, dispatcher, sock_path, event_sock_path)
+        await clean_shutdown(
+            launched,
+            program="gateway",
+            logged_in=True,
+            labels=LABELS.shutdown,
+            timeout=0.1,
+        )
+
+    assert process.terminated
+
+
 async def test_clean_shutdown_uses_tws_menu_path_for_tws(sock_path, event_sock_path):
     """Real, live-caught bug (2026-09-09, an audit prompted by two other
     hardcoded-label bugs the same day): the graceful-shutdown menu path used

@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from ibcontroller import agent_client
 from ibcontroller.agent_client import (
     AgentCommandConnection,
     AgentError,
@@ -634,6 +635,197 @@ async def test_concurrent_requests_do_not_interleave(sock_path):
     assert call_order == ["slow", "fast"]
 
 
+# --- Failure handling (#86) ----------------------------------------------------------
+#
+# The wire has no request IDs, so a request that fails between the write and a fully
+# parsed line leaves the stream at an unknown position. The connection must refuse
+# further use rather than hand back the response to a previous request.
+
+
+async def test_overlong_response_breaks_the_connection_and_never_returns_a_stale_one(
+    sock_path, monkeypatch
+):
+    monkeypatch.setattr(agent_client, "_STREAM_READ_LIMIT", 1024)
+    ping = (json.dumps({"ok": True, "version": "v", "uptime_s": 1}) + "\n").encode()
+
+    async def handle(reader, writer):
+        await reader.readline()
+        # One response over the limit, delivered in two chunks, then a valid one
+        # that a desynchronised client would hand back for the *next* request.
+        writer.write(b'{"ok": true, "pad": "' + b"x" * 1500)
+        await writer.drain()
+        await asyncio.sleep(0.05)
+        writer.write(b'"}\n' + ping)
+        await writer.drain()
+        await asyncio.sleep(0.2)
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock_path))
+    try:
+        async with AgentCommandConnection(sock_path) as conn:
+            with pytest.raises(ProtocolError):
+                await conn.ping()
+            with pytest.raises(ProtocolError, match="connection broken"):
+                await conn.ping()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [BrokenPipeError("broken pipe"), ConnectionResetError("reset by peer")],
+)
+async def test_write_to_a_gone_peer_raises_protocol_error(
+    sock_path, monkeypatch, failure
+):
+    async with FakeCommandServer(sock_path, lambda _request: {"ok": True}):
+        async with AgentCommandConnection(sock_path) as conn:
+
+            async def drain():
+                raise failure
+
+            monkeypatch.setattr(conn._writer, "drain", drain)
+            with pytest.raises(ProtocolError) as excinfo:
+                await conn.click("OK")
+            assert excinfo.value.__cause__ is failure
+            with pytest.raises(ProtocolError, match="connection broken"):
+                await conn.click("OK")
+
+
+@pytest.mark.parametrize(
+    ("call", "response"),
+    [
+        (lambda conn: conn.ping(), {"ok": True, "version": "v"}),
+        (lambda conn: conn.dump(), {"ok": True}),
+        (lambda conn: conn.dump(), {"ok": True, "components": [{"name": "x"}]}),
+        (lambda conn: conn.dump(), {"ok": True, "components": "nope"}),
+        (lambda conn: conn.get_text("t"), {"ok": True}),
+        (lambda conn: conn.menu_item_exists("File/Exit", "w1"), {"ok": True}),
+        (
+            lambda conn: conn.menu_item_exists("File/Exit", "w1"),
+            {"ok": True, "exists": True},
+        ),
+    ],
+)
+async def test_response_missing_a_required_field_raises_protocol_error(
+    sock_path, call, response
+):
+    """The stream is still in sync here (one full line was read), so the
+    connection stays usable."""
+    responses = [response, {"ok": True, "version": "v", "uptime_s": 1}]
+    async with FakeCommandServer(sock_path, lambda _request: responses.pop(0)):
+        async with AgentCommandConnection(sock_path) as conn:
+            with pytest.raises(ProtocolError, match="unexpected response shape"):
+                await call(conn)
+            assert (await conn.ping()).version == "v"
+
+
+async def test_failed_request_after_eof_marks_connection_broken(sock_path):
+    async def handle(reader, writer):
+        await reader.readline()
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock_path))
+    try:
+        async with AgentCommandConnection(sock_path) as conn:
+            with pytest.raises(ProtocolError, match="closed"):
+                await conn.ping()
+            with pytest.raises(ProtocolError, match="connection broken"):
+                await conn.ping()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_malformed_response_marks_connection_broken(sock_path):
+    async def handle(reader, writer):
+        await reader.readline()
+        writer.write(b"not json\n")
+        await writer.drain()
+        await asyncio.sleep(0.2)
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock_path))
+    try:
+        async with AgentCommandConnection(sock_path) as conn:
+            with pytest.raises(ProtocolError, match="malformed response"):
+                await conn.ping()
+            with pytest.raises(ProtocolError, match="connection broken"):
+                await conn.ping()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_cancelled_request_marks_connection_broken(sock_path):
+    """A cancelled request may or may not have been answered; its response, if
+    it arrives, must never be read by the next request."""
+
+    async def handle(reader, writer):
+        await reader.readline()  # never answers
+        await asyncio.sleep(1)
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock_path))
+    try:
+        async with AgentCommandConnection(sock_path) as conn:
+            task = asyncio.ensure_future(conn.ping())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            with pytest.raises(ProtocolError, match="connection broken"):
+                await conn.ping()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_close_during_an_in_flight_request_raises_protocol_error(sock_path):
+    """`close()` between a request's start and its write must not surface as an
+    `AttributeError` on a cleared reader/writer."""
+
+    async def handle(reader, writer):
+        await reader.readline()  # never answers
+        await asyncio.sleep(1)
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock_path))
+    try:
+        conn = AgentCommandConnection(sock_path)
+        await conn.connect()
+        task = asyncio.ensure_future(conn.ping())
+        await asyncio.sleep(0.05)
+        await conn.close()
+        with pytest.raises(ProtocolError):
+            await task
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_connect_resets_the_broken_state(sock_path):
+    async def handle(reader, writer):
+        await reader.readline()
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock_path))
+    try:
+        conn = AgentCommandConnection(sock_path)
+        await conn.connect()
+        with pytest.raises(ProtocolError, match="closed"):
+            await conn.ping()
+        await conn.close()
+        await conn.connect()
+        with pytest.raises(ProtocolError, match="closed"):  # not "broken"
+            await conn.ping()
+        await conn.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
 # --- AgentEventConnection -----------------------------------------------------------
 
 
@@ -684,6 +876,35 @@ async def test_messages_raises_on_malformed_line(sock_path):
     async with FakeEventServer(sock, ["not json"]):
         async with AgentEventConnection(sock) as conn:
             with pytest.raises(ProtocolError, match="malformed event line"):
+                async for _ in conn.messages():
+                    pass
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"type": "hello"},
+        {"type": "snapshot", "windows": "nope"},
+        {"type": "event", "seq": 1, "kind": "window_opened"},
+        {"type": "overflow", "from_seq": "x"},
+    ],
+)
+async def test_messages_raises_protocol_error_on_a_bad_shape(sock_path, message):
+    async with FakeEventServer(sock_path, [message]):
+        async with AgentEventConnection(sock_path) as conn:
+            with pytest.raises(ProtocolError, match="unexpected event shape"):
+                async for _ in conn.messages():
+                    pass
+
+
+async def test_messages_raises_protocol_error_on_an_overlong_line(
+    sock_path, monkeypatch
+):
+    monkeypatch.setattr(agent_client, "_STREAM_READ_LIMIT", 1024)
+    line = json.dumps({"type": "keepalive", "ts": 1, "pad": "x" * 1500})
+    async with FakeEventServer(sock_path, [line]):
+        async with AgentEventConnection(sock_path) as conn:
+            with pytest.raises(ProtocolError):
                 async for _ in conn.messages():
                     pass
 

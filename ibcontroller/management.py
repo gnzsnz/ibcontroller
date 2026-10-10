@@ -61,9 +61,9 @@ async def clean_shutdown(
     `terminate()` to signal, so the already-exited branch only stops the
     dispatcher. `terminate()` stays reserved for the "never logged in, but
     still running" branch, where the process genuinely is still alive. The
-    `except` below is broadened to `OSError` as defense in depth for the
     narrower race of the process dying between the `returncode` check and
-    the command actually being sent. Every hard-terminate waits for the
+    the command being sent surfaces as `ProtocolError` (an
+    `AgentClientError`), caught below. Every hard-terminate waits for the
     process to exit (`launcher.terminate_and_wait`) -- `run_control_loop`
     may relaunch immediately, and a still-alive JVM holds the command socket.
     """
@@ -92,7 +92,7 @@ async def clean_shutdown(
         await navigate_menu(
             launched.dispatcher, target, timeout=5.0, window_id=main_window_id
         )
-    except (AgentClientError, TimeoutError, OSError):
+    except (AgentClientError, TimeoutError):
         pass  # best-effort -- the wait-then-terminate fallback below is what matters
 
     try:

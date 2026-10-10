@@ -185,7 +185,10 @@ Any contribution must follow this separation of concerns.
   (`attrs`/`cattrs`), and the typed exceptions mapping L2's error codes.
 - **Provides:** one typed method per agent command; an async iterator over event messages.
 - **Rules:** no scheduling, no fan-out, no imports from other `ibcontroller` modules. `set_text` and
-  `set_text_near_label` are the only places a `Secret` is unwrapped.
+  `set_text_near_label` are the only places a `Secret` is unwrapped. The wire has no request IDs, so
+  a command connection that fails mid-request (transport error, malformed line, cancellation) is
+  marked broken and every later request raises `ProtocolError`; there is no reconnect. Transport
+  and response-shape failures are `ProtocolError`; only `connect()` raises `OSError`.
 
 ### L4 Dispatcher (`dispatch.py`)
 

@@ -60,8 +60,9 @@ class WindowGoneError(AgentClientError):
 
 
 class ProtocolError(AgentClientError):
-    """A transport-level failure: a malformed line, a closed connection, or a
-    response missing the `ok` field -- not an error the agent itself reported."""
+    """A transport-level failure: a failed or closed connection, a malformed
+    line, or a response that doesn't have the expected shape -- not an error
+    the agent itself reported."""
 
 
 # Large enough for a dump() response from a window with many components; a
@@ -172,12 +173,29 @@ _EVENT_MESSAGE_TYPES: dict[str, type[AgentEventMessage]] = {
 def parse_event_message(raw: Mapping[str, Any]) -> AgentEventMessage:
     """Structures a raw event message dict into its typed `AgentEventMessage`
     subclass, chosen by its `type` field. Raises `ProtocolError` if `type` is
-    missing or unrecognised."""
+    missing or unrecognised, or the message doesn't have that type's shape."""
     msg_type = raw.get("type")
     cls = _EVENT_MESSAGE_TYPES.get(msg_type) if isinstance(msg_type, str) else None
     if cls is None:
         raise ProtocolError(f"unknown event message type: {msg_type!r}")
-    return converter.structure(raw, cls)
+    return _structure(raw, cls, "event")
+
+
+def _structure(data: object, cls: Any, what: str) -> Any:
+    """`converter.structure(data, cls)`, with a shape mismatch raised as
+    `ProtocolError` instead of a `cattrs` error."""
+    try:
+        return converter.structure(data, cls)
+    except (cattrs.BaseValidationError, KeyError, TypeError) as exc:
+        raise ProtocolError(f"unexpected {what} shape: {data!r}") from exc
+
+
+def _field(response: Mapping[str, Any], key: str) -> Any:
+    """`response[key]`, with a missing key raised as `ProtocolError`."""
+    try:
+        return response[key]
+    except KeyError:
+        raise ProtocolError(f"unexpected response shape: no {key!r}") from None
 
 
 def derive_event_socket_path(command_socket_path: str | Path) -> Path:
@@ -197,18 +215,23 @@ class AgentCommandConnection:
     """One persistent connection to the agent's command socket: send one JSON
     line, read one JSON line back, per command. The wire protocol has no
     request IDs, so requests are serialized with a lock -- one write/read
-    pair completes before the next one starts."""
+    pair completes before the next one starts. A request that fails between
+    the write and a parsed response leaves the stream at an unknown position,
+    so the connection is marked broken and every later request raises
+    `ProtocolError` (reconnecting needs a new `connect()`)."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = str(path)
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
+        self._broken = False
 
     async def connect(self) -> None:
         self._reader, self._writer = await asyncio.open_unix_connection(
             path=self._path, limit=_STREAM_READ_LIMIT
         )
+        self._broken = False
 
     async def close(self) -> None:
         writer, self._writer, self._reader = self._writer, None, None
@@ -226,26 +249,46 @@ class AgentCommandConnection:
     async def __aexit__(self, *exc_info: object) -> None:
         await self.close()
 
+    def _mark_broken(self) -> None:
+        self._broken = True
+        if self._writer is not None:
+            self._writer.close()  # not awaited (may run while cancelled), close() does
+
     async def _request(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Sends `payload` as one JSON line and returns the parsed response
         dict. Raises `ProtocolError` for transport-level failures (not
-        connected, connection closed, malformed line, a response missing the
-        `ok` field)."""
-        if self._reader is None or self._writer is None:
-            raise ProtocolError("not connected")
+        connected, broken or closed connection, malformed line, a response
+        missing the `ok` field). Any failure between the write and a parsed
+        response, cancellation included, marks the connection broken."""
         line = json.dumps(payload) + "\n"
         async with self._lock:
-            self._writer.write(line.encode("utf-8"))
-            await self._writer.drain()
-            raw = await self._reader.readline()
-        if not raw:
-            raise ProtocolError("agent closed the command connection")
-        try:
-            response = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ProtocolError(f"malformed response line: {raw!r}") from exc
-        if not isinstance(response, dict) or "ok" not in response:
-            raise ProtocolError(f"unexpected response shape: {response!r}")
+            reader, writer = self._reader, self._writer
+            if self._broken:
+                raise ProtocolError("connection broken")
+            if reader is None or writer is None:
+                raise ProtocolError("not connected")
+            try:
+                writer.write(line.encode("utf-8"))
+                await writer.drain()
+                raw = await reader.readline()
+            except asyncio.CancelledError:
+                self._mark_broken()
+                raise
+            except (OSError, ValueError) as exc:  # ValueError: line over the limit
+                self._mark_broken()
+                raise ProtocolError(f"command connection failed: {exc}") from exc
+            try:
+                if not raw:
+                    raise ProtocolError("agent closed the command connection")
+                try:
+                    response = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise ProtocolError(f"malformed response line: {raw!r}") from exc
+                if not isinstance(response, dict) or "ok" not in response:
+                    raise ProtocolError(f"unexpected response shape: {response!r}")
+            except ProtocolError:
+                self._mark_broken()
+                raise
         return response
 
     @staticmethod
@@ -261,7 +304,7 @@ class AgentCommandConnection:
         response = await self._request({"cmd": "ping"})
         if not response["ok"]:
             self._raise_for_error(response)
-        return converter.structure(response, PingResult)
+        return _structure(response, PingResult, "response")
 
     async def dump(
         self, window: str | None = None, window_id: str | None = None
@@ -278,7 +321,7 @@ class AgentCommandConnection:
         response = await self._request(payload)
         if not response["ok"]:
             self._raise_for_error(response)
-        return [converter.structure(c, Component) for c in response["components"]]
+        return _structure(_field(response, "components"), list[Component], "response")
 
     async def get_text(self, target: str, window_id: str | None = None) -> str:
         """Returns the text of the component identified by `target`.
@@ -291,7 +334,7 @@ class AgentCommandConnection:
         response = await self._request(payload)
         if not response["ok"]:
             self._raise_for_error(response)
-        return str(response["value"])
+        return str(_field(response, "value"))
 
     async def set_text(
         self, target: str, value: str | Secret, window_id: str | None = None
@@ -418,7 +461,7 @@ class AgentCommandConnection:
         )
         if not response["ok"]:
             self._raise_for_error(response)
-        return bool(response["exists"]), bool(response["enabled"])
+        return bool(_field(response, "exists")), bool(_field(response, "enabled"))
 
 
 class AgentEventConnection:
@@ -459,7 +502,10 @@ class AgentEventConnection:
         if self._reader is None:
             raise ProtocolError("not connected")
         while True:
-            raw = await self._reader.readline()
+            try:
+                raw = await self._reader.readline()
+            except (OSError, ValueError) as exc:  # ValueError: line over the limit
+                raise ProtocolError(f"event connection failed: {exc}") from exc
             if not raw:
                 return
             try:
