@@ -148,8 +148,9 @@ Any contribution must follow this separation of concerns.
 ### L1 Process (`launcher.py`)
 
 - **Owns:** TWS/Gateway install discovery (macOS and Linux, channel filtering), JRE selection, the
-  JVM command line, the per-instance settings directory and socket paths, native-restart
-  prevention, spawning the JVM with the agent, draining its stdout, and readiness (`ping`).
+  JVM command line, the per-instance settings directory (including reading Gateway/TWS's
+  `autorestart` marker) and socket paths, native-restart prevention, spawning the JVM with the
+  agent, draining its stdout, and readiness (`ping`).
 - **Provides:** `LaunchedInstance`: the process, a started `Dispatcher` (L4), socket paths,
   settings directory.
 - **Rules:** one launch per call. Relaunch policy belongs to L6. L1 may construct L3 and L4 objects

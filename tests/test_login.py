@@ -40,8 +40,6 @@ from ibcontroller.login import (
     LoginManager,
     LoginState,
     MfaTimeoutError,
-    find_autorestart_hash,
-    is_restart,
 )
 from ibcontroller.recognisers import (
     DeclarativeDismissRecognizer,
@@ -140,44 +138,6 @@ async def _feed(dispatcher: Dispatcher, events: list[WindowEvent]) -> None:
         dispatcher.window_events.emit(event)
 
 
-# --- is_restart -------------------------------------------------------------
-
-
-async def test_is_restart_false_when_no_marker_file(tmp_path):
-    assert await is_restart(tmp_path) is False
-
-
-async def test_is_restart_true_when_marker_file_present(tmp_path):
-    (tmp_path / "autorestart").write_text("")
-    assert await is_restart(tmp_path) is True
-
-
-async def test_find_autorestart_hash_none_when_no_marker(tmp_path):
-    assert await find_autorestart_hash(tmp_path) is None
-
-
-async def test_find_autorestart_hash_returns_the_subdirectory_name(tmp_path):
-    account_dir = tmp_path / "nlabafcdedmocmpmkmkcecpfjmillhejiljogfeh"
-    account_dir.mkdir()
-    (account_dir / "autorestart").write_text("")
-    assert await find_autorestart_hash(tmp_path) == account_dir.name
-
-
-async def test_find_autorestart_hash_none_when_ambiguous(tmp_path):
-    """Ported from IBC's own `find_auto_restart` -- "IBC can't determine
-    which is the right one" when more than one marker exists. Unlike IBC
-    (which deletes both), this leaves the files in place and just returns
-    `None` -- the caller falls back to a full credential fill either way."""
-    for name in ("hash1", "hash2"):
-        d = tmp_path / name
-        d.mkdir()
-        (d / "autorestart").write_text("")
-    assert await find_autorestart_hash(tmp_path) is None
-    # non-destructive: both files are still there
-    assert (tmp_path / "hash1" / "autorestart").exists()
-    assert (tmp_path / "hash2" / "autorestart").exists()
-
-
 # --- LoginManager, on its own (no unprompted dialogs) ------------------------
 
 
@@ -192,7 +152,7 @@ async def test_happy_path_fills_credentials_and_reaches_logged_in(
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(_config(), LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
         try:
             task = asyncio.ensure_future(
                 manager.run(login_timeout=5.0, outcome_timeout=5.0)
@@ -236,7 +196,7 @@ async def test_fill_credentials_scopes_every_action_to_the_login_frame(
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(_config(), LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
         try:
             task = asyncio.ensure_future(
                 manager.run(login_timeout=5.0, outcome_timeout=5.0)
@@ -263,48 +223,13 @@ async def test_fill_credentials_scopes_every_action_to_the_login_frame(
     assert window_ids == {"w1"}
 
 
-async def test_restart_skips_credential_fill(sock_path, event_sock_path, tmp_path):
-    (tmp_path / "autorestart").write_text("")
-    calls: list[dict] = []
-    responder = _tracking_responder(calls)
-
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(_config(), LABELS, dispatcher, settings_dir=tmp_path)
-        try:
-            task = asyncio.ensure_future(
-                manager.run(login_timeout=5.0, outcome_timeout=5.0)
-            )
-            await _feed(
-                dispatcher,
-                [
-                    _window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway"),
-                    _window_event(2, "window_opened", "ibgateway.aw", "IBKR Gateway"),
-                    _splash_closed_event(3),
-                ],
-            )
-            await asyncio.wait_for(task, timeout=5.0)
-        finally:
-            await dispatcher.stop()
-
-    assert manager.state is LoginState.LOGGED_IN
-    # no click/set_text commands at all -- credential fill was skipped entirely
-    assert calls == []
-
-
 async def test_restart_expected_true_skips_fill_even_with_no_marker_file(
     sock_path, event_sock_path, tmp_path
 ):
-    """2026-09-07: `restart_expected` overrides the filesystem check entirely
-    -- the real, live-caught bug this closes: once `-Drestart=<hash>` actually
-    works, Gateway can delete the marker file quickly as part of a genuinely
-    successful silent relogin, so a check against `settings_dir` done *after*
-    relaunch can find it already gone. `control_loop.py` passes this
-    explicitly instead, from what it already knew before relaunching."""
-    # deliberately no autorestart file written -- tmp_path is empty
+    """2026-09-07: Gateway can delete the marker quickly as part of a
+    successful silent relogin, so a check done *after* relaunch can find it
+    already gone. `control_loop.py` passes the answer it had before
+    relaunching instead; LoginManager never checks the disk (L1 F8)."""
     calls: list[dict] = []
     responder = _tracking_responder(calls)
 
@@ -317,7 +242,6 @@ async def test_restart_expected_true_skips_fill_even_with_no_marker_file(
             _config(),
             LABELS,
             dispatcher,
-            settings_dir=tmp_path,
             restart_expected=True,
         )
         try:
@@ -340,14 +264,12 @@ async def test_restart_expected_true_skips_fill_even_with_no_marker_file(
     assert calls == []
 
 
-async def test_restart_expected_false_fills_credentials_even_with_marker_file(
+async def test_restart_expected_false_fills_credentials(
     sock_path, event_sock_path, tmp_path
 ):
-    """The other direction of the same override -- a stale marker file left
-    over from an earlier cycle must not cause a fresh launch to skip
-    credentials when the caller has already determined (via `restart_hash`)
-    that this launch is not a restart."""
-    (tmp_path / "autorestart").write_text("")
+    """The other direction: a launch the caller knows is not a restart fills
+    credentials. LoginManager never looks at the marker on disk, so a stale
+    one cannot make a fresh launch skip them."""
     calls: list[dict] = []
     responder = _tracking_responder(calls)
 
@@ -360,7 +282,6 @@ async def test_restart_expected_false_fills_credentials_even_with_marker_file(
             _config(),
             LABELS,
             dispatcher,
-            settings_dir=tmp_path,
             restart_expected=False,
         )
         try:
@@ -394,7 +315,7 @@ async def test_mfa_is_handled_inline_then_reaches_logged_in(
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(_config(), LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
         try:
             task = asyncio.ensure_future(
                 manager.run(login_timeout=5.0, outcome_timeout=5.0)
@@ -437,7 +358,7 @@ async def test_login_frame_never_appears_raises_login_frame_timeout_error(
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(_config(), LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
         try:
             with pytest.raises(LoginFrameTimeoutError):
                 await manager.run(login_timeout=0.2, outcome_timeout=1.0)
@@ -464,7 +385,7 @@ async def test_existing_session_handled_by_watcher_while_login_still_waits(
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(_config(), LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
         # not logged in -> ExistingSession scenario 3
         registry = _registry(lambda: False)
         watcher = asyncio.ensure_future(
@@ -517,7 +438,7 @@ async def test_login_failed_is_raised_by_the_watcher_not_by_run(
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(_config(), LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
         registry = _registry(lambda: False)
         watcher = asyncio.ensure_future(
             watch_for_unprompted_windows(registry, dispatcher)
@@ -566,7 +487,7 @@ async def test_run_uses_config_sourced_timeouts_when_not_overridden(
             login_dialog_display_timeout=5.0,
             mfa_timeout=5.0,
         )
-        manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
         try:
             task = asyncio.ensure_future(manager.run())  # no explicit timeouts
             await _feed(
@@ -603,7 +524,7 @@ async def test_mfa_watchdog_succeeds_within_exit_interval(
             mfa_timeout=5.0,
             mfa_exit_interval=5.0,
         )
-        manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
         try:
             task = asyncio.ensure_future(
                 manager.run(login_timeout=5.0, outcome_timeout=5.0)
@@ -654,7 +575,7 @@ async def test_gateway_mfa_watchdog_raises_when_main_window_never_appears(
             mfa_timeout=5.0,
             mfa_exit_interval=0.05,
         )
-        manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
         try:
             task = asyncio.ensure_future(
                 manager.run(login_timeout=5.0, outcome_timeout=5.0)
@@ -702,7 +623,7 @@ async def test_tws_mfa_watchdog_raises_when_main_window_never_appears(
             mfa_timeout=5.0,
             mfa_exit_interval=0.05,
         )
-        manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
         try:
             task = asyncio.ensure_future(
                 manager.run(login_timeout=5.0, outcome_timeout=5.0)
@@ -752,7 +673,7 @@ async def test_mfa_late_close_relogin_disabled_does_nothing(
             relogin_after_mfa_timeout=False,
             mfa_timeout=0.01,
         )
-        manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
         task = asyncio.ensure_future(
             manager.run(login_timeout=5.0, outcome_timeout=5.0)
         )
@@ -817,7 +738,7 @@ async def test_mfa_late_close_relogin_enabled_retries_then_succeeds(
             mfa_timeout=0.01,
             mfa_exit_interval=5.0,
         )
-        manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
         task = asyncio.ensure_future(
             manager.run(login_timeout=5.0, outcome_timeout=5.0)
         )
@@ -870,7 +791,7 @@ async def test_retry_login_refills_credentials_and_reaches_logged_in(
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(_config(), LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
         # normally set by run()'s own initial wait for the login frame --
         # this test exercises retry_login on its own, bypassing run() entirely.
         manager._login_frame_class = "ibgateway.ax"
@@ -896,7 +817,7 @@ async def test_schedule_retry_fires_a_background_task(
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(_config(), LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
         manager._login_frame_class = "ibgateway.ax"
         try:
             manager.schedule_retry(0.01)
@@ -946,7 +867,7 @@ async def test_too_many_failed_attempts_dialog_triggers_retry_via_watcher(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         config = _config(relogin_after_mfa_timeout=True)
-        manager = LoginManager(config, LABELS, dispatcher, settings_dir=tmp_path)
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
         registry = RecognizerRegistry(
             [
                 TooManyFailedLoginAttemptsRecognizer(
@@ -1012,7 +933,7 @@ async def test_tws_happy_path_fills_credentials_and_reaches_logged_in(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, settings_dir=tmp_path
+            _config(program="tws"), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(
@@ -1070,7 +991,7 @@ async def test_tws_skips_intermediate_window_then_matches_main_window_by_menu_it
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, settings_dir=tmp_path
+            _config(program="tws"), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(
@@ -1117,7 +1038,7 @@ async def test_tws_2fa_is_handled_inline_then_reaches_logged_in(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, settings_dir=tmp_path
+            _config(program="tws"), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(
@@ -1172,7 +1093,7 @@ async def test_tws_outcome_wait_is_bounded_by_outcome_timeout(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, settings_dir=tmp_path
+            _config(program="tws"), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(
@@ -1206,7 +1127,7 @@ async def test_gateway_outcome_wait_is_bounded_by_outcome_timeout(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="gateway"), LABELS, dispatcher, settings_dir=tmp_path
+            _config(program="gateway"), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(
@@ -1246,7 +1167,7 @@ async def test_gateway_2fa_close_wait_uses_remaining_deadline_not_full_budget(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="gateway"), LABELS, dispatcher, settings_dir=tmp_path
+            _config(program="gateway"), LABELS, dispatcher, restart_expected=False
         )
         start = time.monotonic()
         try:
@@ -1295,7 +1216,7 @@ async def test_tws_2fa_close_wait_uses_remaining_deadline_not_full_budget(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, settings_dir=tmp_path
+            _config(program="tws"), LABELS, dispatcher, restart_expected=False
         )
         start = time.monotonic()
         try:

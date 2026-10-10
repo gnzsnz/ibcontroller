@@ -60,9 +60,6 @@ import contextlib
 import logging
 import time
 from enum import Enum, auto
-from pathlib import Path
-
-from anyio import Path as AsyncPath
 
 from ibcontroller.actions import (
     click,
@@ -112,31 +109,6 @@ class MfaTimeoutError(LoginError):
     does with it: `exit` propagates as-is, `restart` relaunches instead."""
 
 
-async def find_autorestart_hash(settings_dir: str | Path) -> str | None:
-    """Locates Gateway/TWS's own `autorestart` marker file under
-    `settings_dir` and returns the account-hash subdirectory name it lives
-    in (`<settings_dir>/<hash>/autorestart`) -- the value passed on the JVM
-    command line as `-Drestart=<hash>` on relaunch. Returns `None` if zero
-    or more than one marker file is found: with more than one, there's no
-    way to tell which is the right one, so both are left in place (not
-    deleted) and the caller falls back to a full credential fill.
-
-    The recursive scan runs off the event loop (`anyio.Path`, one thread
-    hop per call) -- called repeatedly in a tight retry loop
-    (`control_loop._is_restart_with_grace`) concurrent with the Dispatcher's
-    own event/command tasks, which a blocking `pathlib` scan would stall."""
-    found = [p async for p in AsyncPath(settings_dir).rglob("autorestart")]
-    if len(found) != 1:
-        return None
-    return found[0].parent.name
-
-
-async def is_restart(settings_dir: str | Path) -> bool:
-    """Returns whether exactly one `autorestart` marker file exists under
-    `settings_dir` (via `find_autorestart_hash`)."""
-    return await find_autorestart_hash(settings_dir) is not None
-
-
 class LoginManager:
     """One instance per running agent -- this module's own state, not shared
     across instances, matching every other per-instance object in this
@@ -148,21 +120,17 @@ class LoginManager:
         labels: Labels,
         dispatcher: Dispatcher,
         *,
-        settings_dir: str | Path,
-        restart_expected: bool | None = None,
+        restart_expected: bool,
     ) -> None:
         """`config`/`labels`/`dispatcher`: this instance's configuration,
-        labels, and `Dispatcher`. `settings_dir`: the Gateway/TWS settings
-        directory, checked for the autorestart marker. `restart_expected`:
-        `None` (default) checks `is_restart(settings_dir)` directly at
-        `run()` time; `True`/`False` overrides that check -- for callers
-        (`control_loop.py`) that already know the answer from having
-        computed their own restart hash moments earlier, avoiding a race
-        against Gateway's own consumption of the marker file."""
+        labels, and `Dispatcher`. `restart_expected`: whether this launch is
+        a scheduled restart (`control_loop` passes `restart_hash is not None`),
+        in which case Gateway/TWS relogs in by itself and credentials are not
+        filled. Decided by the caller, never re-checked on disk here: Gateway
+        can consume the marker before a later check would see it."""
         self._config = config
         self._labels = labels
         self._dispatcher = dispatcher
-        self._settings_dir = settings_dir
         self._restart_expected = restart_expected
         self.state = LoginState.LOGGED_OUT
         self._login_frame_class: str | None = None
@@ -223,14 +191,8 @@ class LoginManager:
         self._login_frame_class = login_event.window.class_
         self._login_frame_window_id = login_event.window.window_id
 
-        if self._restart_expected is not None:
-            restart = self._restart_expected
-            reason = "restart_expected flag"
-        else:
-            restart = await is_restart(self._settings_dir)
-            reason = "autorestart marker file"
-        if restart:
-            logger.info("IBController > %s -- skipping credential fill", reason)
+        if self._restart_expected:
+            logger.info("IBController > scheduled restart -- skipping credential fill")
             self.state = LoginState.LOGGING_IN
             self._login_start_time = time.monotonic()
             await self._wait_for_outcome(outcome_timeout)

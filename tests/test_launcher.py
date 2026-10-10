@@ -46,6 +46,8 @@ from ibcontroller.launcher import (
     _version_sort_key,
     _wait_for_ready,
     build_launch_plan,
+    find_autorestart_hash,
+    is_restart,
     launch_instance,
     prepare_installation,
     resolve_tws_settings_path,
@@ -1277,6 +1279,58 @@ async def test_build_launch_plan_via_anyio_to_thread_does_not_block_event_loop(
 
     assert plan.settings_dir == str(tmp_path / "settings")
     assert counter > 0
+
+
+# --- find_autorestart_hash / is_restart ----------------------------------------------
+
+
+async def test_is_restart_false_when_no_marker_file(tmp_path):
+    assert await is_restart(tmp_path) is False
+
+
+async def test_is_restart_true_when_marker_file_present(tmp_path):
+    (tmp_path / "hash1").mkdir()
+    (tmp_path / "hash1" / "autorestart").write_text("")
+    assert await is_restart(tmp_path) is True
+
+
+async def test_find_autorestart_hash_ignores_markers_at_other_depths(tmp_path):
+    """Only `<settings>/<hash>/autorestart` counts, matching IBC's
+    `find_auto_restart` (its `cut -d/ -f3 == "."` depth check); a marker at
+    the root or deeper is neither found nor counted as ambiguous (L1 F8)."""
+    (tmp_path / "autorestart").write_text("")
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    (tmp_path / "a" / "b" / "autorestart").write_text("")
+    assert await find_autorestart_hash(tmp_path) is None
+    (tmp_path / "hash1").mkdir()
+    (tmp_path / "hash1" / "autorestart").write_text("")
+    assert await find_autorestart_hash(tmp_path) == "hash1"
+
+
+async def test_find_autorestart_hash_none_when_no_marker(tmp_path):
+    assert await find_autorestart_hash(tmp_path) is None
+
+
+async def test_find_autorestart_hash_returns_the_subdirectory_name(tmp_path):
+    account_dir = tmp_path / "nlabafcdedmocmpmkmkcecpfjmillhejiljogfeh"
+    account_dir.mkdir()
+    (account_dir / "autorestart").write_text("")
+    assert await find_autorestart_hash(tmp_path) == account_dir.name
+
+
+async def test_find_autorestart_hash_none_when_ambiguous(tmp_path):
+    """Ported from IBC's own `find_auto_restart` -- "IBC can't determine
+    which is the right one" when more than one marker exists. Unlike IBC
+    (which deletes both), this leaves the files in place and just returns
+    `None` -- the caller falls back to a full credential fill either way."""
+    for name in ("hash1", "hash2"):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "autorestart").write_text("")
+    assert await find_autorestart_hash(tmp_path) is None
+    # non-destructive: both files are still there
+    assert (tmp_path / "hash1" / "autorestart").exists()
+    assert (tmp_path / "hash2" / "autorestart").exists()
 
 
 # --- _wait_for_ready (async, needs a real socket -- fake server, no Gateway) --------

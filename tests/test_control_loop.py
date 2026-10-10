@@ -112,7 +112,7 @@ def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
         config,
         LABELS,
         _FakeDispatcher(),  # type: ignore[arg-type]
-        settings_dir=f"{gettempdir()}/settings",
+        restart_expected=False,
     )
     registry = _build_registry(config, LABELS, manager)
     declarative = [

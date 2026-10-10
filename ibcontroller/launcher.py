@@ -27,11 +27,13 @@ from pathlib import Path
 from typing import Protocol
 
 import anyio.to_thread
+from anyio import Path as AsyncPath
 
 from ibcontroller.agent_client import (
     AgentClientError,
     AgentCommandConnection,
     AgentEventConnection,
+    derive_event_socket_path,
 )
 from ibcontroller.app_dirs import resolve_runtime_dir
 from ibcontroller.config import Config, LogSink, _default_time_zone
@@ -281,6 +283,29 @@ def _program_path(program: str, os_name: str, tws_path: Path, tws_version: str) 
     if program == "gateway":
         return tws_path / "ibgateway" / tws_version
     return tws_path / tws_version
+
+
+async def find_autorestart_hash(settings_dir: str | Path) -> str | None:
+    """Locates Gateway/TWS's own `autorestart` marker at
+    `<settings_dir>/<hash>/autorestart` and returns the account-hash
+    directory name -- passed as `-Drestart=<hash>` on relaunch. Only that
+    depth counts, matching IBC's `find_auto_restart`. Returns `None` if zero
+    or more than one marker is found: with more than one there's no way to
+    tell which is right, so both are left in place (IBC deletes them) and
+    the caller falls back to a full credential fill.
+
+    Async (`anyio.Path`): `control_loop._is_restart_with_grace` calls it in a
+    retry loop while the Dispatcher's tasks are live."""
+    found = [p async for p in AsyncPath(settings_dir).glob("*/autorestart")]
+    if len(found) != 1:
+        return None
+    return found[0].parent.name
+
+
+async def is_restart(settings_dir: str | Path) -> bool:
+    """Returns whether exactly one `autorestart` marker exists (see
+    `find_autorestart_hash`)."""
+    return await find_autorestart_hash(settings_dir) is not None
 
 
 def _resolve_program_path(
@@ -602,11 +627,12 @@ def build_launch_plan(
     `runtime_dir` is where the agent's own command/event sockets are created --
     resolved via `app_dirs.resolve_runtime_dir()` (platformdirs) unless a
     caller overrides it (tests do, to avoid depending on the real
-    OS-specific runtime location). Java never derives this path itself --
-    `AgentMain` takes the command-socket path as a plain CLI argument -- so
-    this is the one place the convention lives.
+    OS-specific runtime location). The command socket path is passed to
+    `AgentMain` as a CLI argument; both sides derive the event socket
+    from it (`agent_client.derive_event_socket_path`,
+    `AgentMain.deriveEventSocketPath`).
 
-    `restart_hash`, when given (`login.find_autorestart_hash`'s return
+    `restart_hash`, when given (`find_autorestart_hash`'s return
     value), adds `-Drestart=<hash>` to the command -- lets Gateway resume the
     session after a scheduled restart without a full 2FA prompt."""
     os_name = os_name or _os_name()
@@ -614,9 +640,8 @@ def build_launch_plan(
     command_socket_path = str(
         sock_dir / f"ibcontroller-agent-{config.instance}-cmd.sock"
     )
-    event_socket_path = str(
-        sock_dir / f"ibcontroller-agent-{config.instance}-events.sock"
-    )
+    # AgentMain derives the event socket from the command socket the same way.
+    event_socket_path = str(derive_event_socket_path(command_socket_path))
     for socket_path in (command_socket_path, event_socket_path):
         _check_socket_path(socket_path, os_name)
     tws_path = _resolve_tws_path(config, os_name)

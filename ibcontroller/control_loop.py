@@ -66,6 +66,8 @@ from ibcontroller.labels import Labels
 from ibcontroller.launcher import (
     LaunchedInstance,
     LauncherError,
+    find_autorestart_hash,
+    is_restart,
     launch_instance,
 )
 from ibcontroller.logging_setup import stop_logging
@@ -74,8 +76,6 @@ from ibcontroller.login import (
     LoginFrameTimeoutError,
     LoginManager,
     MfaTimeoutError,
-    find_autorestart_hash,
-    is_restart,
 )
 from ibcontroller.management import clean_shutdown
 from ibcontroller.recognisers import (
@@ -318,13 +318,13 @@ async def run_control_loop(
     restart kills the whole JVM, so a naive single-lap loop would stop on the
     first restart. On `PROCESS_CLOSED`/`PROCESS_EXITED`, checks the
     `autorestart` marker file
-    (`login.is_restart`) -- if present, Gateway expects a relaunch that skips
+    (`launcher.is_restart`) -- if present, Gateway expects a relaunch that skips
     full authentication, so loop back to `launch_instance`; if absent, this
     was a genuine unscheduled exit and the loop stops for good. Every other
     cause returns immediately -- only a confirmed scheduled restart loops.
 
     On a confirmed restart, extracts the marker's account hash
-    (`login.find_autorestart_hash`) and passes it to the next lap's
+    (`launcher.find_autorestart_hash`) and passes it to the next lap's
     `launch_instance`, which adds `-Drestart=<hash>` to the JVM command line
     -- matching IBC's own `ibcstart.sh` and ibctl; the marker's mere presence
     is not sufficient on its own.
@@ -602,7 +602,6 @@ async def _run_one_cycle(  # noqa: PLR0915
         config,
         labels,
         launched.dispatcher,
-        settings_dir=launched.settings_dir,
         restart_expected=restart_hash is not None,
     )
     registry = _build_registry(config, labels, manager)
