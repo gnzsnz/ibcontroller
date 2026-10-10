@@ -187,7 +187,9 @@ Any contribution must follow this separation of concerns.
 - **Rules:** no scheduling, no fan-out, no imports from other `ibcontroller` modules. `set_text` and
   `set_text_near_label` are the only places a `Secret` is unwrapped. The wire has no request IDs, so
   a command connection that fails mid-request (transport error, malformed line, cancellation) is
-  marked broken and every later request raises `ProtocolError`; there is no reconnect. Transport
+  marked broken and every later request raises `ProtocolError`; there is no reconnect. Each
+  request's wire round trip is bounded (30 s, 60 s for `dump`; constants, not config) and a timeout
+  breaks the connection the same way. Transport
   and response-shape failures are `ProtocolError`; only `connect()` raises `OSError`.
 
 ### L4 Dispatcher (`dispatch.py`)

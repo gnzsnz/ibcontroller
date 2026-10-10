@@ -162,6 +162,44 @@ async def test_clean_shutdown_terminates_when_the_agent_dies_mid_navigate_menu(
     assert process.terminated
 
 
+async def test_clean_shutdown_terminates_when_the_agent_never_answers(
+    sock_path, event_sock_path
+):
+    """A `navigate_menu` the agent never answers is bounded by the request
+    timeout, so the fallback `terminate()` is reached instead of hanging."""
+
+    async def handle(reader, writer):
+        await reader.readline()  # accepts, never answers
+        await asyncio.sleep(5)
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock_path))
+    try:
+        async with FakeEventServer(event_sock_path, []):
+            dispatcher = Dispatcher(
+                AgentCommandConnection(sock_path, request_timeout=0.1),
+                AgentEventConnection(event_sock_path),
+            )
+            await dispatcher.start()
+            process = FakeProcess(returncode=None)
+            launched = _launched(process, dispatcher, sock_path, event_sock_path)
+            await asyncio.wait_for(
+                clean_shutdown(
+                    launched,
+                    program="gateway",
+                    logged_in=True,
+                    labels=LABELS.shutdown,
+                    timeout=0.1,
+                ),
+                timeout=3,
+            )
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert process.terminated
+
+
 async def test_clean_shutdown_uses_tws_menu_path_for_tws(sock_path, event_sock_path):
     """Real, live-caught bug (2026-09-09, an audit prompted by two other
     hardcoded-label bugs the same day): the graceful-shutdown menu path used

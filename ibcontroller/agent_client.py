@@ -70,6 +70,11 @@ class ProtocolError(AgentClientError):
 # realistic component tree would produce.
 _STREAM_READ_LIMIT = 8 * 1024 * 1024
 
+# Wire round-trip bounds, from the longest command durations seen in trace files
+# (5.3 s for a dump, under 2.5 s for anything else). A dump is slower under EDT load.
+_REQUEST_TIMEOUT = 30.0
+_DUMP_TIMEOUT = 60.0
+
 _ERROR_CODES: dict[str, type[AgentClientError]] = {
     "not_found": ElementNotFoundError,
     "refused_credential_field": CredentialRefusedError,
@@ -218,10 +223,22 @@ class AgentCommandConnection:
     pair completes before the next one starts. A request that fails between
     the write and a parsed response leaves the stream at an unknown position,
     so the connection is marked broken and every later request raises
-    `ProtocolError` (reconnecting needs a new `connect()`)."""
+    `ProtocolError` (reconnecting needs a new `connect()`).
 
-    def __init__(self, path: str | Path) -> None:
+    `request_timeout` bounds each request's wire round trip (not the wait for
+    the lock); `dump_timeout` replaces it for `dump`. A request that times out
+    breaks the connection."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        request_timeout: float = _REQUEST_TIMEOUT,
+        dump_timeout: float = _DUMP_TIMEOUT,
+    ) -> None:
         self._path = str(path)
+        self._request_timeout = request_timeout
+        self._dump_timeout = dump_timeout
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
@@ -254,12 +271,16 @@ class AgentCommandConnection:
         if self._writer is not None:
             self._writer.close()  # not awaited (may run while cancelled), close() does
 
-    async def _request(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+    async def _request(
+        self, payload: Mapping[str, Any], timeout: float | None = None
+    ) -> dict[str, Any]:
         """Sends `payload` as one JSON line and returns the parsed response
         dict. Raises `ProtocolError` for transport-level failures (not
-        connected, broken or closed connection, malformed line, a response
-        missing the `ok` field). Any failure between the write and a parsed
-        response, cancellation included, marks the connection broken."""
+        connected, broken or closed connection, no response within `timeout`
+        (default `request_timeout`), malformed line, a response missing the
+        `ok` field). Any failure between the write and a parsed response,
+        cancellation and timeout included, marks the connection broken."""
+        timeout = self._request_timeout if timeout is None else timeout
         line = json.dumps(payload) + "\n"
         async with self._lock:
             reader, writer = self._reader, self._writer
@@ -268,12 +289,16 @@ class AgentCommandConnection:
             if reader is None or writer is None:
                 raise ProtocolError("not connected")
             try:
-                writer.write(line.encode("utf-8"))
-                await writer.drain()
-                raw = await reader.readline()
+                async with asyncio.timeout(timeout):
+                    writer.write(line.encode("utf-8"))
+                    await writer.drain()
+                    raw = await reader.readline()
             except asyncio.CancelledError:
                 self._mark_broken()
                 raise
+            except TimeoutError:  # before OSError: it is a subclass
+                self._mark_broken()
+                raise ProtocolError(f"no response within {timeout}s") from None
             except (OSError, ValueError) as exc:  # ValueError: line over the limit
                 self._mark_broken()
                 raise ProtocolError(f"command connection failed: {exc}") from exc
@@ -318,7 +343,7 @@ class AgentCommandConnection:
             payload["window"] = window
         if window_id is not None:
             payload["window_id"] = window_id
-        response = await self._request(payload)
+        response = await self._request(payload, self._dump_timeout)
         if not response["ok"]:
             self._raise_for_error(response)
         return _structure(_field(response, "components"), list[Component], "response")

@@ -805,6 +805,83 @@ async def test_close_during_an_in_flight_request_raises_protocol_error(sock_path
         await server.wait_closed()
 
 
+async def _silent_server(sock_path):
+    async def handle(reader, writer):
+        await reader.readline()  # accepts, never answers
+        await asyncio.sleep(5)
+        writer.close()
+
+    return await asyncio.start_unix_server(handle, path=str(sock_path))
+
+
+async def test_request_times_out_and_breaks_the_connection(sock_path):
+    server = await _silent_server(sock_path)
+    try:
+        async with AgentCommandConnection(sock_path, request_timeout=0.1) as conn:
+            with pytest.raises(ProtocolError, match=r"no response within 0\.1s"):
+                await conn.click("OK")
+            with pytest.raises(ProtocolError, match="connection broken"):
+                await conn.click("OK")
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_dump_uses_its_own_longer_timeout(sock_path):
+    async def handle(reader, writer):
+        while await reader.readline():
+            await asyncio.sleep(0.2)
+            writer.write(b'{"ok": true, "components": []}\n')
+            await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock_path))
+    try:
+        async with AgentCommandConnection(
+            sock_path, request_timeout=0.05, dump_timeout=2.0
+        ) as conn:
+            assert await conn.dump() == []
+            with pytest.raises(ProtocolError, match=r"no response within 0\.05s"):
+                await conn.click("OK")
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_dump_times_out_at_its_own_limit(sock_path):
+    server = await _silent_server(sock_path)
+    try:
+        async with AgentCommandConnection(
+            sock_path, request_timeout=5.0, dump_timeout=0.1
+        ) as conn:
+            with pytest.raises(ProtocolError, match=r"no response within 0\.1s"):
+                await conn.dump()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_time_waiting_for_the_lock_does_not_count_towards_the_timeout(
+    sock_path,
+):
+    async def handle(reader, writer):
+        while await reader.readline():
+            await asyncio.sleep(0.15)
+            writer.write(b'{"ok": true, "value": "v"}\n')
+            await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock_path))
+    try:
+        async with AgentCommandConnection(sock_path, request_timeout=0.25) as conn:
+            # The second caller waits ~0.15s for the lock, then ~0.15s on the wire.
+            results = await asyncio.gather(conn.get_text("a"), conn.get_text("b"))
+        assert results == ["v", "v"]
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
 async def test_connect_resets_the_broken_state(sock_path):
     async def handle(reader, writer):
         await reader.readline()
