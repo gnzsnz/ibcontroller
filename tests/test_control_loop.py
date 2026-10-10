@@ -41,6 +41,7 @@ from ibcontroller.control_loop import (
 )
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
+from ibcontroller.launcher import LaunchedInstance
 from ibcontroller.login import (
     LoginFrameTimeoutError,
     LoginManager,
@@ -59,7 +60,7 @@ from ibcontroller.recognisers import (
     UnrecognizedCredentialsRecognizer,
 )
 from ibcontroller.schedule import ScheduledAction, ScheduledShutdown
-from tests.fakes import FakeCommandServer, FakeEventServer
+from tests.fakes import FakeCommandServer, FakeEventServer, FakeProcess
 
 pytestmark = pytest.mark.asyncio
 
@@ -958,3 +959,90 @@ async def test_apply_declarative_settings_passes_second_factor_timeout(
 
     assert captured["timeout"] == 42.0
     assert captured["main_window_id"] == "w5"
+
+
+async def test_run_to_completion_survives_repeated_cancellation():
+    """A second SIGINT/SIGTERM during `clean_shutdown` must not abort it
+    midway and leave the JVM running (#79). The shutdown still finishes, then
+    the cancellation propagates."""
+    finished = asyncio.Event()
+
+    async def shutdown() -> None:
+        await asyncio.sleep(0.2)
+        finished.set()
+
+    task = asyncio.ensure_future(control_loop._run_to_completion(shutdown()))
+    for _ in range(3):
+        await asyncio.sleep(0.02)
+        task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished.is_set()
+
+
+async def test_run_to_completion_propagates_failure_and_plain_success():
+    async def boom() -> None:
+        raise RuntimeError("shutdown broke")
+
+    with pytest.raises(RuntimeError, match="shutdown broke"):
+        await control_loop._run_to_completion(boom())
+    await control_loop._run_to_completion(asyncio.sleep(0))
+
+
+async def test_run_one_cycle_cancels_watcher_when_clean_shutdown_raises(
+    monkeypatch, sock_path, event_sock_path
+):
+    """The watcher stays up during shutdown (exiting can raise dialogs), but a
+    failing `clean_shutdown` must not leak it (#79). The process has already
+    exited, so the cycle goes straight to shutdown."""
+    watcher_cancelled = asyncio.Event()
+
+    async def watcher(*_args, **_kwargs):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            watcher_cancelled.set()
+            raise
+
+    async def forever(*_args, **_kwargs):
+        await asyncio.sleep(3600)
+
+    class _Manager:
+        state = None
+        main_window_id = None
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def run(self) -> None:
+            await asyncio.sleep(3600)
+
+        def is_logged_in(self) -> bool:
+            return False
+
+    async def launch(*_args, **_kwargs):
+        return LaunchedInstance(
+            # pyrefly: ignore [bad-argument-type]
+            process=FakeProcess(returncode=0),
+            dispatcher=Dispatcher(
+                AgentCommandConnection(sock_path), AgentEventConnection(event_sock_path)
+            ),
+            command_socket_path=str(sock_path),
+            event_socket_path=str(event_sock_path),
+            settings_dir=f"{gettempdir()}/settings",
+            stdout_drain_task=asyncio.ensure_future(asyncio.sleep(0)),
+        )
+
+    async def failing_shutdown(*_args, **_kwargs):
+        raise RuntimeError("shutdown broke")
+
+    monkeypatch.setattr(control_loop, "launch_instance", launch)
+    monkeypatch.setattr(control_loop, "LoginManager", _Manager)
+    monkeypatch.setattr(control_loop, "_build_registry", lambda *_a: None)
+    monkeypatch.setattr(control_loop, "watch_for_unprompted_windows", watcher)
+    monkeypatch.setattr(control_loop, "watch_for_diagnostics", forever)
+    monkeypatch.setattr(control_loop, "clean_shutdown", failing_shutdown)
+
+    with pytest.raises(RuntimeError, match="shutdown broke"):
+        await control_loop._run_one_cycle(_config(), "agent.jar", LABELS)
+    assert watcher_cancelled.is_set()

@@ -225,7 +225,7 @@ class SettingsLabels:
 @attrs.define(frozen=True)
 class ShutdownLabels:
     """The graceful shutdown menu item: Gateway's `File > Close` or TWS's
-    `File > Exit`. See `launcher.clean_shutdown`."""
+    `File > Exit`. See `management.clean_shutdown`."""
 
     gateway_menu_path: str
     tws_menu_path: str

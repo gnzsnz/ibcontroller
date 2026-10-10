@@ -20,20 +20,21 @@ import attrs
 import pytest
 from typed_settings.types import Secret
 
-from ibcontroller.agent_client import AgentCommandConnection, AgentEventConnection
-from ibcontroller.config import Config, TradingMode
-from ibcontroller.dispatch import Dispatcher
+from ibcontroller.config import Config, LogSink, TradingMode
 from ibcontroller.labels import load_labels
 from ibcontroller.launcher import (
     AgentStartupError,
-    LaunchedInstance,
     LauncherError,
+    LaunchPlan,
     _build_classpath,
+    _check_socket_path,
     _detect_tws_version,
     _drain_stdout,
     _ensure_jts_ini,
     _find_java_bin,
+    _jvm_output_hint,
     _list_version_candidates,
+    _log_drain_failure,
     _prevent_native_restart,
     _prevent_native_restart_linux,
     _program_path,
@@ -42,15 +43,19 @@ from ibcontroller.launcher import (
     _read_vmoptions_file,
     _resolve_program_path,
     _resolve_tws_path,
-    _terminate_and_wait,
     _version_sort_key,
     _wait_for_ready,
     build_launch_plan,
-    clean_shutdown,
+    launch_instance,
     resolve_tws_settings_path,
+    terminate_and_wait,
 )
 from ibcontroller.logging_setup import configure_gateway_stdout, stop_logging
-from tests.fakes import FakeCommandServer, FakeEventServer
+from tests.fakes import (
+    FakeCommandServer,
+    FakeProcess,
+    FakeProcessIgnoringSigterm,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -198,7 +203,7 @@ def test_ensure_jts_ini_overwrites_time_zone_when_explicitly_set(tmp_path, monke
     assert "TimeZone=America/New_York" not in lines
 
 
-def test_build_launch_plan_creates_jts_ini(tmp_path):
+def test_build_launch_plan_creates_jts_ini(tmp_path, run_dir):
     base = _make_synthetic_install(tmp_path, os_name="macos")
     settings_dir = tmp_path / "settings"
     config = _config(
@@ -208,7 +213,7 @@ def test_build_launch_plan_creates_jts_ini(tmp_path):
         instance="paper",
     )
     build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=run_dir
     )
     assert (settings_dir / "jts.ini").is_file()
     assert "UseSSL=true" in (settings_dir / "jts.ini").read_text()
@@ -713,7 +718,7 @@ def test_detect_tws_version_tws_channel_filter_still_strict_on_fallback_tree(tmp
         _detect_tws_version(tmp_path, "macos", "tws", "stable")
 
 
-def test_build_launch_plan_macos_gateway(tmp_path):
+def test_build_launch_plan_macos_gateway(tmp_path, run_dir):
     base = _make_synthetic_install(tmp_path, os_name="macos")
     settings_dir = tmp_path / "settings"
     config = _config(
@@ -722,7 +727,7 @@ def test_build_launch_plan_macos_gateway(tmp_path):
         tws_settings_path=str(settings_dir),
         instance="paper",
     )
-    runtime_dir = tmp_path / "run"
+    runtime_dir = run_dir
     plan = build_launch_plan(
         config, tmp_path / "agent.jar", os_name="macos", runtime_dir=runtime_dir
     )
@@ -756,7 +761,7 @@ def test_build_launch_plan_macos_gateway(tmp_path):
     assert (program_path / "IB Gateway 10.50-1.app").is_dir()
 
 
-def test_build_launch_plan_macos_keeps_real_dprops_from_i4jparams(tmp_path):
+def test_build_launch_plan_macos_keeps_real_dprops_from_i4jparams(tmp_path, run_dir):
     """gitea #56: real `-D` fixes (XML-parser hardening limits,
     `jxBrowserKey`) live in `i4jparams.conf`'s `javaOptions` on macOS too
     (confirmed live against a real Gateway install) -- must survive into the
@@ -777,7 +782,7 @@ def test_build_launch_plan_macos_keeps_real_dprops_from_i4jparams(tmp_path):
         instance="paper",
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=run_dir
     )
 
     assert "-Djdk.xml.elementAttributeLimit=10000" in plan.command
@@ -785,7 +790,7 @@ def test_build_launch_plan_macos_keeps_real_dprops_from_i4jparams(tmp_path):
     assert plan.command.count("-DjxBrowserKey=ABC123") == 1
 
 
-def test_build_launch_plan_java_heap_size_overrides_vmoptions_file(tmp_path):
+def test_build_launch_plan_java_heap_size_overrides_vmoptions_file(tmp_path, run_dir):
     base = _make_synthetic_install(tmp_path, os_name="macos")
     settings_dir = tmp_path / "settings"
     config = _config(
@@ -796,13 +801,13 @@ def test_build_launch_plan_java_heap_size_overrides_vmoptions_file(tmp_path):
         java_heap_size="2g",
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=run_dir
     )
     assert "-Xmx2g" in plan.command
     assert "-Xmx768m" not in plan.command
 
 
-def test_build_launch_plan_auto_detects_tws_version_when_unset(tmp_path):
+def test_build_launch_plan_auto_detects_tws_version_when_unset(tmp_path, run_dir):
     """`Config.tws_channel` defaults to "stable" (2026-09-11 decision, TODO.md), so
     auto-detection filters to stable-channel installs -- the synthetic install must
     carry that channel metadata, matching every real install (see
@@ -819,12 +824,12 @@ def test_build_launch_plan_auto_detects_tws_version_when_unset(tmp_path):
         tws_version=None,
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=run_dir
     )
     assert any("IB Gateway 10.50" in part for part in plan.command)
 
 
-def test_build_launch_plan_reads_channel_dynamically(tmp_path):
+def test_build_launch_plan_reads_channel_dynamically(tmp_path, run_dir):
     """`-Dchannel=` must reflect the real install's own value, not a hardcoded
     literal -- confirmed live, 2026-09-09: `IB Gateway 10.45` carries
     `channel=stable`, `IB Gateway 10.50` carries `channel=latest`, each in its own
@@ -841,14 +846,14 @@ def test_build_launch_plan_reads_channel_dynamically(tmp_path):
         instance="paper",
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=run_dir
     )
     assert "-Dchannel=stable" in plan.command
     assert "-Dchannel=latest" not in plan.command
 
 
 def test_build_launch_plan_channel_falls_back_to_config_when_not_found(
-    tmp_path, caplog
+    tmp_path, run_dir, caplog
 ):
     """No `channel` in the real install's `i4jparams.conf` -- falls back to
     `Config.tws_channel` (default "stable"), not a hardcoded literal (tea #35),
@@ -865,13 +870,15 @@ def test_build_launch_plan_channel_falls_back_to_config_when_not_found(
             config,
             tmp_path / "agent.jar",
             os_name="macos",
-            runtime_dir=tmp_path / "run",
+            runtime_dir=run_dir,
         )
     assert "-Dchannel=stable" in plan.command
     assert "no 'channel' variable" in caplog.text
 
 
-def test_build_launch_plan_channel_from_install_does_not_warn(tmp_path, caplog):
+def test_build_launch_plan_channel_from_install_does_not_warn(
+    tmp_path, run_dir, caplog
+):
     base = _make_synthetic_install(tmp_path, os_name="macos")
     (base / "IB Gateway 10.50" / ".install4j" / "i4jparams.conf").write_text(
         '<variable name="channel" value="latest" />\n'
@@ -887,12 +894,12 @@ def test_build_launch_plan_channel_from_install_does_not_warn(tmp_path, caplog):
             config,
             tmp_path / "agent.jar",
             os_name="macos",
-            runtime_dir=tmp_path / "run",
+            runtime_dir=run_dir,
         )
     assert "no 'channel' variable" not in caplog.text
 
 
-def test_build_launch_plan_sets_install_dir_with_trailing_slash(tmp_path):
+def test_build_launch_plan_sets_install_dir_with_trailing_slash(tmp_path, run_dir):
     """IB's launcher passes `-DinstallDir=$prg_dir/`; without it TWS logs
     `'installDir' system property is not set` and keeps a per-settings-dir
     `locales.jar` (tea #58)."""
@@ -904,12 +911,12 @@ def test_build_launch_plan_sets_install_dir_with_trailing_slash(tmp_path):
         instance="paper",
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=run_dir
     )
     assert f"-DinstallDir={base / 'IB Gateway 10.50'}/" in plan.command
 
 
-def test_build_launch_plan_omits_restart_flag_when_hash_not_given(tmp_path):
+def test_build_launch_plan_omits_restart_flag_when_hash_not_given(tmp_path, run_dir):
     base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
         program="gateway",
@@ -918,12 +925,12 @@ def test_build_launch_plan_omits_restart_flag_when_hash_not_given(tmp_path):
         instance="paper",
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=run_dir
     )
     assert not any(opt.startswith("-Drestart=") for opt in plan.command)
 
 
-def test_build_launch_plan_adds_agent_logging_flags(tmp_path):
+def test_build_launch_plan_adds_agent_logging_flags(tmp_path, run_dir):
     """2026-09-08: the agent's java.util.logging is routed to its own per-instance
     file under the same shared log dir Python uses (never the same filename as Python's
     own ibcontroller-{instance}.log / gateway-{instance}.log -- all flat in that
@@ -939,7 +946,7 @@ def test_build_launch_plan_adds_agent_logging_flags(tmp_path):
         log_level=logging.DEBUG,
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=run_dir
     )
     logfile_flag = (
         f"-Dibcontroller.logfile="
@@ -957,7 +964,7 @@ def test_build_launch_plan_adds_agent_logging_flags(tmp_path):
     assert "gateway-paper.log" not in logfile
 
 
-def test_build_launch_plan_adds_restart_flag_when_hash_given(tmp_path):
+def test_build_launch_plan_adds_restart_flag_when_hash_given(tmp_path, run_dir):
     """2026-09-07: IBC's own `ibcstart.sh` and ibctl's independent
     implementation both pass `-Drestart=<hash>` on a relaunch after a
     scheduled restart -- added here after confirming live that the marker
@@ -973,13 +980,15 @@ def test_build_launch_plan_adds_restart_flag_when_hash_given(tmp_path):
         config,
         tmp_path / "agent.jar",
         os_name="macos",
-        runtime_dir=tmp_path / "run",
+        runtime_dir=run_dir,
         restart_hash="nlabafcdedmocmpmkmkcecpfjmillhejiljogfeh",
     )
     assert "-Drestart=nlabafcdedmocmpmkmkcecpfjmillhejiljogfeh" in plan.command
 
 
-def test_build_launch_plan_macos_gateway_survives_relaunch_after_rename(tmp_path):
+def test_build_launch_plan_macos_gateway_survives_relaunch_after_rename(
+    tmp_path, run_dir
+):
     """A second `build_launch_plan` call (matching a real relaunch-after-
     restart) must still find the real VM options even though the `.app`
     bundle is already renamed from the first call -- `_read_i4j_vmoptions`
@@ -993,7 +1002,7 @@ def test_build_launch_plan_macos_gateway_survives_relaunch_after_rename(tmp_path
         tws_settings_path=str(settings_dir),
         instance="paper",
     )
-    runtime_dir = tmp_path / "run"
+    runtime_dir = run_dir
 
     build_launch_plan(
         config, tmp_path / "agent.jar", os_name="macos", runtime_dir=runtime_dir
@@ -1005,7 +1014,7 @@ def test_build_launch_plan_macos_gateway_survives_relaunch_after_rename(tmp_path
     assert "--add-opens=x/y=ALL-UNNAMED" in plan.command
 
 
-def test_build_launch_plan_linux_tws(tmp_path):
+def test_build_launch_plan_linux_tws(tmp_path, run_dir):
     base = _make_synthetic_install(tmp_path, os_name="linux", program="tws")
     settings_dir = tmp_path / "settings"
     config = _config(
@@ -1014,7 +1023,7 @@ def test_build_launch_plan_linux_tws(tmp_path):
         tws_settings_path=str(settings_dir),
         instance="live",
     )
-    runtime_dir = tmp_path / "run"
+    runtime_dir = run_dir
     plan = build_launch_plan(
         config, tmp_path / "agent.jar", os_name="linux", runtime_dir=runtime_dir
     )
@@ -1036,7 +1045,7 @@ def test_build_launch_plan_linux_tws(tmp_path):
     assert (program_path / "tws-1").is_file()
 
 
-def test_build_launch_plan_linux_reads_add_opens_from_i4jparams(tmp_path):
+def test_build_launch_plan_linux_reads_add_opens_from_i4jparams(tmp_path, run_dir):
     """The bug this guards against: a real TWS-on-Linux launch crashed with
     `InaccessibleObjectException` because `tws.vmoptions` never carries
     `--add-opens`/`--add-exports` -- only install4j's own `javaOptions`
@@ -1055,13 +1064,13 @@ def test_build_launch_plan_linux_reads_add_opens_from_i4jparams(tmp_path):
         instance="live",
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=run_dir
     )
 
     assert "--add-opens=java.desktop/javax.swing=ALL-UNNAMED" in plan.command
 
 
-def test_build_launch_plan_linux_jxbrowser_key_appears_once(tmp_path):
+def test_build_launch_plan_linux_jxbrowser_key_appears_once(tmp_path, run_dir):
     """gitea #55: `-DjxBrowserKey` comes solely from `i4jparams.conf`'s
     `javaOptions` blob (via `_read_i4j_vmoptions`) -- `build_launch_plan`
     must not add a second, explicit copy on top of it."""
@@ -1078,13 +1087,15 @@ def test_build_launch_plan_linux_jxbrowser_key_appears_once(tmp_path):
         instance="live",
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=run_dir
     )
 
     assert plan.command.count("-DjxBrowserKey=ABC123") == 1
 
 
-def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(tmp_path, caplog):
+def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(
+    tmp_path, run_dir, caplog
+):
     """No TWS install, same-version Gateway install present (gitea #25): the
     plan uses the Gateway install's path, `.install4j`, bundled JRE and
     `ibgateway.vmoptions` (the Gateway dir has no `tws.vmoptions`), keeps the
@@ -1105,7 +1116,7 @@ def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(tmp_path, cap
             config,
             tmp_path / "agent.jar",
             os_name="macos",
-            runtime_dir=tmp_path / "run",
+            runtime_dir=run_dir,
         )
 
     assert "jclient.LoginFrame" in plan.command
@@ -1126,7 +1137,9 @@ def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(tmp_path, cap
     assert (program_path / "IB Gateway 10.50-1.app").is_dir()
 
 
-def test_build_launch_plan_macos_tws_prefers_tws_install_when_present(tmp_path, caplog):
+def test_build_launch_plan_macos_tws_prefers_tws_install_when_present(
+    tmp_path, run_dir, caplog
+):
     """No fallback when a TWS install exists -- the TWS dir wins, no warning
     logged (IBC's own priority; gitea #25)."""
     base = _make_synthetic_install(tmp_path, os_name="macos", program="tws")
@@ -1143,7 +1156,7 @@ def test_build_launch_plan_macos_tws_prefers_tws_install_when_present(tmp_path, 
             config,
             tmp_path / "agent.jar",
             os_name="macos",
-            runtime_dir=tmp_path / "run",
+            runtime_dir=run_dir,
         )
 
     assert "jclient.LoginFrame" in plan.command
@@ -1151,7 +1164,9 @@ def test_build_launch_plan_macos_tws_prefers_tws_install_when_present(tmp_path, 
     assert not any("falling back" in r.message for r in caplog.records)
 
 
-def test_build_launch_plan_macos_tws_auto_detects_version_in_gateway_tree(tmp_path):
+def test_build_launch_plan_macos_tws_auto_detects_version_in_gateway_tree(
+    tmp_path, run_dir
+):
     """`tws_version` unset + no TWS install at all: version detection itself
     runs against the Gateway tree (channel-aware), then the plan resolves the
     Gateway install -- the whole TWS-from-Gateway path end to end."""
@@ -1167,13 +1182,13 @@ def test_build_launch_plan_macos_tws_auto_detects_version_in_gateway_tree(tmp_pa
         tws_version=None,
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="macos", runtime_dir=run_dir
     )
     assert "IB Gateway 10.50" in str(plan.command)
     assert "jclient.LoginFrame" in plan.command
 
 
-def test_build_launch_plan_linux_tws_falls_back_to_ibgateway(tmp_path):
+def test_build_launch_plan_linux_tws_falls_back_to_ibgateway(tmp_path, run_dir):
     base = _make_synthetic_install(tmp_path, os_name="linux", program="gateway")
     settings_dir = tmp_path / "settings"
     config = _config(
@@ -1183,17 +1198,19 @@ def test_build_launch_plan_linux_tws_falls_back_to_ibgateway(tmp_path):
         instance="paper",
     )
     plan = build_launch_plan(
-        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=tmp_path / "run"
+        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=run_dir
     )
     assert "jclient.LoginFrame" in plan.command
     assert "ibgateway" in str(plan.command)
     assert f"-DjtsConfigDir={settings_dir}" in plan.command
 
 
-def test_build_launch_plan_default_runtime_dir_uses_platformdirs(tmp_path, monkeypatch):
+def test_build_launch_plan_default_runtime_dir_uses_platformdirs(
+    tmp_path, run_dir, monkeypatch
+):
     """No `runtime_dir` override -- falls back to `app_dirs.resolve_runtime_dir()`,
     same "Docker mode" env-var override as `resolve_app_dirs`."""
-    monkeypatch.setenv("IBC_APP_DIR", str(tmp_path / "appdir"))
+    monkeypatch.setenv("IBC_APP_DIR", str(run_dir))
     base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
         program="gateway",
@@ -1203,7 +1220,7 @@ def test_build_launch_plan_default_runtime_dir_uses_platformdirs(tmp_path, monke
     )
     plan = build_launch_plan(config, tmp_path / "agent.jar", os_name="macos")
 
-    expected_dir = tmp_path / "appdir" / "run"
+    expected_dir = run_dir / "run"
     assert plan.command_socket_path == str(
         expected_dir / "ibcontroller-agent-paper-cmd.sock"
     )
@@ -1211,7 +1228,7 @@ def test_build_launch_plan_default_runtime_dir_uses_platformdirs(tmp_path, monke
 
 
 async def test_build_launch_plan_via_anyio_to_thread_does_not_block_event_loop(
-    tmp_path,
+    tmp_path, run_dir
 ):
     """`launch_instance` calls `build_launch_plan` through
     `anyio.to_thread.run_sync`, not directly -- its synchronous filesystem
@@ -1243,7 +1260,7 @@ async def test_build_launch_plan_via_anyio_to_thread_does_not_block_event_loop(
                 config,
                 tmp_path / "agent.jar",
                 os_name="linux",
-                runtime_dir=tmp_path / "run",
+                runtime_dir=run_dir,
             )
         )
     finally:
@@ -1286,12 +1303,130 @@ async def test_wait_for_ready_fails_fast_when_process_already_exited(sock_path):
     """A JVM that exits before binding its socket (e.g. the previous instance
     still held it) must fail within one poll as `AgentStartupError`, not after
     the full `timeout` as a generic `LauncherError` (gitea #60, case 13)."""
-    process = _FakeProcess(returncode=1)
+    process = FakeProcess(returncode=1)
     start = time.monotonic()
     with pytest.raises(AgentStartupError, match="returncode=1"):
         # pyrefly: ignore [bad-argument-type]
         await _wait_for_ready(str(sock_path), timeout=5.0, process=process)
     assert time.monotonic() - start < 1.0
+
+
+async def test_wait_for_ready_exit_error_points_at_jvm_output(sock_path):
+    """The reason the JVM exited (e.g. "Refusing to start" on a duplicate
+    instance name) is only in its own output, so the error says where that is."""
+    process = FakeProcess(returncode=1)
+    with pytest.raises(
+        AgentStartupError, match=r"see /x/gateway-paper\.log for the reason"
+    ):
+        await _wait_for_ready(
+            str(sock_path),
+            timeout=5.0,
+            # pyrefly: ignore [bad-argument-type]
+            process=process,
+            output_hint="/x/gateway-paper.log",
+        )
+
+
+def test_jvm_output_hint_follows_log_sink(tmp_path):
+    file_config = _config(log_sink=LogSink.FILE, log_dir=str(tmp_path), instance="p")
+    assert _jvm_output_hint(file_config) == str(tmp_path / "gateway-p.log")
+    assert "output above" in _jvm_output_hint(_config(log_sink=LogSink.STD))
+
+
+@contextlib.asynccontextmanager
+async def _silent_server(path):
+    """Accepts connections and never answers -- like another agent's command
+    socket while it serves its own dispatcher (one client at a time)."""
+    held: list[asyncio.StreamWriter] = []
+
+    async def hold(_reader, writer):
+        held.append(writer)
+
+    server = await asyncio.start_unix_server(hold, path=str(path))
+    try:
+        yield
+    finally:
+        for writer in held:
+            writer.close()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_wait_for_ready_times_out_when_ping_is_never_answered(sock_path):
+    """Duplicate instance name: the probe connects to a socket that never
+    answers `ping`. `timeout` must still bound the wait (L1 F3, #78)."""
+    async with _silent_server(sock_path):
+        start = time.monotonic()
+        with pytest.raises(LauncherError, match="did not respond to ping"):
+            await _wait_for_ready(str(sock_path), timeout=0.5)
+        assert time.monotonic() - start < 1.5
+
+
+async def test_wait_for_ready_sees_exit_while_probe_is_stuck(sock_path, monkeypatch):
+    """The exit check runs between probes, so a stuck probe must time out for
+    it to fire: our JVM exited while the probe hung on another agent's socket."""
+    monkeypatch.setattr("ibcontroller.launcher._PING_ATTEMPT_TIMEOUT", 0.1)
+    process = FakeProcess(returncode=None)
+
+    async def exit_soon():
+        await asyncio.sleep(0.2)
+        process.returncode = 1
+
+    async with _silent_server(sock_path):
+        exiter = asyncio.ensure_future(exit_soon())
+        with pytest.raises(AgentStartupError, match="returncode=1"):
+            # pyrefly: ignore [bad-argument-type]
+            await _wait_for_ready(str(sock_path), timeout=5.0, process=process)
+        await exiter
+
+
+def test_check_socket_path_accepts_the_limit_and_rejects_one_more():
+    """Limits measured by binding real sockets: 103 bytes on macOS, 107 on
+    Linux; one byte more fails with "AF_UNIX path too long" (L1 F14, #78)."""
+    for os_name, limit in (("macos", 103), ("linux", 107)):
+        _check_socket_path("/" + "x" * (limit - 1), os_name)
+        with pytest.raises(LauncherError, match=f"over the {limit}-byte limit"):
+            _check_socket_path("/" + "x" * limit, os_name)
+
+
+def test_build_launch_plan_rejects_too_long_socket_path_before_touching_install(
+    tmp_path,
+):
+    """Raised before anything changes on disk: the native launcher is not
+    renamed and no settings dir is created."""
+    base = _make_synthetic_install(tmp_path, os_name="macos")
+    config = _config(
+        program="gateway",
+        tws_path=str(base),
+        tws_settings_path=str(tmp_path / "settings"),
+        instance="x" * 120,
+    )
+    with pytest.raises(LauncherError, match="agent socket path is"):
+        build_launch_plan(
+            config,
+            tmp_path / "agent.jar",
+            os_name="macos",
+            runtime_dir=tmp_path / "run",
+        )
+    assert not (tmp_path / "settings").exists()
+    assert not list(base.rglob("*-1.app"))
+
+
+def test_build_launch_plan_creates_log_dir(tmp_path, run_dir):
+    """The agent's FileHandler needs `log_dir` before it binds its sockets;
+    nothing else creates it for log_sink=std with tracing off (L1 F11, #78)."""
+    base = _make_synthetic_install(tmp_path, os_name="linux")
+    config = _config(
+        program="gateway",
+        tws_path=str(base),
+        tws_settings_path=str(tmp_path / "settings"),
+        instance="paper",
+        log_dir=str(tmp_path / "logs" / "nested"),
+    )
+    build_launch_plan(
+        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=run_dir
+    )
+    assert (tmp_path / "logs" / "nested").is_dir()
 
 
 # --- _drain_stdout (async, off-loop write via configure_gateway_stdout) -------------
@@ -1302,16 +1437,49 @@ class _FakeStdoutPipe:
     hands back one queued line at a time, then `b""` (EOF) once exhausted --
     matching a real pipe once the process exits."""
 
-    def __init__(self, lines: list[bytes]) -> None:
+    def __init__(self, lines: list[bytes | Exception]) -> None:
         self._lines = list(lines)
 
     async def readline(self) -> bytes:
-        return self._lines.pop(0) if self._lines else b""
+        item = self._lines.pop(0) if self._lines else b""
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 class _FakeProcessWithStdout:
-    def __init__(self, lines: list[bytes]) -> None:
+    def __init__(self, lines: list[bytes | Exception]) -> None:
         self.stdout = _FakeStdoutPipe(lines)
+
+
+async def test_drain_stdout_keeps_reading_after_an_over_long_line(tmp_path, caplog):
+    """`readline()` raises `ValueError` on a line over the pipe limit; the
+    drain must log once and carry on, or Gateway's stdout fills and every Java
+    thread writing to it blocks (L1 F4, #78)."""
+    stdout_logger = configure_gateway_stdout("paper", tmp_path, sink="file")
+    process = _FakeProcessWithStdout(
+        [b"before\n", ValueError("too long"), ValueError("too long"), b"after\n"]
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ibcontroller.launcher"):
+        # pyrefly: ignore [bad-argument-type]
+        await _drain_stdout(process, stdout_logger)
+    stop_logging()
+
+    assert (tmp_path / "gateway-paper.log").read_text() == "before\nafter\n"
+    assert sum("dropped" in r.message for r in caplog.records) == 1
+
+
+async def test_log_drain_failure_reports_a_dead_drain(caplog):
+    async def boom() -> None:
+        raise RuntimeError("drain broke")
+
+    task = asyncio.ensure_future(boom())
+    with contextlib.suppress(RuntimeError):
+        await task
+    with caplog.at_level(logging.ERROR, logger="ibcontroller.launcher"):
+        _log_drain_failure(task)
+    assert "drain broke" in caplog.text
 
 
 async def test_drain_stdout_writes_lines_through_the_queued_stdout_logger(tmp_path):
@@ -1344,247 +1512,105 @@ async def test_drain_stdout_std_sink_reaches_console_not_a_file(tmp_path, capsys
     assert "line one\nline two\n" in capsys.readouterr().err
 
 
-# --- clean_shutdown (async, needs a real socket -- fake server, no Gateway) ---------
+# --- terminate_and_wait, launch_instance (fake process, no Gateway) ---------------
 
 
-class _FakeProcess:
-    """Just enough of `asyncio.subprocess.Process` for `clean_shutdown`:
-    a settable `returncode`, a `terminate()` that's recorded and unblocks
-    `wait()`, and a `wait()` that otherwise hangs until terminated -- matching
-    a real process that doesn't exit on its own just because a menu item was
-    clicked."""
-
-    def __init__(self, returncode: int | None) -> None:
-        self.returncode = returncode
-        self.terminated = False
-        self.killed = False
-        self._wait_event = asyncio.Event()
-        if returncode is not None:
-            self._wait_event.set()
-
-    def terminate(self) -> None:
-        # Matches real asyncio.subprocess.Process: signalling an OS PID that
-        # no longer exists raises ProcessLookupError -- this is exactly the
-        # real, live-caught bug clean_shutdown's "already exited" branch had
-        # to stop hitting (2026-09-06).
-        if self.returncode is not None:
-            raise ProcessLookupError()
-        self.terminated = True
-        self._wait_event.set()
-
-    def kill(self) -> None:
-        if self.returncode is not None:
-            raise ProcessLookupError()
-        self.killed = True
-        self._wait_event.set()
-
-    async def wait(self) -> int:
-        await self._wait_event.wait()
-        return self.returncode if self.returncode is not None else -15
-
-
-class _FakeProcessIgnoringSigterm(_FakeProcess):
-    """A process that survives SIGTERM -- only `kill()` unblocks `wait()`."""
-
-    def terminate(self) -> None:
-        self.terminated = True
-
-
-async def test_terminate_and_wait_returns_only_after_exit():
-    process = _FakeProcess(returncode=None)
+async def testterminate_and_wait_returns_only_after_exit():
+    process = FakeProcess(returncode=None)
     # pyrefly: ignore [bad-argument-type]
-    await _terminate_and_wait(process, timeout=1.0)
+    await terminate_and_wait(process, timeout=1.0)
     assert process.terminated
     assert not process.killed
     assert process._wait_event.is_set()
 
 
-async def test_terminate_and_wait_kills_when_sigterm_is_ignored():
-    process = _FakeProcessIgnoringSigterm(returncode=None)
+async def testterminate_and_wait_kills_when_sigterm_is_ignored():
+    process = FakeProcessIgnoringSigterm(returncode=None)
     # pyrefly: ignore [bad-argument-type]
-    await _terminate_and_wait(process, timeout=0.05)
+    await terminate_and_wait(process, timeout=0.05)
     assert process.terminated
     assert process.killed
 
 
-async def test_terminate_and_wait_is_a_noop_on_an_exited_process():
+async def testterminate_and_wait_is_a_noop_on_an_exited_process():
     """The never-ready path hit `ProcessLookupError` signalling a JVM that had
     already exited (gitea #60, case 13) -- the fake raises it if signalled."""
-    process = _FakeProcess(returncode=1)
+    process = FakeProcess(returncode=1)
     # pyrefly: ignore [bad-argument-type]
-    await _terminate_and_wait(process, timeout=0.05)
+    await terminate_and_wait(process, timeout=0.05)
     assert not process.terminated
     assert not process.killed
 
 
-async def _start_dispatcher(cmd_sock, event_sock) -> Dispatcher:
-    dispatcher = Dispatcher(
-        AgentCommandConnection(cmd_sock), AgentEventConnection(event_sock)
-    )
-    await dispatcher.start()
-    return dispatcher
+class _FakeSpawnedProcess(FakeProcess):
+    """A just-spawned JVM for `launch_instance`: stdout stays open until the
+    process is terminated or killed, like a real pipe."""
+
+    pid = 4242
+
+    def __init__(self) -> None:
+        super().__init__(returncode=None)
+        process = self
+
+        class _Stdout:
+            async def readline(self) -> bytes:
+                await process._wait_event.wait()
+                return b""
+
+        self.stdout = _Stdout()
 
 
-def _launched(process, dispatcher, sock_path, event_sock_path) -> LaunchedInstance:
-    return LaunchedInstance(
-        process=process,
-        dispatcher=dispatcher,
+@pytest.fixture
+def fake_spawn(monkeypatch, tmp_path, sock_path, event_sock_path):
+    """Runs the real `launch_instance` against a fake spawn: no install, no JVM.
+    Returns the process `launch_instance` will get."""
+    process = _FakeSpawnedProcess()
+    plan = LaunchPlan(
+        java_bin=Path("java"),
+        command=["java"],
         command_socket_path=str(sock_path),
         event_socket_path=str(event_sock_path),
-        settings_dir=f"{gettempdir()}/settings",
-        stdout_drain_task=asyncio.ensure_future(asyncio.sleep(0)),
+        settings_dir=str(tmp_path / "settings"),
+        program_path=tmp_path,
+    )
+    monkeypatch.setattr(
+        "ibcontroller.launcher.build_launch_plan", lambda *_a, **_k: plan
     )
 
+    async def spawn(*_args, **_kwargs):
+        return process
 
-async def test_clean_shutdown_terminates_directly_when_process_already_exited(
-    sock_path, event_sock_path
+    monkeypatch.setattr("ibcontroller.launcher.asyncio.create_subprocess_exec", spawn)
+    yield process
+    stop_logging()
+
+
+async def test_launch_instance_terminates_jvm_when_cancelled_during_readiness(
+    fake_spawn, tmp_path
 ):
-    """Regression test for two real, live-caught bugs, both hit back to back
-    on 2026-09-06 testing the exact same scenario (the user closing Gateway
-    manually before `clean_shutdown` ever ran): first, a raw
-    `ConnectionResetError` from attempting `navigate_menu` over a dead
-    connection (the old `except AgentClientError` never caught it); then,
-    once that was fixed to check `returncode` first, a `ProcessLookupError`
-    from this same branch still calling `terminate()` on a process that no
-    longer has an OS PID to signal. Both are asserted here: no command sent,
-    and `terminate()` never called (the fake raises `ProcessLookupError` if
-    it is, matching real `asyncio.subprocess.Process` behaviour)."""
-    calls: list[dict] = []
-
-    def responder(request):
-        calls.append(request)
-        return {"ok": True, "clicked": True}
-
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start_dispatcher(sock_path, event_sock_path)
-        process = _FakeProcess(returncode=0)
-        launched = _launched(process, dispatcher, sock_path, event_sock_path)
-        await clean_shutdown(
-            launched, program="gateway", logged_in=True, labels=LABELS.shutdown
-        )
-
-    assert not process.terminated  # never called -- would have raised otherwise
-    assert calls == []  # never attempted navigate_menu against the dead process
+    """SIGINT/SIGTERM during the readiness wait cancels `launch_instance`. The
+    JVM runs in its own session, so nothing else would stop it (L1 F2, #78)."""
+    task = asyncio.ensure_future(
+        launch_instance(_config(log_dir=str(tmp_path)), "agent.jar", ready_timeout=5.0)
+    )
+    await asyncio.sleep(0.3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert fake_spawn.terminated
+    assert fake_spawn._wait_event.is_set()
 
 
-async def test_clean_shutdown_terminates_when_never_logged_in_and_still_running(
-    sock_path, event_sock_path
+async def test_launch_instance_terminates_jvm_when_dispatcher_start_fails(
+    fake_spawn, tmp_path, sock_path
 ):
-    """The other branch that calls `terminate()` -- login never completed, but
-    the process is genuinely still alive, so `terminate()` must actually be
-    called here (unlike the already-exited case above)."""
-    calls: list[dict] = []
-
-    def responder(request):
-        calls.append(request)
-        return {"ok": True, "clicked": True}
-
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
+    """`ping` succeeds but the event socket is missing, so `dispatcher.start()`
+    raises after the readiness wait -- the JVM must still be stopped."""
+    async with FakeCommandServer(
+        sock_path, lambda _req: {"ok": True, "version": "0.0.1-dev", "uptime_s": 0}
     ):
-        dispatcher = await _start_dispatcher(sock_path, event_sock_path)
-        process = _FakeProcess(returncode=None)
-        launched = _launched(process, dispatcher, sock_path, event_sock_path)
-        await clean_shutdown(
-            launched, program="gateway", logged_in=False, labels=LABELS.shutdown
-        )
-
-    assert process.terminated
-    assert calls == []  # never logged in -- no graceful menu attempt at all
-
-
-async def test_clean_shutdown_uses_graceful_navigate_menu_when_process_alive(
-    sock_path, event_sock_path
-):
-    calls: list[dict] = []
-
-    def responder(request):
-        calls.append(request)
-        return {"ok": True, "clicked": True}
-
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start_dispatcher(sock_path, event_sock_path)
-        process = _FakeProcess(returncode=None)
-        launched = _launched(process, dispatcher, sock_path, event_sock_path)
-        # A short timeout: this fake process never exits on its own after the
-        # click (no real Gateway behind it), so the fallback terminate() path
-        # fires -- exercised deliberately, not the point of this test.
-        await clean_shutdown(
-            launched,
-            program="gateway",
-            logged_in=True,
-            labels=LABELS.shutdown,
-            timeout=0.1,
-        )
-
-    assert {"cmd": "navigate_menu", "path": "File/Close"} in calls
-
-
-async def test_clean_shutdown_uses_tws_menu_path_for_tws(sock_path, event_sock_path):
-    """Real, live-caught bug (2026-09-09, an audit prompted by two other
-    hardcoded-label bugs the same day): the graceful-shutdown menu path used
-    to be a hardcoded `"File/Close"`/`"File/Exit"` ternary directly in
-    `clean_shutdown`, not sourced from `labels.json` like every other
-    user-facing string this project matches or clicks against. Confirms
-    `program="tws"` selects `labels.shutdown.tws_menu_path`, not Gateway's."""
-    calls: list[dict] = []
-
-    def responder(request):
-        calls.append(request)
-        return {"ok": True, "clicked": True}
-
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start_dispatcher(sock_path, event_sock_path)
-        process = _FakeProcess(returncode=None)
-        launched = _launched(process, dispatcher, sock_path, event_sock_path)
-        await clean_shutdown(
-            launched,
-            program="tws",
-            logged_in=True,
-            labels=LABELS.shutdown,
-            timeout=0.1,
-        )
-
-    assert {"cmd": "navigate_menu", "path": "File/Exit"} in calls
-    assert {"cmd": "navigate_menu", "path": "File/Close"} not in calls
-
-
-async def test_clean_shutdown_scopes_navigate_menu_to_main_window(
-    sock_path, event_sock_path
-):
-    """The unscoped menu-bar search can resolve a frame other than TWS's main
-    window, whose menu has no `File/Exit` (#76) -- `main_window_id` must reach
-    the agent."""
-    calls: list[dict] = []
-
-    def responder(request):
-        calls.append(request)
-        return {"ok": True, "clicked": True}
-
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start_dispatcher(sock_path, event_sock_path)
-        process = _FakeProcess(returncode=None)
-        launched = _launched(process, dispatcher, sock_path, event_sock_path)
-        await clean_shutdown(
-            launched,
-            program="tws",
-            logged_in=True,
-            labels=LABELS.shutdown,
-            main_window_id="w2",
-            timeout=0.1,
-        )
-
-    assert {"cmd": "navigate_menu", "path": "File/Exit", "window_id": "w2"} in calls
+        with pytest.raises(OSError):
+            await launch_instance(
+                _config(log_dir=str(tmp_path)), "agent.jar", ready_timeout=2.0
+            )
+    assert fake_spawn.terminated

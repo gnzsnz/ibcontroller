@@ -53,7 +53,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Coroutine, Sequence
+from collections.abc import Awaitable, Coroutine, Sequence
 from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
@@ -66,7 +66,6 @@ from ibcontroller.labels import Labels, load_labels
 from ibcontroller.launcher import (
     LaunchedInstance,
     LauncherError,
-    clean_shutdown,
     launch_instance,
 )
 from ibcontroller.logging_setup import stop_logging
@@ -78,6 +77,7 @@ from ibcontroller.login import (
     find_autorestart_hash,
     is_restart,
 )
+from ibcontroller.management import clean_shutdown
 from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
     DeclarativeDismissRecognizer,
@@ -166,6 +166,24 @@ class StartupState(Enum):
 
 def _log_transition(previous: StartupState, new: StartupState) -> None:
     logger.info("IBController > startup state: %s -> %s", previous.name, new.name)
+
+
+async def _run_to_completion(aw: Awaitable[None]) -> None:
+    """Awaits `aw` through any number of cancellations, then re-raises the
+    first one. A second SIGINT/SIGTERM must not abort a shutdown midway and
+    leave the JVM running; `aw` must be bounded on its own."""
+    task = asyncio.ensure_future(aw)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+    task.result()
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 def _build_registry(
@@ -714,15 +732,20 @@ async def _run_one_cycle(  # noqa: PLR0915
         diagnostics_watcher.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await diagnostics_watcher
-        await clean_shutdown(
-            launched,
-            program=config.program,
-            logged_in=manager.is_logged_in(),
-            labels=labels.shutdown,
-            main_window_id=manager.main_window_id,
-        )
-        watcher.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watcher
+        # The watcher keeps running during shutdown: exiting can raise dialogs.
+        try:
+            await _run_to_completion(
+                clean_shutdown(
+                    launched,
+                    program=config.program,
+                    logged_in=manager.is_logged_in(),
+                    labels=labels.shutdown,
+                    main_window_id=manager.main_window_id,
+                )
+            )
+        finally:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
     logger.info("IBController > control loop cycle stopped: %s", cause.name)
     return cause, launched.settings_dir

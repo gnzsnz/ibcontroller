@@ -153,8 +153,10 @@ Any contribution must follow this separation of concerns.
 - **Provides:** `LaunchedInstance`: the process, a started `Dispatcher` (L4), socket paths,
   settings directory.
 - **Rules:** one launch per call. Relaunch policy belongs to L6. L1 may construct L3 and L4 objects
-  ("spawn and attach").
-- **Known deviation:** `clean_shutdown` lives here and uses L5-1. It belongs to Management (L5).
+  ("spawn and attach"). A launch that fails or is cancelled after the spawn terminates the JVM
+  before raising; it never leaves an orphan. Readiness is bounded by `ready_timeout`, each probe
+  by its own timeout. Problems detectable before the spawn (socket path too long) raise
+  `LauncherError` before the install is touched. L1 does not import L5 or L5-1.
 
 ### L2 Java agent (`agent/`)
 
@@ -200,7 +202,7 @@ Any contribution must follow this separation of concerns.
 | Settings   | `settings.py`, `builtin_settings.toml`, `ibkr_settings.toml`  | Apply declared Global Configuration settings.                                |
 | Scheduling | `schedule.py`                                                  | Wall-clock maths for cold restart and close-down. No I/O.                     |
 | Diagnostic | `diagnostics.py`                                               | Dump window structure for development and support.                           |
-| Management | not built                                                      | Graceful shutdown, restart and other lifecycle operations on the UI.          |
+| Management | `management.py`                                                | Runtime operations on a running instance: graceful shutdown today; restart and data-farm reconnect when built. Decides how; callers (L6, later L7) decide when. |
 
 - **Rules:**
   - Act on the UI only through L5-1.
@@ -213,7 +215,8 @@ Any contribution must follow this separation of concerns.
   - `recognisers.py` and `diagnostics.py` subscribe to `window_events` directly instead of through
     L5-1.
   - The registry construction and the settings sequence live in `control_loop.py`.
-  - Management's pieces live in L1 (`clean_shutdown`) and L6 (scheduled shutdown).
+  - Scheduled shutdown timing lives in L6 (`schedule.py` maths, `control_loop.py` trigger); the
+    shutdown itself is Management's `clean_shutdown`.
 
 ### L6 Control loop (`control_loop.py`)
 

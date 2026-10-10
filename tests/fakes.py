@@ -71,3 +71,46 @@ class FakeEventServer:
             writer.write((line + "\n").encode("utf-8"))
             await writer.drain()
         writer.close()
+
+
+class FakeProcess:
+    """Just enough of `asyncio.subprocess.Process` for launcher/management:
+    a settable `returncode`, a `terminate()` that's recorded and unblocks
+    `wait()`, and a `wait()` that otherwise hangs until terminated -- matching
+    a real process that doesn't exit on its own just because a menu item was
+    clicked."""
+
+    def __init__(self, returncode: int | None) -> None:
+        self.returncode = returncode
+        self.terminated = False
+        self.killed = False
+        self._wait_event = asyncio.Event()
+        if returncode is not None:
+            self._wait_event.set()
+
+    def terminate(self) -> None:
+        # Matches real asyncio.subprocess.Process: signalling an OS PID that
+        # no longer exists raises ProcessLookupError -- this is exactly the
+        # real, live-caught bug clean_shutdown's "already exited" branch had
+        # to stop hitting (2026-09-06).
+        if self.returncode is not None:
+            raise ProcessLookupError()
+        self.terminated = True
+        self._wait_event.set()
+
+    def kill(self) -> None:
+        if self.returncode is not None:
+            raise ProcessLookupError()
+        self.killed = True
+        self._wait_event.set()
+
+    async def wait(self) -> int:
+        await self._wait_event.wait()
+        return self.returncode if self.returncode is not None else -15
+
+
+class FakeProcessIgnoringSigterm(FakeProcess):
+    """A process that survives SIGTERM -- only `kill()` unblocks `wait()`."""
+
+    def terminate(self) -> None:
+        self.terminated = True

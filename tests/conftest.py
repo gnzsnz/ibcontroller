@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import uuid
 from pathlib import Path
 
@@ -46,6 +47,15 @@ def sock_path():
     path = Path(f"/tmp/ibcontroller-test-{uuid.uuid4().hex[:8]}.sock")  # nosec B108
     yield path
     path.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def run_dir():
+    """A short runtime dir for `build_launch_plan`, which rejects socket paths
+    over the AF_UNIX limit -- `tmp_path` is too deep on macOS (see `sock_path`)."""
+    path = Path(f"/tmp/ibc-run-{uuid.uuid4().hex[:8]}")  # nosec B108
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture

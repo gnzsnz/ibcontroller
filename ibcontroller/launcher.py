@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import os
 import platform
 import re
 import shutil
@@ -25,16 +26,14 @@ from typing import Protocol
 
 import anyio.to_thread
 
-from ibcontroller.actions import navigate_menu
 from ibcontroller.agent_client import (
     AgentClientError,
     AgentCommandConnection,
     AgentEventConnection,
 )
 from ibcontroller.app_dirs import resolve_runtime_dir
-from ibcontroller.config import Config, _default_time_zone
+from ibcontroller.config import Config, LogSink, _default_time_zone
 from ibcontroller.dispatch import Dispatcher
-from ibcontroller.labels import ShutdownLabels
 from ibcontroller.logging_setup import (
     configure_gateway_stdout,
     configure_logging,
@@ -57,6 +56,14 @@ _MACOS_PROGRAM_NAMES = {
     "gateway": "IB Gateway",
     "tws": "Trader Workstation",
 }
+
+# Longest AF_UNIX path in bytes (measured: bind fails at 104 on macOS, 108 on Linux).
+_SOCKET_PATH_MAX = {"macos": 103, "linux": 107}
+# Bounds one connect+ping probe -- the agent serves one command client at a time,
+# so a probe on another agent's socket otherwise blocks forever.
+_PING_ATTEMPT_TIMEOUT = 2.0
+# Gateway's stdout line limit; the 64 KiB default ended the drain on one long line.
+_STDOUT_LINE_LIMIT = 1024 * 1024
 
 
 class LauncherError(Exception):
@@ -100,9 +107,10 @@ class LaunchPlan:
 
 @dataclass(frozen=True)
 class LaunchedInstance:
-    """What `launch_instance` hands back. `clean_shutdown` and ad hoc callers
-    build `send_command` calls against `dispatcher.command_conn` directly, so
-    there's no separate `command_conn` field here to keep in sync with it."""
+    """What `launch_instance` hands back. `management.clean_shutdown` and ad
+    hoc callers build `send_command` calls against `dispatcher.command_conn`
+    directly, so there's no separate `command_conn` field here to keep in
+    sync with it."""
 
     process: asyncio.subprocess.Process
     dispatcher: Dispatcher
@@ -114,6 +122,19 @@ class LaunchedInstance:
 
 def _os_name() -> str:
     return "macos" if platform.system() == "Darwin" else "linux"
+
+
+def _check_socket_path(socket_path: str, os_name: str) -> None:
+    """Raises `LauncherError` if `socket_path` is too long to bind. The agent
+    would otherwise die in `bind`, reported only as a ping timeout."""
+    size = len(os.fsencode(socket_path))
+    limit = _SOCKET_PATH_MAX[os_name]
+    if size > limit:
+        raise LauncherError(
+            f"agent socket path is {size} bytes, over the {limit}-byte limit on "
+            f"{os_name}: {socket_path} -- use a shorter instance name or set "
+            "IBC_APP_DIR to a shorter directory"
+        )
 
 
 def _resolve_tws_path(config: Config, os_name: str) -> Path:
@@ -586,6 +607,17 @@ def build_launch_plan(
     os_name = os_name or _os_name()
     sock_dir = Path(runtime_dir) if runtime_dir is not None else resolve_runtime_dir()
     sock_dir.mkdir(parents=True, exist_ok=True)
+    command_socket_path = str(
+        sock_dir / f"ibcontroller-agent-{config.instance}-cmd.sock"
+    )
+    event_socket_path = str(
+        sock_dir / f"ibcontroller-agent-{config.instance}-events.sock"
+    )
+    for socket_path in (command_socket_path, event_socket_path):
+        _check_socket_path(socket_path, os_name)
+    # The agent's FileHandler needs it before binding its sockets; logging_setup
+    # only creates it for sink=file or tracing.
+    Path(config.log_dir).mkdir(parents=True, exist_ok=True)
     tws_path = _resolve_tws_path(config, os_name)
     settings_dir = resolve_tws_settings_path(config)
     settings_dir.mkdir(parents=True, exist_ok=True)
@@ -662,12 +694,6 @@ def build_launch_plan(
     vm_options.append(f"-Dibcontroller.logfile.backupcount={config.log_backup_count}")
 
     entry_class = _ENTRY_CLASSES[program]
-    command_socket_path = str(
-        sock_dir / f"ibcontroller-agent-{config.instance}-cmd.sock"
-    )
-    event_socket_path = str(
-        sock_dir / f"ibcontroller-agent-{config.instance}-events.sock"
-    )
 
     command = [
         str(java_bin),
@@ -698,6 +724,7 @@ async def _wait_for_ready(
     timeout: float,
     *,
     process: _ChildProcess | None = None,
+    output_hint: str | None = None,
 ) -> None:
     """Matches this project's own L1 framing exactly: "ping succeeding means
     the agent process is up." Retries a real `ping`, not just a raw connect --
@@ -707,22 +734,27 @@ async def _wait_for_ready(
 
     When `process` is given, raises `AgentStartupError` as soon as it has
     exited instead of probing a socket nothing will ever answer until
-    `timeout`."""
+    `timeout`. Each probe is bounded by `_PING_ATTEMPT_TIMEOUT`, so a probe
+    stuck on another agent's busy socket (duplicate instance name) cannot
+    outlive `timeout` or hide the exit check. `output_hint` says where the
+    JVM's own output (and so the reason it exited) went."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     last_error: Exception | None = None
-    while loop.time() < deadline:
+    while (remaining := deadline - loop.time()) > 0:
         if process is not None and process.returncode is not None:
             raise AgentStartupError(
                 f"agent process exited (returncode={process.returncode}) before "
                 f"answering ping on {command_socket_path}"
+                + (f" -- see {output_hint} for the reason" if output_hint else "")
             ) from last_error
         probe = AgentCommandConnection(command_socket_path)
         try:
-            await probe.connect()
-            await probe.ping()
+            async with asyncio.timeout(min(_PING_ATTEMPT_TIMEOUT, remaining)):
+                await probe.connect()
+                await probe.ping()
             return
-        except (OSError, AgentClientError) as exc:
+        except (OSError, AgentClientError, TimeoutError) as exc:
             last_error = exc
         finally:
             await probe.close()
@@ -732,7 +764,7 @@ async def _wait_for_ready(
     ) from last_error
 
 
-async def _terminate_and_wait(process: _ChildProcess, *, timeout: float = 5.0) -> None:
+async def terminate_and_wait(process: _ChildProcess, *, timeout: float = 5.0) -> None:
     """SIGTERM, then SIGKILL if still alive after `timeout`. Returns only once
     the process has exited, so a relaunch never races the old JVM for its
     command socket. A no-op on a process that already exited."""
@@ -764,13 +796,50 @@ async def _drain_stdout(
     `logging_setup.configure_gateway_stdout`) rather than written to a file
     directly -- the actual write happens on that logger's own listener
     thread, off this coroutine, the same way `configure_logging`/
-    `configure_trace` already keep their own writes off the event loop."""
+    `configure_trace` already keep their own writes off the event loop.
+
+    A line over the pipe's limit is dropped, not fatal: `readline()` discards
+    it and raises `ValueError`, and draining continues."""
     assert process.stdout is not None
+    warned = False
     while True:
-        line = await process.stdout.readline()
+        try:
+            line = await process.stdout.readline()
+        except ValueError:
+            if not warned:
+                logger.warning(
+                    "IBController > dropped a Gateway/TWS stdout line over the "
+                    "%s-byte limit (further drops not logged)",
+                    _STDOUT_LINE_LIMIT,
+                )
+                warned = True
+            continue
         if not line:
             return
         stdout_logger.info(line.decode("utf-8", errors="replace").rstrip("\n"))
+
+
+def _jvm_output_hint(config: Config) -> str:
+    """Where `_drain_stdout` sends the JVM's output, per `configure_gateway_stdout`."""
+    if config.log_sink == LogSink.FILE:
+        return str(Path(config.log_dir) / f"gateway-{config.instance}.log")
+    return "the Gateway/TWS output above"
+
+
+def _log_drain_failure(task: asyncio.Task[None]) -> None:
+    """Done-callback for the stdout drain: a drain that dies silently would
+    eventually block every Java thread writing to stdout."""
+    if not task.cancelled() and (exc := task.exception()) is not None:
+        logger.error("IBController > Gateway/TWS stdout drain stopped: %r", exc)
+
+
+async def _abort_launch(
+    process: _ChildProcess, stdout_drain_task: asyncio.Task[None]
+) -> None:
+    """Undoes a spawn whose launch did not complete, so no JVM outlives it."""
+    await terminate_and_wait(process)
+    stdout_drain_task.cancel()
+    await asyncio.gather(stdout_drain_task, return_exceptions=True)
 
 
 async def launch_instance(
@@ -782,8 +851,9 @@ async def launch_instance(
 ) -> LaunchedInstance:
     """Becomes the parent of the agent's own JVM process. Waits for a real
     `ping` before returning, then builds and starts the real `Dispatcher`
-    callers actually use -- the process is terminated if readiness times out,
-    rather than handed back half-working.
+    callers actually use. If anything after the spawn fails or is cancelled,
+    the process is terminated and its stdout drain cancelled, rather than
+    handed back half-working or left orphaned.
 
     `restart_hash` is passed straight through to `build_launch_plan` -- see
     that function's own docstring for what it does and why.
@@ -846,35 +916,45 @@ async def launch_instance(
         # ibcontroller was invoked from instead.
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        limit=_STDOUT_LINE_LIMIT,
         start_new_session=True,
         # New session/process group: a terminal Ctrl-C's SIGINT is delivered to the
         # whole foreground process group. Without this, the JVM child gets it
         # directly, races our own signal handler, and exits via its own
         # Shutdown/Terminator hook (returncode 128+SIGINT) instead of via
-        # clean_shutdown's File/Close -- skipping Gateway/TWS's own UI-close path
-        # (and its "Shutdown progress" dialog) entirely. This makes Ctrl-C reach
-        # the child only through clean_shutdown, same as a real File/Close.
+        # management.clean_shutdown's File/Close -- skipping Gateway/TWS's own
+        # UI-close path (and its "Shutdown progress" dialog) entirely. This makes
+        # Ctrl-C reach the child only through clean_shutdown, same as a real
+        # File/Close.
     )
     # Must stay drained for the process's whole life: Gateway logs continuously
     # (log4j, stderr=STDOUT too), and once the OS pipe buffer fills, any Java
-    # thread writing to stdout blocks forever. Self-terminates on EOF, no
-    # explicit cancellation needed.
+    # thread writing to stdout blocks forever. Self-terminates on EOF.
     stdout_drain_task = asyncio.ensure_future(_drain_stdout(process, stdout_logger))
-    try:
-        await _wait_for_ready(plan.command_socket_path, ready_timeout, process=process)
-    except LauncherError:
-        logger.warning("instance %s never became ready, terminating", config.instance)
-        await _terminate_and_wait(process)
-        raise
-
-    cmd_conn = AgentCommandConnection(plan.command_socket_path)
-    event_conn = AgentEventConnection(plan.event_socket_path)
+    stdout_drain_task.add_done_callback(_log_drain_failure)
     dispatcher = Dispatcher(
-        cmd_conn,
-        event_conn,
+        AgentCommandConnection(plan.command_socket_path),
+        AgentEventConnection(plan.event_socket_path),
         instance=config.instance,
     )
-    await dispatcher.start()
+    # Any failure or cancellation (SIGINT/SIGTERM) from here on must not orphan
+    # the JVM: it runs in its own session, so nothing else would stop it.
+    try:
+        await _wait_for_ready(
+            plan.command_socket_path,
+            ready_timeout,
+            process=process,
+            output_hint=_jvm_output_hint(config),
+        )
+        await dispatcher.start()
+    except BaseException:
+        logger.warning(
+            "IBController > instance %s did not start, terminating", config.instance
+        )
+        await asyncio.shield(_abort_launch(process, stdout_drain_task))
+        await dispatcher.stop()
+        raise
+
     logger.info(
         "IBController > instance %s ready, pid=%s", config.instance, process.pid
     )
@@ -886,98 +966,3 @@ async def launch_instance(
         settings_dir=plan.settings_dir,
         stdout_drain_task=stdout_drain_task,
     )
-
-
-async def clean_shutdown(
-    launched: LaunchedInstance,
-    *,
-    program: str,
-    logged_in: bool,
-    labels: ShutdownLabels,
-    main_window_id: str | None = None,
-    timeout: float = 15.0,
-) -> None:
-    """Shutdown is not a process signal if login has completed -- invokes the
-    app's own File -> Exit (TWS) / File -> Close (Gateway) menu item first, so
-    it can save session state and upload settings. Only hard-terminates
-    directly when login never completed (nothing to save), or as a last
-    resort if the clean path hangs.
-
-    `labels` supplies the menu path -- see `labels.ShutdownLabels`'s own
-    docstring.
-
-    `logged_in` is the caller's own responsibility to know; this layer
-    doesn't track login state itself.
-
-    `main_window_id` (`LoginManager.main_window_id`) scopes the menu lookup
-    to the main window's own menu bar, matching IBC's `StopTask`. The
-    unscoped search can resolve another frame's menu bar, which has no exit
-    item (#76). `None` (Gateway) keeps the unscoped search.
-
-    Uses `navigate_menu`, not `click`: "Close"/"Exit" are menu items, not
-    ordinary buttons -- `click`'s `findByAccessibleName` lookup can never
-    find them, since a `JMenu`'s dropdown lives in a `JPopupMenu`, outside
-    the ordinary component tree while the menu is closed. Goes through
-    `actions.navigate_menu` rather than a direct `dispatcher.send_command`
-    call, so a shutdown landing while the menu item is momentarily disabled
-    still retries instead of failing immediately; a short `timeout` bounds
-    that retry so a genuinely stuck menu still falls through to the
-    hard-kill fallback promptly.
-
-    Checks `launched.process.returncode` first: a process that already
-    exited on its own before this was ever called -- the user manually
-    closing Gateway, or a scheduled restart -- has no live command socket
-    left to send `navigate_menu` over, and no OS PID left for
-    `terminate()` to signal, so the already-exited branch only stops the
-    dispatcher. `terminate()` stays reserved for the "never logged in, but
-    still running" branch, where the process genuinely is still alive. The
-    `except` below is broadened to `OSError` as defense in depth for the
-    narrower race of the process dying between the `returncode` check and
-    the command actually being sent. Every hard-terminate waits for the
-    process to exit (`_terminate_and_wait`) -- `run_control_loop` may
-    relaunch immediately, and a still-alive JVM holds the command socket.
-    """
-    if launched.process.returncode is not None:
-        logger.info(
-            "IBController > shutting down (process already exited) -- nothing to "
-            "terminate"
-        )
-        await launched.dispatcher.stop()
-        return
-
-    if not logged_in:
-        logger.info(
-            "IBController > shutting down (never logged in) -- terminating directly"
-        )
-        await _terminate_and_wait(launched.process)
-        await launched.dispatcher.stop()
-        return
-
-    target = (
-        labels.gateway_menu_path
-        if program.lower() == "gateway"
-        else labels.tws_menu_path
-    )
-    try:
-        await navigate_menu(
-            launched.dispatcher, target, timeout=5.0, window_id=main_window_id
-        )
-    except (AgentClientError, TimeoutError, OSError):
-        pass  # best-effort -- the wait-then-terminate fallback below is what matters
-
-    try:
-        await asyncio.wait_for(launched.process.wait(), timeout=timeout)
-        logger.info(
-            "IBController > shut down cleanly via %s (returncode=%s)",
-            target,
-            launched.process.returncode,
-        )
-    except TimeoutError:
-        logger.warning(
-            "IBController > clean shutdown via %s did not exit within %ss -- "
-            "terminating",
-            target,
-            timeout,
-        )
-        await _terminate_and_wait(launched.process)
-    await launched.dispatcher.stop()

@@ -1,5 +1,6 @@
 package ibcontroller.agent;
 
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
@@ -157,16 +158,22 @@ public final class AgentMain {
                     System.getProperty("ibcontroller.logfile.maxbytes", "0"));
             int backupCount = Integer.parseInt(
                     System.getProperty("ibcontroller.logfile.backupcount", "0"));
-            FileHandler fileHandler =
-                    maxBytes > 0
-                            ? new FileHandler(logFile, maxBytes, Math.max(backupCount, 1), true)
-                            : new FileHandler(logFile, true);
-            fileHandler.setFormatter(new SimpleFormatter());
-            root.addHandler(fileHandler);
-        } else {
-            ConsoleHandler consoleHandler = new ConsoleHandler();
-            root.addHandler(consoleHandler);
+            try {
+                FileHandler fileHandler =
+                        maxBytes > 0
+                                ? new FileHandler(logFile, maxBytes, Math.max(backupCount, 1), true)
+                                : new FileHandler(logFile, true);
+                fileHandler.setFormatter(new SimpleFormatter());
+                root.addHandler(fileHandler);
+                return;
+            } catch (IOException e) {
+                // A logging problem must never stop the agent before it binds its sockets.
+                root.addHandler(new ConsoleHandler());
+                LOG.warning("cannot open log file " + logFile + ", logging to console: " + e);
+                return;
+            }
         }
+        root.addHandler(new ConsoleHandler());
     }
 
     private static Level parseLevel(String name) {
@@ -174,7 +181,7 @@ public final class AgentMain {
             case "DEBUG" -> Level.FINE;
             case "INFO" -> Level.INFO;
             case "WARNING", "WARN" -> Level.WARNING;
-            case "ERROR" -> Level.SEVERE;
+            case "ERROR", "CRITICAL" -> Level.SEVERE;
             default -> Level.INFO;
         };
     }
