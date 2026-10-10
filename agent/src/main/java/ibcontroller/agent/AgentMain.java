@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
@@ -46,6 +47,7 @@ import java.util.function.Consumer;
 public final class AgentMain {
 
     private static final Logger LOG = Logger.getLogger(AgentMain.class.getName());
+    private static final long ACCEPT_RETRY_MS = 100;
 
     private AgentMain() {}
 
@@ -235,13 +237,29 @@ public final class AgentMain {
         }
     }
 
-    private static void acceptLoop(ServerSocketChannel server, Consumer<SocketChannel> handler) {
-        while (true) {
-            try (SocketChannel client = server.accept()) {
-                handler.accept(client);
+    static void acceptLoop(ServerSocketChannel server, Consumer<SocketChannel> handler) {
+        while (server.isOpen()) {
+            SocketChannel client;
+            try {
+                client = server.accept();
+            } catch (ClosedChannelException e) {
+                return; // server socket closed: the only fatal condition
             } catch (java.io.IOException e) {
-                LOG.log(Level.SEVERE, "accept loop error: " + e.getMessage(), e);
-                return;
+                LOG.log(Level.SEVERE, "accept error, retrying: " + e.getMessage(), e);
+                try {
+                    Thread.sleep(ACCEPT_RETRY_MS); // avoid a hot loop on a persistent error
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                continue;
+            }
+            // Throwable, not Exception: a failed client must never end the loop (and, for the
+            // command socket, delete both socket files in main's finally).
+            try (client) {
+                handler.accept(client);
+            } catch (Throwable t) {
+                LOG.log(Level.SEVERE, "client handler failed: " + t, t);
             }
         }
     }

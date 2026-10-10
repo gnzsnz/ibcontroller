@@ -40,6 +40,9 @@ jobs:
       - name: Build Java agent jar
         run: make build
 
+      - name: Test Java agent
+        run: make test-java
+
       - name: Test
         run: uv run pytest
 

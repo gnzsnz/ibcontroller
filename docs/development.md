@@ -103,18 +103,21 @@ agent/src/main/java/ibcontroller/agent/
   WriteOps.java          — EDT-dispatched writes, set_text/set_checkbox/click
   EventBridge.java       — AWTEventListener install + NDJSON event forwarding
   Security.java          — password redaction, the credential-field boundary
+agent/src/test/java/ibcontroller/agent/
+  AgentTests.java        — dependency-free unit tests (parser depth, accept loop, deferred click)
 ```
 
 Build using`Makefile`:
 
 ```bash
 make build    # build/ibcontroller-agent.jar, then copies it into ibcontroller/ (for uv/pyproject packaging)
+make test-java  # compile and run the agent's unit tests (plain javac + java, no test framework)
 make dist     # build the jar, then uv build the Python package (jar is required package-data, see Makefile)
 make clean    # rm -rf build dist
 ```
 
-Day-to-day cycle: `make build` after any agent-side change, `uv run pytest` for the Python side,
-`pre-commit run --all-files` before pushing.
+Day-to-day cycle: `make build` and `make test-java` after any agent-side change, `uv run pytest` for the
+Python side, `pre-commit run --all-files` before pushing.
 
 ## Running ibcontroller
 

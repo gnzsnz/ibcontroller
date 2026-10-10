@@ -19,6 +19,15 @@ build/ibcontroller-agent.jar: $(SRC)
 .PHONY: build
 build: build/ibcontroller-agent.jar
 
+# Dependency-free Java unit tests (plain javac + java, same toolchain as the jar).
+TEST_SRC := $(wildcard agent/src/test/java/ibcontroller/agent/*.java)
+
+.PHONY: test-java
+test-java: $(SRC) $(TEST_SRC)
+	mkdir -p build/test-classes
+	$(JAVAC) -d build/test-classes $(SRC) $(TEST_SRC)
+	$(JDK)/bin/java -Djava.awt.headless=true -cp build/test-classes ibcontroller.agent.AgentTests
+
 # The Python package can't be built standalone -- `ibcontroller/ibcontroller-agent.jar`
 # must exist before `uv build` runs, since it's shipped via [tool.setuptools.package-data]
 # the same way ibcontroller/data/*.json is (see pyproject.toml). This target makes that

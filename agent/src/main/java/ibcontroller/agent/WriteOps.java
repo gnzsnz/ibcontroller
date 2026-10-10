@@ -5,6 +5,8 @@ import java.awt.Container;
 import java.awt.Window;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import javax.accessibility.AccessibleContext;
 import javax.swing.AbstractButton;
 import javax.swing.JDialog;
@@ -38,7 +40,21 @@ import javax.swing.tree.TreePath;
  */
 final class WriteOps {
 
+    private static final Logger LOG = Logger.getLogger(WriteOps.class.getName());
+
     private WriteOps() {}
+
+    /** Deferred click; the response is already sent, so a failure can only be logged. */
+    static void deferClick(AbstractButton button, String name) {
+        SwingUtilities.invokeLater(
+                () -> {
+                    try {
+                        button.doClick();
+                    } catch (RuntimeException e) {
+                        LOG.log(Level.WARNING, "deferred click failed: " + name, e);
+                    }
+                });
+    }
 
     /**
      * Resolves an optional {@code windowId} (from {@code EventBridge}'s registry) to the live
@@ -115,7 +131,7 @@ final class WriteOps {
         if (error[0] != null) {
             throw error[0];
         }
-        SwingUtilities.invokeLater(found[0]::doClick);
+        deferClick(found[0], target);
     }
 
     /**
@@ -208,7 +224,7 @@ final class WriteOps {
         if (!enabled[0]) {
             return false;
         }
-        SwingUtilities.invokeLater(found[0]::doClick);
+        deferClick(found[0], path);
         return true;
     }
 

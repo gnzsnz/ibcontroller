@@ -477,8 +477,11 @@ final class Protocol {
 
         /** Cursor-based recursive-descent parser over a single, already-complete JSON text. */
         private static final class Parser {
+            private static final int MAX_DEPTH = 64; // protocol nests ~3 levels; bounds recursion
+
             private final String text;
             private int pos;
+            private int depth;
 
             Parser(String text) {
                 this.text = text;
@@ -501,13 +504,23 @@ final class Protocol {
                 }
                 char c = text.charAt(pos);
                 return switch (c) {
-                    case '{' -> parseObject();
-                    case '[' -> parseArray();
+                    case '{', '[' -> parseNested(c);
                     case '"' -> parseString();
                     case 't', 'f' -> parseBoolean();
                     case 'n' -> parseNull();
                     default -> parseNumber();
                 };
+            }
+
+            private Object parseNested(char open) {
+                if (++depth > MAX_DEPTH) {
+                    throw new IllegalArgumentException("JSON nesting too deep");
+                }
+                try {
+                    return open == '{' ? parseObject() : parseArray();
+                } finally {
+                    depth--;
+                }
             }
 
             private Map<String, Object> parseObject() {
