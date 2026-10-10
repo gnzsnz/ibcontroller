@@ -28,6 +28,12 @@ test-java: $(SRC) $(TEST_SRC)
 	$(JAVAC) -d build/test-classes $(SRC) $(TEST_SRC)
 	$(JDK)/bin/java -Djava.awt.headless=true -cp build/test-classes ibcontroller.agent.AgentTests
 
+# Everything: build the jar, run the Java unit tests, then the Python suite (which
+# includes the tests that drive the built jar).
+.PHONY: test
+test: build test-java
+	uv run pytest
+
 # The Python package can't be built standalone -- `ibcontroller/ibcontroller-agent.jar`
 # must exist before `uv build` runs, since it's shipped via [tool.setuptools.package-data]
 # the same way ibcontroller/data/*.json is (see pyproject.toml). This target makes that
