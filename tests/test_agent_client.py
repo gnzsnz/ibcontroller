@@ -306,6 +306,41 @@ async def test_get_text_success(sock_path):
             assert await conn.get_text("Username") == "jsmith"
 
 
+async def test_get_text_sends_window_id_only_when_given(sock_path):
+    sock = sock_path
+    seen = []
+
+    def responder(request):
+        seen.append(request)
+        return {"ok": True, "value": "jsmith"}
+
+    async with FakeCommandServer(sock, responder):
+        async with AgentCommandConnection(sock) as conn:
+            await conn.get_text("Username")
+            await conn.get_text("Username", window_id="w7")
+
+    assert seen == [
+        {"cmd": "get_text", "target": "Username"},
+        {"cmd": "get_text", "target": "Username", "window_id": "w7"},
+    ]
+
+
+async def test_get_text_window_gone_raises_window_gone_error(sock_path):
+    sock = sock_path
+
+    def responder(_request):
+        return {
+            "ok": False,
+            "error": "window_gone",
+            "detail": "window w7 is no longer open",
+        }
+
+    async with FakeCommandServer(sock, responder):
+        async with AgentCommandConnection(sock) as conn:
+            with pytest.raises(WindowGoneError, match="no longer open"):
+                await conn.get_text("Username", window_id="w7")
+
+
 async def test_set_text_success(sock_path):
     sock = sock_path
 

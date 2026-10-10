@@ -217,6 +217,26 @@ async def test_read_text_returns_value(sock_path, event_sock_path):
     assert result == "existing text"
 
 
+async def test_read_text_forwards_window_id(sock_path, event_sock_path):
+    seen = []
+
+    def responder(request):
+        seen.append(request)
+        return {"ok": True, "value": "x"}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await read_text(dispatcher, "Username", window_id="w7")
+        finally:
+            await dispatcher.stop()
+
+    assert seen == [{"cmd": "get_text", "target": "Username", "window_id": "w7"}]
+
+
 async def test_wait_for_event_returns_matching_event(sock_path, event_sock_path):
     scripted = [
         {

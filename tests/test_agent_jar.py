@@ -12,7 +12,11 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from ibcontroller.agent_client import AgentCommandConnection, BadRequestError
+from ibcontroller.agent_client import (
+    AgentCommandConnection,
+    BadRequestError,
+    WindowGoneError,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -92,4 +96,12 @@ async def test_agent_survives_repeated_connect_and_abrupt_close(agent):
         writer.close()
         await writer.wait_closed()
     async with AgentCommandConnection(agent) as conn:
+        assert (await conn.ping()).version
+
+
+@requires_agent
+async def test_get_text_with_unknown_window_id_is_window_gone(agent):
+    async with AgentCommandConnection(agent) as conn:
+        with pytest.raises(WindowGoneError):
+            await conn.get_text("Username", window_id="nope")
         assert (await conn.ping()).version

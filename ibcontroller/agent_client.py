@@ -280,10 +280,15 @@ class AgentCommandConnection:
             self._raise_for_error(response)
         return [converter.structure(c, Component) for c in response["components"]]
 
-    async def get_text(self, target: str) -> str:
-        """Returns the text of the component identified by `target`. Raises
-        `CredentialRefusedError` if `target` is a password field."""
-        response = await self._request({"cmd": "get_text", "target": target})
+    async def get_text(self, target: str, window_id: str | None = None) -> str:
+        """Returns the text of the component identified by `target`.
+        `window_id`, if given, scopes the search to one window. Raises
+        `CredentialRefusedError` if `target` is a password field, and
+        `WindowGoneError` if `window_id` no longer resolves to an open window."""
+        payload: dict[str, Any] = {"cmd": "get_text", "target": target}
+        if window_id is not None:
+            payload["window_id"] = window_id
+        response = await self._request(payload)
         if not response["ok"]:
             self._raise_for_error(response)
         return str(response["value"])

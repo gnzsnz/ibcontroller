@@ -183,7 +183,8 @@ final class ComponentLookup {
     /**
      * Looks up a component by accessible name and returns its text, refusing outright on
      * credential fields (Security, sec 08) rather than redacting -- stricter than {@link
-     * #dump}, which shows a length-only placeholder for diagnostics.
+     * #dump}, which shows a length-only placeholder for diagnostics. Searches only {@code
+     * scope}'s tree when given, every open window when {@code null}.
      *
      * <p>Confirmed empirically (2026-09-04, real Gateway 10.50 login window) that more than one
      * component can share an accessible name -- Gateway's login window carries both an IB API
@@ -192,13 +193,13 @@ final class ComponentLookup {
      * document order for exactly that reason -- not yet proven this always picks the right one,
      * only that picking blindly by document order would sometimes be wrong.
      */
-    static String getText(String target) {
+    static String getText(String target, Window scope) {
         String[] result = new String[1];
         RuntimeException[] error = new RuntimeException[1];
         runOnEdt(
                 () -> {
                     try {
-                        Component component = findByAccessibleName(target);
+                        Component component = findByAccessibleName(target, scope);
                         if (Security.isCredentialField(component)) {
                             error[0] = new CredentialRefusedException(target);
                             return;

@@ -119,7 +119,7 @@ final class Protocol {
         return line.substring(start, end);
     }
 
-    private static Map<String, Object> dispatch(String line) {
+    static Map<String, Object> dispatch(String line) {
         Map<String, Object> request;
         try {
             request = asObject(Json.parse(line));
@@ -335,11 +335,14 @@ final class Protocol {
             return errorResponse("bad_request", "target must be a string");
         }
         try {
-            String value = ComponentLookup.getText(targetName);
+            Window scope = WriteOps.resolveScope(windowId(request));
+            String value = ComponentLookup.getText(targetName, scope);
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("ok", true);
             response.put("value", value);
             return response;
+        } catch (ComponentLookup.WindowGoneException e) {
+            return errorResponse("window_gone", e.getMessage());
         } catch (ComponentLookup.CredentialRefusedException e) {
             return errorResponse("refused_credential_field", e.getMessage());
         } catch (ComponentLookup.ElementNotFoundException e) {

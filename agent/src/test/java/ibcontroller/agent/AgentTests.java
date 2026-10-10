@@ -27,6 +27,8 @@ public final class AgentTests {
         run("parser rejects deeper nesting", AgentTests::parserRejectsDeep);
         run("accept loop survives errors", AgentTests::acceptLoopSurvives);
         run("deferred click failure is logged", AgentTests::deferredClickLogged);
+        run("get_text with a stale window_id is window_gone", AgentTests::getTextStaleWindow);
+        run("get_text without a target is bad_request", AgentTests::getTextBadRequest);
         if (failures > 0) {
             System.out.println(failures + " test(s) failed");
             System.exit(1);
@@ -77,6 +79,21 @@ public final class AgentTests {
                 });
         check(server.accepts == 4, "loop stopped early: " + server.accepts + " accepts");
         check(handled.size() == 2, "handler calls: " + handled.size());
+    }
+
+    private static void getTextStaleWindow() {
+        Object response =
+                Protocol.dispatch("{\"cmd\":\"get_text\",\"target\":\"x\",\"window_id\":\"nope\"}");
+        check(
+                response.toString().contains("error=window_gone"),
+                "expected window_gone, got " + response);
+    }
+
+    private static void getTextBadRequest() {
+        Object response = Protocol.dispatch("{\"cmd\":\"get_text\"}");
+        check(
+                response.toString().contains("error=bad_request"),
+                "expected bad_request, got " + response);
     }
 
     private static void deferredClickLogged() {

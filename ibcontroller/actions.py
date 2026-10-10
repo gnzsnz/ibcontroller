@@ -122,10 +122,13 @@ async def dismiss(
     )
 
 
-async def read_text(dispatcher: Dispatcher, field: str) -> str:
-    """Returns the text of `field`. Raises `CredentialRefusedError` if
-    `field` is a password field."""
-    return await _forward(dispatcher, "get_text", field)
+async def read_text(
+    dispatcher: Dispatcher, field: str, *, window_id: str | None = None
+) -> str:
+    """Returns the text of `field`. `window_id`, if given, scopes the read to
+    one window. Raises `CredentialRefusedError` if `field` is a password
+    field."""
+    return await _forward(dispatcher, "get_text", field, window_id)
 
 
 async def type_text_near_label(
