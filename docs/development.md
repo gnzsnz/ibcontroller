@@ -155,8 +155,11 @@ Any contribution must follow this separation of concerns.
 - **Rules:** one launch per call. Relaunch policy belongs to L6. L1 may construct L3 and L4 objects
   ("spawn and attach"). A launch that fails or is cancelled after the spawn terminates the JVM
   before raising; it never leaves an orphan. Readiness is bounded by `ready_timeout`, each probe
-  by its own timeout. Problems detectable before the spawn (socket path too long) raise
-  `LauncherError` before the install is touched. L1 does not import L5 or L5-1.
+  by its own timeout. `build_launch_plan` only reads; `prepare_installation` makes the disk
+  changes (directories, `jts.ini`, native launcher rename), and any `OSError` there becomes a
+  `LauncherError`. Problems detectable before that (socket path too long) raise before the
+  install is touched. Synchronous filesystem work runs through `anyio.to_thread`. L1 does not
+  import L5 or L5-1.
 
 ### L2 Java agent (`agent/`)
 

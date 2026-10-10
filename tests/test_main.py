@@ -137,7 +137,7 @@ async def test_run_async_passes_config_and_labels_into_run_control_loop(
     captured_labels: Labels | None = None
     captured_agent_jar: Path | None = None
 
-    async def fake_run_control_loop(config, agent_jar, *, labels=None):
+    async def fake_run_control_loop(config, agent_jar, *, labels):
         nonlocal captured_config, captured_labels, captured_agent_jar
         captured_config = config
         captured_labels = labels

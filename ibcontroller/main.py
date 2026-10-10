@@ -25,12 +25,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import signal
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
 from typing import Any
+
+import anyio.to_thread
 
 from ibcontroller.app_dirs import resolve_app_dirs
 from ibcontroller.config import load_config
@@ -105,9 +108,8 @@ async def run_async(
     fails with a clear `ConfigError` (not a `FileNotFoundError`) if the required fields
     are still unset.
 
-    `labels=load_labels(config_dir=config_dir)` is the actual fix for Open item 11 --
-    today's `control_loop.run_control_loop`'s own default (`load_labels()`, no
-    `config_dir`) never sees a user's `{config_dir}/labels.json` override at all.
+    Labels load once, here, with `config_dir`, so a user's `{config_dir}/labels.json`
+    override applies; `run_control_loop` requires them rather than loading its own.
 
     `cli_overrides`, if given, is passed straight through to `load_config` -- the
     per-invocation `Config` field overrides `cli.py`'s `run` command builds from its
@@ -119,15 +121,21 @@ async def run_async(
     wired up here for the first time. POSIX only (`loop.add_signal_handler`), matching
     this project's current platform scope."""
 
-    ensure_config_scaffold(config_dir, log_dir)
-    config = load_config(
-        config_dir=config_dir,
-        log_dir=log_dir,
-        dotenv_path=dotenv_path,
-        cli_overrides=cli_overrides,
+    # Startup file I/O (scaffold, config, labels, jar lookup) runs off the event loop.
+    await anyio.to_thread.run_sync(ensure_config_scaffold, config_dir, log_dir)
+    config = await anyio.to_thread.run_sync(
+        functools.partial(
+            load_config,
+            config_dir=config_dir,
+            log_dir=log_dir,
+            dotenv_path=dotenv_path,
+            cli_overrides=cli_overrides,
+        )
     )
-    labels = load_labels(config_dir=config_dir)
-    agent_jar_path = _load_jar_path()
+    labels = await anyio.to_thread.run_sync(
+        functools.partial(load_labels, config_dir=config_dir)
+    )
+    agent_jar_path = await anyio.to_thread.run_sync(_load_jar_path)
 
     loop = asyncio.get_running_loop()
     task = asyncio.ensure_future(

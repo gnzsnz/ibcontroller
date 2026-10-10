@@ -62,7 +62,7 @@ from typing import Any, Protocol
 from ibcontroller.agent_client import AgentClientError
 from ibcontroller.config import Config, MfaTimeoutAction
 from ibcontroller.diagnostics import watch_for_diagnostics
-from ibcontroller.labels import Labels, load_labels
+from ibcontroller.labels import Labels
 from ibcontroller.launcher import (
     LaunchedInstance,
     LauncherError,
@@ -310,7 +310,7 @@ async def _apply_declarative_settings_or_log(
 
 
 async def run_control_loop(
-    config: Config, agent_jar: str | Path, *, labels: Labels | None = None
+    config: Config, agent_jar: str | Path, *, labels: Labels
 ) -> ShutdownCause:
     """The outer loop -- ports IBC's own `ibcstart.sh` shape (a `while` loop
     wrapped around the entire JVM invocation) around one lap of
@@ -348,7 +348,6 @@ async def run_control_loop(
     `ShutdownCause.REQUESTED` rather than propagating `CancelledError` --
     this coroutine is the documented cancellation boundary, so nothing else
     needs a `try`/`except CancelledError` around it."""
-    labels = labels if labels is not None else load_labels()
     restart_hash: str | None = None
     try:
         while True:

@@ -3,11 +3,12 @@
 Resolves everything needed to start TWS or IB Gateway (install location, JRE,
 classpath, JVM options) and spawns the agent-embedded process.
 
-Split into two halves with different testing needs: `build_launch_plan` is
-pure, filesystem-only logic (classpath assembly, JRE discovery, `.vmoptions`/
-`Info.plist`/`i4jparams.conf` parsing), testable against a synthetic directory
-tree. `launch_instance` is the async half that spawns the process and waits
-for it to answer a real `ping`.
+Three steps with different testing needs: `build_launch_plan` only reads
+(classpath assembly, JRE discovery, `.vmoptions`/`i4jparams.conf` parsing),
+testable against a synthetic directory tree. `prepare_installation` makes the
+filesystem changes the launch needs (directories, `jts.ini`, native launcher
+rename). `launch_instance` runs both off the event loop, then spawns the
+process and waits for it to answer a real `ping`.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import os
 import platform
 import re
 import shutil
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -103,6 +105,8 @@ class LaunchPlan:
     event_socket_path: str
     settings_dir: str
     program_path: Path
+    os_name: str
+    resolved_program: str
 
 
 @dataclass(frozen=True)
@@ -529,9 +533,9 @@ def _prevent_native_restart(program_path: Path) -> Path:
     returning the same renamed path. A fresh bundle next to an existing
     renamed one (e.g. after an in-place update) replaces it.
 
-    macOS only, called only under `os_name == "macos"` in `build_launch_plan`
-    -- see `_prevent_native_restart_linux` for the Linux equivalent, called
-    under the `else` branch there."""
+    macOS only, called only under `os_name == "macos"` in
+    `prepare_installation` -- see `_prevent_native_restart_linux` for the
+    Linux equivalent, called under the `else` branch there."""
     original = program_path / f"{program_path.name}.app"
     renamed = program_path / f"{program_path.name}-1.app"
     if original.is_dir():
@@ -590,9 +594,10 @@ def build_launch_plan(
     runtime_dir: str | Path | None = None,
     restart_hash: str | None = None,
 ) -> LaunchPlan:
-    """The pure, filesystem-only half of launching -- resolves everything
-    needed to spawn the agent process (install location, JRE, classpath, JVM
-    options), without spawning anything.
+    """The read-only half of launching -- resolves everything needed to spawn
+    the agent process (install location, JRE, classpath, JVM options) without
+    changing anything on disk; `prepare_installation` does that. Raises
+    `LauncherError` for a socket path over the AF_UNIX limit.
 
     `runtime_dir` is where the agent's own command/event sockets are created --
     resolved via `app_dirs.resolve_runtime_dir()` (platformdirs) unless a
@@ -606,7 +611,6 @@ def build_launch_plan(
     session after a scheduled restart without a full 2FA prompt."""
     os_name = os_name or _os_name()
     sock_dir = Path(runtime_dir) if runtime_dir is not None else resolve_runtime_dir()
-    sock_dir.mkdir(parents=True, exist_ok=True)
     command_socket_path = str(
         sock_dir / f"ibcontroller-agent-{config.instance}-cmd.sock"
     )
@@ -615,17 +619,8 @@ def build_launch_plan(
     )
     for socket_path in (command_socket_path, event_socket_path):
         _check_socket_path(socket_path, os_name)
-    # The agent's FileHandler needs it before binding its sockets; logging_setup
-    # only creates it for sink=file or tracing.
-    Path(config.log_dir).mkdir(parents=True, exist_ok=True)
     tws_path = _resolve_tws_path(config, os_name)
     settings_dir = resolve_tws_settings_path(config)
-    settings_dir.mkdir(parents=True, exist_ok=True)
-    _ensure_jts_ini(
-        settings_dir,
-        is_gateway=config.program.lower() == "gateway",
-        time_zone=config.time_zone,
-    )
     tws_version = config.tws_version or _detect_tws_version(
         tws_path, os_name, config.program.lower(), config.tws_channel
     )
@@ -669,11 +664,6 @@ def build_launch_plan(
         )
     vm_options.append(f"-Dchannel={channel}")
 
-    if os_name == "macos":
-        _prevent_native_restart(program_path)
-    else:
-        script_name = "ibgateway" if resolved_program == "gateway" else "tws"
-        _prevent_native_restart_linux(program_path, script_name)
     vm_options.extend(_read_i4j_vmoptions(install4j_dir))
 
     # Agent-side logging (java.util.logging, AgentMain.configureLogging, 2026-09-08):
@@ -716,7 +706,48 @@ def build_launch_plan(
         event_socket_path=event_socket_path,
         settings_dir=str(settings_dir),
         program_path=program_path,
+        os_name=os_name,
+        resolved_program=resolved_program,
     )
+
+
+def prepare_installation(config: Config, plan: LaunchPlan) -> None:
+    """The side-effecting half of launching, run after `build_launch_plan`:
+    creates the socket, log and settings directories, writes `jts.ini`, and
+    renames the native launcher. Synchronous filesystem work -- call it via
+    `anyio.to_thread`. Any `OSError` becomes a `LauncherError` naming the
+    path, never a raw traceback."""
+    log_dir = Path(config.log_dir)
+    settings_dir = Path(plan.settings_dir)
+    # The agent's FileHandler needs log_dir before binding its sockets;
+    # logging_setup only creates it for sink=file or tracing.
+    for directory in (Path(plan.command_socket_path).parent, log_dir, settings_dir):
+        with _os_error_as_launcher_error(f"cannot create {directory}"):
+            directory.mkdir(parents=True, exist_ok=True)
+    with _os_error_as_launcher_error(f"cannot write {settings_dir / 'jts.ini'}"):
+        _ensure_jts_ini(
+            settings_dir,
+            is_gateway=config.program.lower() == "gateway",
+            time_zone=config.time_zone,
+        )
+    with _os_error_as_launcher_error(
+        f"cannot rename the native launcher in {plan.program_path} -- ibcontroller "
+        "needs write access there so Gateway/TWS's own restart cannot relaunch it "
+        "outside ibcontroller's control"
+    ):
+        if plan.os_name == "macos":
+            _prevent_native_restart(plan.program_path)
+        else:
+            script_name = "ibgateway" if plan.resolved_program == "gateway" else "tws"
+            _prevent_native_restart_linux(plan.program_path, script_name)
+
+
+@contextlib.contextmanager
+def _os_error_as_launcher_error(what: str) -> Iterator[None]:
+    try:
+        yield
+    except OSError as exc:
+        raise LauncherError(f"{what}: {exc}") from exc
 
 
 async def _wait_for_ready(
@@ -842,6 +873,34 @@ async def _abort_launch(
     await asyncio.gather(stdout_drain_task, return_exceptions=True)
 
 
+def _configure_instance_logging(config: Config) -> logging.Logger:
+    """Sets up `ibcontroller` logging, the wire trace and the Gateway/TWS
+    stdout logger for this instance. Creates directories and opens files, so
+    `launch_instance` runs it off the event loop. Returns the stdout logger."""
+    configure_logging(
+        level=config.log_level,
+        log_dir=config.log_dir,
+        filename=f"ibcontroller-{config.instance}.log",
+        sink=config.log_sink,
+        max_bytes=config.log_max_bytes,
+        backup_count=config.log_backup_count,
+    )
+    configure_trace(
+        instance=config.instance,
+        enabled=config.trace_enabled,
+        trace_dir=config.log_dir,
+        max_bytes=config.log_max_bytes,
+        backup_count=config.log_backup_count,
+    )
+    return configure_gateway_stdout(
+        config.instance,
+        config.log_dir,
+        sink=config.log_sink,
+        max_bytes=config.log_max_bytes,
+        backup_count=config.log_backup_count,
+    )
+
+
 async def launch_instance(
     config: Config,
     agent_jar: str | Path,
@@ -858,11 +917,10 @@ async def launch_instance(
     `restart_hash` is passed straight through to `build_launch_plan` -- see
     that function's own docstring for what it does and why.
 
-    `build_launch_plan` itself runs via `anyio.to_thread.run_sync`, not
-    called directly -- it's a long, purely synchronous chain of filesystem
-    calls, and this runs on every launch *and* every scheduled restart while
-    the Dispatcher's own event/command tasks are already live on the same
-    loop.
+    Logging setup, `build_launch_plan` and `prepare_installation` run via
+    `anyio.to_thread.run_sync`, not called directly -- they're synchronous
+    filesystem work, and this runs on every launch *and* every scheduled
+    restart while other tasks are live on the same loop.
 
     Configures the `ibcontroller` logging hierarchy first
     (`configure_logging`/`configure_trace`), and the launched process's own
@@ -871,33 +929,13 @@ async def launch_instance(
     purely on the `trace_enabled` toggle; its files (the raw wire trace) and
     `ibcontroller.log` both land under `config.log_dir`.
     """
-    configure_logging(
-        level=config.log_level,
-        log_dir=config.log_dir,
-        filename=f"ibcontroller-{config.instance}.log",
-        sink=config.log_sink,
-        max_bytes=config.log_max_bytes,
-        backup_count=config.log_backup_count,
-    )
-    configure_trace(
-        instance=config.instance,
-        enabled=config.trace_enabled,
-        trace_dir=config.log_dir,
-        max_bytes=config.log_max_bytes,
-        backup_count=config.log_backup_count,
-    )
-    stdout_logger = configure_gateway_stdout(
-        config.instance,
-        config.log_dir,
-        sink=config.log_sink,
-        max_bytes=config.log_max_bytes,
-        backup_count=config.log_backup_count,
-    )
+    stdout_logger = await anyio.to_thread.run_sync(_configure_instance_logging, config)
     plan = await anyio.to_thread.run_sync(
         functools.partial(
             build_launch_plan, config, agent_jar, restart_hash=restart_hash
         )
     )
+    await anyio.to_thread.run_sync(prepare_installation, config, plan)
     logger.info(
         "IBController > launching instance %s (%s)",
         config.instance,

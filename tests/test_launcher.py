@@ -47,6 +47,7 @@ from ibcontroller.launcher import (
     _wait_for_ready,
     build_launch_plan,
     launch_instance,
+    prepare_installation,
     resolve_tws_settings_path,
     terminate_and_wait,
 )
@@ -71,6 +72,13 @@ def _config(**overrides: Any) -> Config:
         log_dir=f"{gettempdir()}/log",
     )
     return attrs.evolve(base, **overrides)
+
+
+def _plan_and_prepare(config: Config, agent_jar: Any, **kwargs: Any) -> LaunchPlan:
+    """`launch_instance`'s filesystem steps without the spawn."""
+    plan = build_launch_plan(config, agent_jar, **kwargs)
+    prepare_installation(config, plan)
+    return plan
 
 
 def test_resolve_tws_path_defaults_macos():
@@ -212,7 +220,7 @@ def test_build_launch_plan_creates_jts_ini(tmp_path, run_dir):
         tws_settings_path=str(settings_dir),
         instance="paper",
     )
-    build_launch_plan(
+    _plan_and_prepare(
         config, tmp_path / "agent.jar", os_name="macos", runtime_dir=run_dir
     )
     assert (settings_dir / "jts.ini").is_file()
@@ -728,7 +736,7 @@ def test_build_launch_plan_macos_gateway(tmp_path, run_dir):
         instance="paper",
     )
     runtime_dir = run_dir
-    plan = build_launch_plan(
+    plan = _plan_and_prepare(
         config, tmp_path / "agent.jar", os_name="macos", runtime_dir=runtime_dir
     )
 
@@ -1004,10 +1012,10 @@ def test_build_launch_plan_macos_gateway_survives_relaunch_after_rename(
     )
     runtime_dir = run_dir
 
-    build_launch_plan(
+    _plan_and_prepare(
         config, tmp_path / "agent.jar", os_name="macos", runtime_dir=runtime_dir
     )
-    plan = build_launch_plan(
+    plan = _plan_and_prepare(
         config, tmp_path / "agent.jar", os_name="macos", runtime_dir=runtime_dir
     )
 
@@ -1024,7 +1032,7 @@ def test_build_launch_plan_linux_tws(tmp_path, run_dir):
         instance="live",
     )
     runtime_dir = run_dir
-    plan = build_launch_plan(
+    plan = _plan_and_prepare(
         config, tmp_path / "agent.jar", os_name="linux", runtime_dir=runtime_dir
     )
 
@@ -1112,7 +1120,7 @@ def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(
         instance="paper",
     )
     with caplog.at_level(logging.WARNING):
-        plan = build_launch_plan(
+        plan = _plan_and_prepare(
             config,
             tmp_path / "agent.jar",
             os_name="macos",
@@ -1218,7 +1226,7 @@ def test_build_launch_plan_default_runtime_dir_uses_platformdirs(
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
     )
-    plan = build_launch_plan(config, tmp_path / "agent.jar", os_name="macos")
+    plan = _plan_and_prepare(config, tmp_path / "agent.jar", os_name="macos")
 
     expected_dir = run_dir / "run"
     assert plan.command_socket_path == str(
@@ -1423,10 +1431,90 @@ def test_build_launch_plan_creates_log_dir(tmp_path, run_dir):
         instance="paper",
         log_dir=str(tmp_path / "logs" / "nested"),
     )
-    build_launch_plan(
+    _plan_and_prepare(
         config, tmp_path / "agent.jar", os_name="linux", runtime_dir=run_dir
     )
     assert (tmp_path / "logs" / "nested").is_dir()
+
+
+def _tree(root: Path) -> set[tuple[str, int]]:
+    return {(str(p.relative_to(root)), p.stat().st_mtime_ns) for p in root.rglob("*")}
+
+
+@pytest.mark.parametrize("os_name", ["macos", "linux"])
+def test_build_launch_plan_changes_nothing_on_disk(tmp_path, run_dir, os_name):
+    """Planning only reads; `prepare_installation` makes the changes (L1 F7)."""
+    base = _make_synthetic_install(tmp_path, os_name=os_name)
+    config = _config(
+        program="gateway",
+        tws_path=str(base),
+        tws_settings_path=str(tmp_path / "settings"),
+        instance="paper",
+        log_dir=str(tmp_path / "logs"),
+    )
+    before = _tree(tmp_path)
+    build_launch_plan(
+        config, tmp_path / "agent.jar", os_name=os_name, runtime_dir=run_dir
+    )
+    assert _tree(tmp_path) == before
+    assert not run_dir.exists()
+
+
+@contextlib.contextmanager
+def _read_only(path: Path):
+    mode = path.stat().st_mode
+    path.chmod(0o555)
+    try:
+        yield
+    finally:
+        path.chmod(mode)
+
+
+@pytest.mark.parametrize("os_name", ["macos", "linux"])
+def test_prepare_installation_read_only_install_raises_launcher_error(
+    tmp_path, run_dir, os_name
+):
+    """The native launcher cannot be renamed: a clear `LauncherError` naming
+    the directory and why, not a raw `OSError` traceback (L1 F6)."""
+    base = _make_synthetic_install(tmp_path, os_name=os_name)
+    config = _config(
+        program="gateway",
+        tws_path=str(base),
+        tws_settings_path=str(tmp_path / "settings"),
+        instance="paper",
+        log_dir=str(tmp_path / "logs"),
+    )
+    plan = build_launch_plan(
+        config, tmp_path / "agent.jar", os_name=os_name, runtime_dir=run_dir
+    )
+    with (
+        _read_only(plan.program_path),
+        pytest.raises(LauncherError, match="cannot rename the native launcher"),
+    ):
+        prepare_installation(config, plan)
+
+
+def test_prepare_installation_read_only_settings_raises_launcher_error(
+    tmp_path, run_dir
+):
+    base = _make_synthetic_install(tmp_path, os_name="linux")
+    settings_dir = tmp_path / "settings"
+    settings_dir.mkdir()
+    config = _config(
+        program="gateway",
+        tws_path=str(base),
+        tws_settings_path=str(settings_dir),
+        instance="paper",
+        log_dir=str(tmp_path / "logs"),
+    )
+    plan = build_launch_plan(
+        config, tmp_path / "agent.jar", os_name="linux", runtime_dir=run_dir
+    )
+    with (
+        _read_only(settings_dir),
+        pytest.raises(LauncherError, match=r"cannot write .*jts\.ini"),
+    ):
+        prepare_installation(config, plan)
 
 
 # --- _drain_stdout (async, off-loop write via configure_gateway_stdout) -------------
@@ -1572,9 +1660,14 @@ def fake_spawn(monkeypatch, tmp_path, sock_path, event_sock_path):
         event_socket_path=str(event_sock_path),
         settings_dir=str(tmp_path / "settings"),
         program_path=tmp_path,
+        os_name="linux",
+        resolved_program="gateway",
     )
     monkeypatch.setattr(
         "ibcontroller.launcher.build_launch_plan", lambda *_a, **_k: plan
+    )
+    monkeypatch.setattr(
+        "ibcontroller.launcher.prepare_installation", lambda *_a, **_k: None
     )
 
     async def spawn(*_args, **_kwargs):

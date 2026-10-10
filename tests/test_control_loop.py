@@ -157,7 +157,9 @@ async def test_run_control_loop_returns_requested_when_task_is_cancelled(
     monkeypatch.setattr(control_loop, "_run_one_cycle", _never_completes)
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
 
-    task = asyncio.ensure_future(run_control_loop(_config(), "agent.jar"))
+    task = asyncio.ensure_future(
+        run_control_loop(_config(), "agent.jar", labels=LABELS)
+    )
     await asyncio.sleep(0)  # let the loop actually start awaiting _run_one_cycle
     task.cancel()
 
@@ -546,7 +548,7 @@ async def test_run_control_loop_cold_restart_relaunches_with_no_restart_hash(
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
 
     with caplog.at_level(logging.WARNING, logger="ibcontroller.control_loop"):
-        cause = await run_control_loop(_config(), "agent.jar")
+        cause = await run_control_loop(_config(), "agent.jar", labels=LABELS)
 
     assert cause is ShutdownCause.LOGIN_FAILED
     assert calls == [None, None]
@@ -567,7 +569,7 @@ async def test_run_control_loop_tidy_closedown_stops_without_relaunch(monkeypatc
     monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
 
-    cause = await run_control_loop(_config(), "agent.jar")
+    cause = await run_control_loop(_config(), "agent.jar", labels=LABELS)
 
     assert cause is ShutdownCause.TIDY_CLOSEDOWN
     assert calls == 1
@@ -591,7 +593,7 @@ async def test_run_control_loop_login_frame_timeout_always_relaunches(
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
 
     with caplog.at_level(logging.WARNING, logger="ibcontroller.control_loop"):
-        cause = await run_control_loop(_config(), "agent.jar")
+        cause = await run_control_loop(_config(), "agent.jar", labels=LABELS)
 
     assert cause is ShutdownCause.LOGIN_FAILED
     assert calls == [None, None]
@@ -616,7 +618,7 @@ async def test_run_control_loop_relaunches_on_transient_login_error(
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
 
     with caplog.at_level(logging.WARNING, logger="ibcontroller.control_loop"):
-        cause = await run_control_loop(_config(), "agent.jar")
+        cause = await run_control_loop(_config(), "agent.jar", labels=LABELS)
 
     assert cause is ShutdownCause.LOGIN_FAILED
     assert calls == [None, None]
@@ -652,7 +654,7 @@ async def test_run_control_loop_process_gone_relaunches_only_with_marker(
     )
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
 
-    assert await run_control_loop(_config(), "agent.jar") is cause
+    assert await run_control_loop(_config(), "agent.jar", labels=LABELS) is cause
     assert calls == [None, "abc123"]
 
 
@@ -683,7 +685,7 @@ async def test_run_control_loop_login_frame_timeout_keeps_restart_hash(monkeypat
     )
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
 
-    cause = await run_control_loop(_config(), "agent.jar")
+    cause = await run_control_loop(_config(), "agent.jar", labels=LABELS)
 
     assert cause is ShutdownCause.LOGIN_FAILED
     assert calls == [None, "abc123", "abc123"]
@@ -705,7 +707,9 @@ async def test_run_control_loop_mfa_timeout_relaunches_when_action_is_restart(
 
     with caplog.at_level(logging.WARNING, logger="ibcontroller.control_loop"):
         cause = await run_control_loop(
-            _config(mfa_timeout_action=MfaTimeoutAction.RESTART), "agent.jar"
+            _config(mfa_timeout_action=MfaTimeoutAction.RESTART),
+            "agent.jar",
+            labels=LABELS,
         )
 
     assert cause is ShutdownCause.LOGIN_FAILED
@@ -729,7 +733,9 @@ async def test_run_control_loop_mfa_timeout_propagates_when_action_is_exit(
 
     with pytest.raises(MfaTimeoutError):
         await run_control_loop(
-            _config(mfa_timeout_action=MfaTimeoutAction.EXIT), "agent.jar"
+            _config(mfa_timeout_action=MfaTimeoutAction.EXIT),
+            "agent.jar",
+            labels=LABELS,
         )
 
     assert calls == [None]
