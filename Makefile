@@ -32,7 +32,7 @@ test-java: $(SRC) $(TEST_SRC)
 # includes the tests that drive the built jar).
 .PHONY: test
 test: build test-java
-	uv run pytest
+	uv run pytest -n auto
 
 # The Python package can't be built standalone -- `ibcontroller/ibcontroller-agent.jar`
 # must exist before `uv build` runs, since it's shipped via [tool.setuptools.package-data]

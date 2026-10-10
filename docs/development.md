@@ -111,15 +111,16 @@ Build using`Makefile`:
 
 ```bash
 make build    # build/ibcontroller-agent.jar, then copies it into ibcontroller/ (for uv/pyproject packaging)
-make test       # build, run the Java unit tests, then `uv run pytest`
+make test       # build, run the Java unit tests, then `uv run pytest -n auto` (parallel, pytest-xdist)
 make test-java  # compile and run the agent's unit tests (plain javac + java, no test framework)
 make dist     # build the jar, then uv build the Python package (jar is required package-data, see Makefile)
 make clean    # rm -rf build dist
 ```
 
 Day-to-day cycle: `make build` and `make test-java` after any agent-side change, `uv run pytest` for the
-Python side (`tests/test_agent_jar.py` drives the built jar through `agent_client` and skips without a
-JDK or jar), `pre-commit run --all-files` before pushing. `make test` runs all three test steps.
+Python side (serial; add `-n auto` to run in parallel, as `make test` and CI do;
+`tests/test_agent_jar.py` drives the built jar through `agent_client` and skips without a JDK or jar),
+`pre-commit run --all-files` before pushing. `make test` runs all three test steps.
 
 ## Running ibcontroller
 

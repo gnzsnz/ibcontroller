@@ -57,6 +57,7 @@ dev = [
     "aresponses",
     "pytest-timeout",
     "pytest-aiohttp",
+    "pytest-xdist",
 ]
 
 

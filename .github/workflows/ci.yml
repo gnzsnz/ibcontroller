@@ -44,7 +44,7 @@ jobs:
         run: make test-java
 
       - name: Test
-        run: uv run pytest
+        run: uv run pytest -n auto
 
       - name: Build
         run: uv build

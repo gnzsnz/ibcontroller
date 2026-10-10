@@ -49,8 +49,15 @@ async def agent(sock_path):
     )
     try:
         async with asyncio.timeout(15):
-            while not sock_path.exists():
-                await asyncio.sleep(0.05)
+            while True:  # the file exists after bind(), before listen()
+                try:
+                    _, probe = await asyncio.open_unix_connection(str(sock_path))
+                except (FileNotFoundError, ConnectionRefusedError):
+                    await asyncio.sleep(0.05)
+                    continue
+                probe.close()
+                await probe.wait_closed()
+                break
         yield sock_path
         assert proc.returncode is None, "agent exited during the test"
     finally:
