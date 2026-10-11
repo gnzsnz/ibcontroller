@@ -854,7 +854,7 @@ async def test_watch_for_unprompted_windows_dispatches_a_window_that_arrives_lat
                 watch_for_unprompted_windows(registry, dispatcher)
             )
             await asyncio.sleep(0.05)  # let the watcher connect its listener
-            dispatcher.window_events.emit(_event("Warning"))
+            dispatcher._window_events.emit(_event("Warning"))
             await asyncio.sleep(0.2)  # let it process the dispatch
             watcher.cancel()
             with pytest.raises(asyncio.CancelledError):

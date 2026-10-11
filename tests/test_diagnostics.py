@@ -114,11 +114,12 @@ async def test_watch_for_diagnostics_dumps_a_known_window_when_scope_is_known(
                 )
             )
             await asyncio.sleep(0.05)
-            dispatcher.window_events.emit(_event("window_opened", "Warning"))
+            dispatcher._window_events.emit(_event("window_opened", "Warning"))
             await asyncio.sleep(0.2)
             watcher.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await watcher
+            assert len(dispatcher._window_events) == 0  # subscription released
         finally:
             await dispatcher.stop()
 
@@ -152,7 +153,7 @@ async def test_watch_for_diagnostics_skips_an_unknown_window_when_scope_is_known
                 )
             )
             await asyncio.sleep(0.05)
-            dispatcher.window_events.emit(_event("window_opened", "Unrelated"))
+            dispatcher._window_events.emit(_event("window_opened", "Unrelated"))
             await asyncio.sleep(0.2)
             watcher.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -192,7 +193,7 @@ async def test_watch_for_diagnostics_falls_back_on_a_vanished_window(
                 )
             )
             await asyncio.sleep(0.05)
-            dispatcher.window_events.emit(_event("window_closed", "Warning"))
+            dispatcher._window_events.emit(_event("window_closed", "Warning"))
             await asyncio.sleep(0.2)
             watcher.cancel()
             with pytest.raises(asyncio.CancelledError):

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 
-import eventkit
 import pytest
 from typed_settings.types import Secret
 
@@ -21,7 +20,7 @@ from ibcontroller.actions import (
     toggle,
     type_text,
     type_text_near_label,
-    wait_for_event,
+    wait_for_window,
 )
 from ibcontroller.agent_client import (
     AgentCommandConnection,
@@ -80,7 +79,7 @@ async def test_type_text_accepts_secret_and_never_sends_plaintext_repr(
             await dispatcher.stop()
 
     # the wire value is unwrapped correctly (agent_client.py's own job) -- but
-    # nothing about wait_for_event/type_text ever holds or logs the bare string
+    # nothing about type_text ever holds or logs the bare string
     # outside that one call.
     assert seen["value"] == "hunter2"
 
@@ -235,195 +234,6 @@ async def test_read_text_forwards_window_id(sock_path, event_sock_path):
             await dispatcher.stop()
 
     assert seen == [{"cmd": "get_text", "target": "Username", "window_id": "w7"}]
-
-
-async def test_wait_for_event_returns_matching_event(sock_path, event_sock_path):
-    scripted = [
-        {
-            "type": "event",
-            "seq": 1,
-            "kind": "window_opened",
-            "window": {"class": "some.Other", "title": "Not it"},
-        },
-        {
-            "type": "event",
-            "seq": 2,
-            "kind": "window_opened",
-            "window": {"class": "ibgateway.ax", "title": "IBKR Gateway"},
-        },
-    ]
-
-    async with (
-        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
-        FakeEventServer(event_sock_path, scripted),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            event = await wait_for_event(
-                dispatcher,
-                "window_opened",
-                lambda e: e.window.title == "IBKR Gateway",
-                timeout=2.0,
-            )
-        finally:
-            await dispatcher.stop()
-
-    assert event.seq == 2
-    assert event.window.title == "IBKR Gateway"
-
-
-async def test_wait_for_event_times_out_cleanly(sock_path, event_sock_path):
-    async with (
-        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            with pytest.raises(TimeoutError):
-                await wait_for_event(dispatcher, "window_opened", timeout=0.2)
-        finally:
-            await dispatcher.stop()
-
-
-async def test_wait_for_event_disconnects_listener_after_returning(
-    sock_path, event_sock_path
-):
-    """A leaked listener would keep firing on every future event for this
-    Dispatcher's lifetime -- confirm cleanup actually happens, not just assume the
-    `finally` block runs."""
-    scripted = [
-        {
-            "type": "event",
-            "seq": 1,
-            "kind": "window_opened",
-            "window": {"class": "x", "title": "t"},
-        }
-    ]
-
-    async with (
-        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
-        FakeEventServer(event_sock_path, scripted),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            await wait_for_event(dispatcher, "window_opened", timeout=2.0)
-            assert len(dispatcher.window_events._slots.slots) == 0
-        finally:
-            await dispatcher.stop()
-
-
-async def test_wait_for_event_survives_synchronous_back_to_back_emits(
-    sock_path, event_sock_path
-):
-    """The stricter regression case, emitting directly on `window_events` (no
-    socket I/O in between, so truly zero event-loop turn between the two emits) --
-    confirms `wait_for_event` doesn't lose the second (matching) emit to the
-    reconnect race a naive `while True: await window_events` loop has (see
-    `test_eventkit_await_loop_has_a_reconnect_race_between_iterations` below,
-    which reproduces exactly that loss against raw `eventkit.Event`)."""
-    async with (
-        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            waiter = asyncio.ensure_future(
-                wait_for_event(dispatcher, "window_opened", timeout=2.0)
-            )
-            await asyncio.sleep(0)  # let waiter's .filter() connect
-            dispatcher.window_events.emit(
-                WindowEvent(seq=1, kind="window_closed", window=WindowInfo(class_="x"))
-            )
-            dispatcher.window_events.emit(
-                WindowEvent(seq=2, kind="window_opened", window=WindowInfo(class_="y"))
-            )
-            event = await asyncio.wait_for(waiter, timeout=2.0)
-        finally:
-            await dispatcher.stop()
-
-    assert event.seq == 2
-
-
-async def test_wait_for_event_disconnects_listener_after_timeout(
-    sock_path, event_sock_path
-):
-    async with (
-        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            with pytest.raises(TimeoutError):
-                await wait_for_event(dispatcher, "window_opened", timeout=0.2)
-            assert len(dispatcher.window_events._slots.slots) == 0
-        finally:
-            await dispatcher.stop()
-
-
-async def test_eventkit_aiter_is_lazy_not_synchronous():
-    """Confirmed directly against `eventkit.Event`, independent of any
-    socket/Dispatcher plumbing, not just asserted from reading its source:
-    `.aiter()` connects its listener lazily, only at the first `__anext__()`
-    call (it's an async generator; Python doesn't run any of its body until
-    then), so an `emit()` between calling `.aiter()` and that first `await` is
-    silently lost. This is why `wait_for_event` doesn't use `.aiter()`."""
-    event = eventkit.Event()
-    it = event.aiter()
-    event.emit("should be lost")
-    with pytest.raises(TimeoutError):
-        await asyncio.wait_for(it.__anext__(), timeout=0.2)
-
-
-async def test_eventkit_await_loop_has_a_reconnect_race_between_iterations():
-    """Confirmed directly, not assumed: a bare `while True: await event` loop
-    has the *same class* of race as `.aiter()`, for a different reason --
-    `Event.__await__` disconnects its listener via a Future done-callback
-    (deferred through `call_soon`), so a second, matching emit arriving
-    back-to-back with a non-matching one (no real event-loop turn between them)
-    lands in the gap between one iteration's disconnect and the next's
-    reconnect, and is lost. This is why `wait_for_event` uses `.filter()`
-    (which stays permanently connected) instead of looping over bare `await`."""
-    event = eventkit.Event()
-
-    async def consumer():
-        while True:
-            value = await event
-            if value == "match":
-                return value
-
-    task = asyncio.ensure_future(consumer())
-    await asyncio.sleep(0)  # let the task start and connect its first await
-    event.emit("no match")
-    event.emit("match")  # back-to-back, no await in between -- lost in the gap
-    with pytest.raises(TimeoutError):
-        await asyncio.wait_for(task, timeout=0.2)
-    task.cancel()
-
-
-async def test_eventkit_filter_leaks_a_permanent_subscriber_unless_disconnected():
-    """Confirmed directly: `.filter()`'s connection to its source is eager
-    (race-free, unlike the two cases above) but permanent -- `Op._connect_from`
-    connects with `keep_ref=True`, so the source keeps a *strong* reference to
-    the filter object forever unless explicitly disconnected. This is why
-    `wait_for_event` disconnects in a `finally`, using `Op`'s own public
-    `on_source`/`on_source_error`/`on_source_done` methods."""
-    source = eventkit.Event()
-    filtered = source.filter(lambda v: v == "match")
-
-    async def waiter():
-        return await filtered
-
-    task = asyncio.ensure_future(waiter())
-    await asyncio.sleep(0)
-    source.emit("match")
-    await asyncio.wait_for(task, timeout=1.0)
-
-    assert len(source._slots.slots) == 1  # the leak, if left alone
-
-    source.disconnect(
-        filtered.on_source, filtered.on_source_error, filtered.on_source_done
-    )
-    assert len(source._slots.slots) == 0
 
 
 def test_actions_table_contains_the_real_vocabulary_only():
@@ -585,3 +395,82 @@ async def test_type_text_near_label_sends_label_index_and_value(
             )
         finally:
             await dispatcher.stop()
+
+
+def _idle_dispatcher() -> Dispatcher:
+    """Unstarted Dispatcher: registry and `_window_events` driven by hand."""
+    return Dispatcher(AgentCommandConnection("unused"), AgentEventConnection("unused"))
+
+
+def _win_event(kind: str, window_id: str, title: str) -> WindowEvent:
+    return WindowEvent(
+        seq=1,
+        kind=kind,
+        window=WindowInfo(class_="c", title=title, window_id=window_id),
+    )
+
+
+async def test_wait_for_window_open_already_open_returns_at_once():
+    dispatcher = _idle_dispatcher()
+    dispatcher._windows["w1"] = WindowInfo(class_="c", title="Login", window_id="w1")
+    win = await wait_for_window(dispatcher, lambda w: w.title == "Login", timeout=0.2)
+    assert win is not None
+    assert win.window_id == "w1"
+
+
+async def test_wait_for_window_open_waits_for_event():
+    dispatcher = _idle_dispatcher()
+    task = asyncio.ensure_future(
+        wait_for_window(dispatcher, lambda w: w.title == "Login", timeout=2.0)
+    )
+    await asyncio.sleep(0)
+    dispatcher._window_events.emit(_win_event("window_opened", "w2", "Other"))
+    dispatcher._window_events.emit(_win_event("window_opened", "w3", "Login"))
+    win = await task
+    assert win is not None
+    assert win.window_id == "w3"
+    assert len(dispatcher._window_events) == 0
+
+
+async def test_wait_for_window_closed_already_closed_returns_at_once():
+    dispatcher = _idle_dispatcher()
+    dispatcher._windows["w1"] = WindowInfo(class_="c", title="Other", window_id="w1")
+    result = await wait_for_window(
+        dispatcher, lambda w: w.title == "Splash", closed=True, timeout=0.2
+    )
+    assert result is None
+
+
+async def test_wait_for_window_closed_waits_for_close_event():
+    dispatcher = _idle_dispatcher()
+    dispatcher._windows["w1"] = WindowInfo(class_="c", title="Splash", window_id="w1")
+    task = asyncio.ensure_future(
+        wait_for_window(
+            dispatcher, lambda w: w.title == "Splash", closed=True, timeout=2.0
+        )
+    )
+    await asyncio.sleep(0)
+    assert not task.done()
+    dispatcher._window_events.emit(_win_event("window_closed", "w1", "Splash"))
+    assert await task is None
+    assert len(dispatcher._window_events) == 0
+
+
+async def test_wait_for_window_times_out_and_disconnects():
+    dispatcher = _idle_dispatcher()
+    with pytest.raises(TimeoutError):
+        await wait_for_window(dispatcher, lambda w: True, timeout=0.1)
+    assert len(dispatcher._window_events) == 0
+
+
+async def test_wait_for_window_predicate_error_propagates():
+    dispatcher = _idle_dispatcher()
+
+    def boom(_w: WindowInfo) -> bool:
+        raise ValueError("bad predicate")
+
+    task = asyncio.ensure_future(wait_for_window(dispatcher, boom, timeout=2.0))
+    await asyncio.sleep(0)
+    dispatcher._window_events.emit(_win_event("window_opened", "w1", "x"))
+    with pytest.raises(ValueError, match="bad predicate"):
+        await task

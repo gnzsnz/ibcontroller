@@ -1,7 +1,7 @@
 """Matches windows that show up unprompted -- a stray pop-up, an
 existing-session conflict, a login-failure dialog, a warning dialog -- as
 opposed to windows an active sequence (Login, Settings) already expects and
-waits for directly via `actions.wait_for_event`.
+waits for directly via `actions.wait_for_window`.
 
 `RecognizerRegistry` holds an ordered list of `Recognizer`s, checked in
 order against each unprompted window; the first one whose `recognises()`
@@ -13,13 +13,12 @@ data. Every recogniser acts through `actions.py`'s primitives, the same as
 any other caller.
 
 `watch_for_unprompted_windows` runs for the agent's whole lifetime as a
-background task, watching `dispatcher.window_events` for `window_opened`
+background task, watching `dispatcher._window_events` for `window_opened`
 events and routing each one through `handle_window_opened`.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from collections.abc import Callable, Sequence
@@ -561,21 +560,15 @@ async def watch_for_unprompted_windows(
     registry: RecognizerRegistry,
     dispatcher: Dispatcher,
 ) -> None:
-    """Runs for the agent's whole lifetime: watches `dispatcher.window_events`
+    """Runs for the agent's whole lifetime: watches `dispatcher.subscribe()`
     for `window_opened` events and routes each one through
     `handle_window_opened`, logging any that go unhandled. Meant to be
     started via `asyncio.create_task`, not awaited directly -- it never
     returns on its own."""
-    queue: asyncio.Queue[WindowEvent] = asyncio.Queue()
-
-    def on_event(event: WindowEvent) -> None:
-        if event.kind == "window_opened":
-            queue.put_nowait(event)
-
-    dispatcher.window_events.connect(on_event)
-    try:
-        while True:
-            event = await queue.get()
+    with dispatcher.subscribe() as sub:
+        async for event in sub:
+            if event.kind != "window_opened":
+                continue
             handled = await handle_window_opened(registry, event, dispatcher)
             if not handled:
                 logger.info(
@@ -583,5 +576,3 @@ async def watch_for_unprompted_windows(
                     event.window.class_,
                     event.window.title,
                 )
-    finally:
-        dispatcher.window_events.disconnect(on_event)

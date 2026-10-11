@@ -782,7 +782,7 @@ async def test_apply_declarative_settings_applies_builtin_with_no_settings_file(
                 )
             )
             await asyncio.sleep(0.02)
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 WindowEvent(
                     seq=1,
                     kind="window_opened",
@@ -838,7 +838,7 @@ async def test_apply_declarative_settings_applies_builtin_when_user_file_missing
                     )
                 )
                 await asyncio.sleep(0.02)
-                dispatcher.window_events.emit(
+                dispatcher._window_events.emit(
                     WindowEvent(
                         seq=1,
                         kind="window_opened",
@@ -905,7 +905,7 @@ async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
                 )
             )
             await asyncio.sleep(0.02)
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 WindowEvent(
                     seq=1,
                     kind="window_opened",

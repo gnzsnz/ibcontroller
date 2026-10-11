@@ -1,6 +1,6 @@
 """Unit tests for login.py (L6) -- no live Gateway needed, same fake-socket-server
 pattern the rest of this project's tests use. Multi-step scenarios (2FA,
-existing-session) drive `Dispatcher.window_events` directly with controlled
+existing-session) drive `Dispatcher._window_events` directly with controlled
 timing (`asyncio.sleep(0)` between emits), matching actions.py's own established
 pattern for this -- avoids any race with a fake event *socket* server that would
 otherwise dump every scripted message at once, well before a later step in the
@@ -131,11 +131,11 @@ def _tracking_responder(calls: list[dict], *, menu_item_exists: bool = True):
 
 
 async def _feed(dispatcher: Dispatcher, events: list[WindowEvent]) -> None:
-    """Lets the currently-running task(s) reach their own next `wait_for_event`/
+    """Lets the currently-running task(s) reach their own next wait/
     watcher filter-connection point before each emit."""
     for event in events:
         await asyncio.sleep(0.01)
-        dispatcher.window_events.emit(event)
+        dispatcher._window_events.emit(event)
 
 
 # --- LoginManager, on its own (no unprompted dialogs) ------------------------
@@ -691,7 +691,7 @@ async def test_mfa_late_close_relogin_disabled_does_nothing(
                 ],
             )
             await asyncio.sleep(0.05)  # elapsed now exceeds the tiny threshold
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 _window_event(
                     3,
                     "window_closed",
@@ -756,7 +756,7 @@ async def test_mfa_late_close_relogin_enabled_retries_then_succeeds(
                 ],
             )
             await asyncio.sleep(0.05)
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 _window_event(
                     3,
                     "window_closed",
@@ -766,7 +766,7 @@ async def test_mfa_late_close_relogin_enabled_retries_then_succeeds(
             )
             # let retry_login's sleep(0.01) elapse, then it re-fills + re-clicks
             await asyncio.sleep(0.1)
-            dispatcher.window_events.emit(_splash_closed_event(4))
+            dispatcher._window_events.emit(_splash_closed_event(4))
             await asyncio.wait_for(task, timeout=5.0)
         finally:
             await dispatcher.stop()
@@ -798,7 +798,7 @@ async def test_retry_login_refills_credentials_and_reaches_logged_in(
         task = asyncio.ensure_future(manager.retry_login(0.01, outcome_timeout=5.0))
         try:
             await asyncio.sleep(0.05)
-            dispatcher.window_events.emit(_splash_closed_event(1))
+            dispatcher._window_events.emit(_splash_closed_event(1))
             await asyncio.wait_for(task, timeout=5.0)
         finally:
             await dispatcher.stop()
@@ -823,7 +823,7 @@ async def test_schedule_retry_fires_a_background_task(
             manager.schedule_retry(0.01)
             assert manager._retry_task is not None  # fire-and-forget, not awaited here
             await asyncio.sleep(0.05)
-            dispatcher.window_events.emit(_splash_closed_event(1))
+            dispatcher._window_events.emit(_splash_closed_event(1))
             await asyncio.wait_for(manager._retry_task, timeout=5.0)
         finally:
             await dispatcher.stop()
@@ -894,7 +894,7 @@ async def test_too_many_failed_attempts_dialog_triggers_retry_via_watcher(
             # the watcher dumps/recognises/dismisses/schedules, then
             # retry_login's own sleep(wait_seconds) (parsed: 0+0+3=3s) elapses
             await asyncio.sleep(3.2)
-            dispatcher.window_events.emit(_splash_closed_event(3))
+            dispatcher._window_events.emit(_splash_closed_event(3))
             await asyncio.wait_for(run_task, timeout=5.0)
         finally:
             watcher.cancel()
@@ -1179,7 +1179,7 @@ async def test_gateway_2fa_close_wait_uses_remaining_deadline_not_full_budget(
                 [_window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway")],
             )
             await asyncio.sleep(0.3)
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 _window_event(
                     2,
                     "window_opened",
@@ -1228,7 +1228,7 @@ async def test_tws_2fa_close_wait_uses_remaining_deadline_not_full_budget(
                 [_window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE)],
             )
             await asyncio.sleep(0.3)
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 _window_event(
                     2,
                     "window_opened",
@@ -1245,3 +1245,115 @@ async def test_tws_2fa_close_wait_uses_remaining_deadline_not_full_budget(
             await dispatcher.stop()
         assert time.monotonic() - start < 0.6
         assert time.monotonic() - start < 0.6
+
+
+async def _registry_seeded(dispatcher: Dispatcher, window_id: str) -> None:
+    while window_id not in dispatcher.windows:
+        await asyncio.sleep(0.01)
+
+
+async def test_tws_window_opening_during_menu_check_is_not_lost(
+    sock_path, event_sock_path
+):
+    """Both events land in one tick: the main window opens while the loop is
+    still awaiting `menu_item_exists` for the intermediate one. The single
+    subscription buffers it."""
+
+    def responder(request):
+        if request.get("cmd") == "menu_item_exists":
+            has_it = request.get("window_id") == "w-main"
+            return {"ok": True, "exists": has_it, "enabled": has_it}
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program="tws"), LABELS, dispatcher, restart_expected=False
+        )
+        try:
+            task = asyncio.ensure_future(manager._wait_for_outcome_tws(5.0))
+            await asyncio.sleep(0.01)
+            for seq, window_id in ((1, "w-intermediate"), (2, "w-main")):
+                dispatcher._window_events.emit(
+                    _window_event(
+                        seq,
+                        "window_opened",
+                        "javax.swing.JDialog",
+                        "Some window",
+                        window_id=window_id,
+                    )
+                )
+            await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert manager.state is LoginState.LOGGED_IN
+    assert manager.main_window_id == "w-main"
+
+
+async def test_tws_outcome_finds_a_window_already_open_when_it_starts(
+    sock_path, event_sock_path
+):
+    """A main window opened before the outcome loop subscribed (e.g. during
+    the MFA-closed handling) is found through the window registry."""
+    snapshot = {
+        "type": "snapshot",
+        "windows": [
+            {"class": "jclient.qT", "title": "DU1 Main", "window_id": "w-main"}
+        ],
+    }
+    async with (
+        FakeCommandServer(sock_path, _tracking_responder([])),
+        FakeEventServer(event_sock_path, [snapshot]),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program="tws"), LABELS, dispatcher, restart_expected=False
+        )
+        try:
+            await _registry_seeded(dispatcher, "w-main")
+            await asyncio.wait_for(manager._wait_for_outcome_tws(5.0), timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert manager.state is LoginState.LOGGED_IN
+    assert manager.main_window_id == "w-main"
+
+
+async def test_login_frame_opened_before_run_is_found(sock_path, event_sock_path):
+    """The login frame opened before `run()` waited for it; the registry
+    still reports it, so the wait does not time out."""
+    snapshot = {
+        "type": "snapshot",
+        "windows": [
+            {"class": _TWS_LOGIN_CLASS, "title": _TWS_TITLE, "window_id": "w-login"}
+        ],
+    }
+    async with (
+        FakeCommandServer(sock_path, _tracking_responder([])),
+        FakeEventServer(event_sock_path, [snapshot]),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program="tws"), LABELS, dispatcher, restart_expected=True
+        )
+        try:
+            await _registry_seeded(dispatcher, "w-login")
+            task = asyncio.ensure_future(
+                manager.run(login_timeout=2.0, outcome_timeout=5.0)
+            )
+            await asyncio.sleep(0.05)
+            assert manager._login_frame_window_id == "w-login"
+            dispatcher._window_events.emit(
+                _window_event(
+                    1, "window_opened", _TWS_MAIN_CLASS, "Main", window_id="w-main"
+                )
+            )
+            await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert manager.state is LoginState.LOGGED_IN

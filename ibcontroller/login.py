@@ -15,7 +15,7 @@ automatic relogin already in progress.
 
 **Existing-session/login-failed/non-brokerage dialogs are `recognisers.py`'s
 job, not this module's** -- `LoginManager` never dispatches to that registry
-itself. Its own `wait_for_event` calls are narrowed to only the two outcomes
+itself. Its own event waits are narrowed to only the two outcomes
 it actually cares about (MFA, the main window); anything else is left
 entirely to the separate, always-on `recognisers.watch_for_unprompted_windows`
 background task, so a real dialog occurrence is never handled twice at once.
@@ -56,7 +56,6 @@ benefit -- built and unit-tested against synthetic timing/dialogs instead.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import time
 from enum import Enum, auto
@@ -65,9 +64,8 @@ from ibcontroller.actions import (
     click,
     menu_item_exists,
     type_text,
-    wait_for_event,
+    wait_for_window,
 )
-from ibcontroller.agent_client import WindowEvent
 from ibcontroller.config import Config, TradingMode
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import Labels
@@ -177,10 +175,9 @@ class LoginManager:
         )
         titles = self._gateway_or_tws_titles()
         try:
-            login_event = await wait_for_event(
+            login_frame = await wait_for_window(
                 self._dispatcher,
-                "window_opened",
-                lambda e: e.window.title in titles,
+                lambda w: w.title in titles,
                 timeout=login_timeout,
             )
         except TimeoutError as exc:
@@ -188,8 +185,9 @@ class LoginManager:
                 f"login frame never appeared within {login_timeout}s "
                 f"(expected one of {titles})"
             ) from exc
-        self._login_frame_class = login_event.window.class_
-        self._login_frame_window_id = login_event.window.window_id
+        assert login_frame is not None  # closed=False always returns the window
+        self._login_frame_class = login_frame.class_
+        self._login_frame_window_id = login_frame.window_id
 
         if self._restart_expected:
             logger.info("IBController > scheduled restart -- skipping credential fill")
@@ -332,55 +330,72 @@ class LoginManager:
         mfa_title = self._labels.mfa.title
         deadline = None if timeout is None else time.monotonic() + timeout
 
-        while True:
-            remaining = (
-                None if deadline is None else max(0.0, deadline - time.monotonic())
-            )
-            event = await wait_for_event(
-                self._dispatcher,
-                "window_opened",
-                lambda e: e.window.class_ != self._login_frame_class,
-                timeout=remaining,
-            )
-            if event.window.title == mfa_title:
-                self.state = LoginState.MFA_IN_PROGRESS
-                logger.info("IBController > second factor authentication in progress")
-                await wait_for_event(
+        def remaining() -> float | None:
+            return None if deadline is None else max(0.0, deadline - time.monotonic())
+
+        # One subscription spans the loop, so a window opening during the
+        # menu_item_exists round trip is buffered. Windows already open (e.g.
+        # opened while _after_mfa_closed_tws ran) come from the registry first.
+        with self._dispatcher.subscribe() as sub:
+            backlog = [
+                w
+                for w in self._dispatcher.windows.values()
+                if w.class_ != self._login_frame_class
+            ]
+            seen: set[str] = set()
+            while True:
+                if backlog:
+                    window = backlog.pop(0)
+                else:
+                    event = await sub.wait(
+                        "window_opened",
+                        lambda e: e.window.class_ != self._login_frame_class,
+                        timeout=remaining(),
+                    )
+                    window = event.window
+                if window.window_id is not None:
+                    if window.window_id in seen:
+                        continue
+                    seen.add(window.window_id)
+
+                if window.title == mfa_title:
+                    self.state = LoginState.MFA_IN_PROGRESS
+                    logger.info(
+                        "IBController > second factor authentication in progress"
+                    )
+                    await sub.wait(
+                        "window_closed",
+                        lambda e: e.window.title == mfa_title,
+                        timeout=remaining(),
+                    )
+                    await self._after_mfa_closed_tws()
+                    return
+
+                if window.window_id is None:
+                    # No window_id to scope menu_item_exists to (real
+                    # window_opened events always carry one -- confirmed live
+                    # -- but WindowInfo's own type doesn't guarantee it); can't
+                    # be the main window without one, keep looping.
+                    continue
+
+                exists, _enabled = await menu_item_exists(
                     self._dispatcher,
-                    "window_closed",
-                    lambda e: e.window.title == mfa_title,
-                    timeout=(
-                        None
-                        if deadline is None
-                        else max(0.0, deadline - time.monotonic())
-                    ),
+                    self._labels.login.tws_main_window_menu_item,
+                    window_id=window.window_id,
                 )
-                await self._after_mfa_closed_tws()
-                return
-
-            if event.window.window_id is None:
-                # No window_id to scope menu_item_exists to (real
-                # window_opened events always carry one -- confirmed live --
-                # but WindowInfo's own type doesn't guarantee it); can't be
-                # the main window without one, keep looping.
-                continue
-
-            exists, _enabled = await menu_item_exists(
-                self._dispatcher,
-                self._labels.login.tws_main_window_menu_item,
-                window_id=event.window.window_id,
-            )
-            if exists:
-                self.state = LoginState.LOGGED_IN
-                # Keep the window_id this same check just validated (#40) --
-                # Gateway's path below never sets this (no ambiguity there,
-                # see _wait_for_outcome_gateway's docstring), so consumers
-                # must treat None as "no scoping available, fall back".
-                self.main_window_id = event.window.window_id
-                logger.info("IBController > login completed")
-                return
-            # Not the main window (an intermediate dialog, e.g. "Downloading
-            # settings from server") -- keep looping for the next candidate.
+                if exists:
+                    self.state = LoginState.LOGGED_IN
+                    # Keep the window_id this same check just validated (#40)
+                    # -- Gateway's path below never sets this (no ambiguity
+                    # there, see _wait_for_outcome_gateway's docstring), so
+                    # consumers must treat None as "no scoping available, fall
+                    # back".
+                    self.main_window_id = window.window_id
+                    logger.info("IBController > login completed")
+                    return
+                # Not the main window (an intermediate dialog, e.g.
+                # "Downloading settings from server") -- keep looping for the
+                # next candidate.
 
     async def _after_mfa_closed_tws(self) -> None:
         """Measures elapsed time since login started against
@@ -448,12 +463,9 @@ class LoginManager:
         before login finishes, so "main window opened" can't be used here.
 
         An MFA dialog opening/closing along the way only updates `state` and
-        arms `_after_mfa_closed_gateway`'s watchdog -- unlike the TWS path,
-        it is never itself a terminal signal. Runs two concurrent
-        `wait_for_event` waits (splash-closed, MFA-opened), since they're
-        different event kinds (`window_closed` vs `window_opened`); both are
-        always cancelled in `finally` before this method returns, whichever
-        path was actually taken.
+        may arm `_after_mfa_closed_gateway`'s exit-interval watchdog -- unlike
+        the TWS path, it is never itself a terminal signal. One subscription
+        and one loop cover both events.
 
         `deadline`, tracked once from entry, matches `_wait_for_outcome_tws`'s
         own `deadline`/`remaining` pattern: the MFA-closed wait below uses
@@ -463,98 +475,62 @@ class LoginManager:
         splash_title = self._labels.login.starting_application_title
         mfa_title = self._labels.mfa.title
         deadline = time.monotonic() + outcome_timeout
+        watchdog: float | None = None  # monotonic end of the post-MFA exit interval
 
-        splash_closed = asyncio.ensure_future(
-            wait_for_event(
-                self._dispatcher,
-                "window_closed",
-                lambda e: e.window.title == splash_title,
-                timeout=outcome_timeout,
-            )
-        )
-        mfa_opened = asyncio.ensure_future(
-            wait_for_event(
-                self._dispatcher,
-                "window_opened",
-                lambda e: e.window.title == mfa_title,
-                timeout=outcome_timeout,
-            )
-        )
-        pending: set[asyncio.Task[WindowEvent]] = {splash_closed, mfa_opened}
-        try:
-            while splash_closed in pending:
-                done, pending = await asyncio.wait(
-                    pending, return_when=asyncio.FIRST_COMPLETED
-                )
-                if mfa_opened not in done:
-                    continue
-                mfa_exc = mfa_opened.exception()
-                if mfa_exc is not None:
-                    if not isinstance(mfa_exc, TimeoutError):
-                        raise mfa_exc
-                    # MFA simply never appeared within outcome_timeout (the
-                    # normal paper case, and any Gateway login that doesn't
-                    # need it) -- keep waiting on splash_closed alone.
-                    continue
-                self.state = LoginState.MFA_IN_PROGRESS
-                logger.info("IBController > second factor authentication in progress")
-                await wait_for_event(
-                    self._dispatcher,
-                    "window_closed",
-                    lambda e: e.window.title == mfa_title,
-                    timeout=max(0.0, deadline - time.monotonic()),
-                )
-                await self._after_mfa_closed_gateway(splash_closed, outcome_timeout)
-            await splash_closed
-        finally:
-            for task in (mfa_opened, splash_closed):
-                if not task.done():
-                    task.cancel()
-            for task in (mfa_opened, splash_closed):
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+        with self._dispatcher.subscribe() as sub:
+            while True:
+                limit = deadline if watchdog is None else min(deadline, watchdog)
+                try:
+                    async with asyncio.timeout(max(0.0, limit - time.monotonic())):
+                        event = await anext(sub)
+                except TimeoutError as exc:
+                    if watchdog is not None and watchdog <= deadline:
+                        raise MfaTimeoutError(
+                            "login did not complete within "
+                            f"{self._config.mfa_exit_interval}s "
+                            "of second factor authentication completing (IBC's own "
+                            "SecondFactorAuthenticationExitInterval watchdog)"
+                        ) from exc
+                    raise
+                if event.kind == "window_closed" and event.window.title == splash_title:
+                    break
+                if event.kind == "window_opened" and event.window.title == mfa_title:
+                    self.state = LoginState.MFA_IN_PROGRESS
+                    logger.info(
+                        "IBController > second factor authentication in progress"
+                    )
+                    await sub.wait(
+                        "window_closed",
+                        lambda e: e.window.title == mfa_title,
+                        timeout=max(0.0, deadline - time.monotonic()),
+                    )
+                    interval = await self._after_mfa_closed_gateway(outcome_timeout)
+                    if interval is not None:
+                        watchdog = time.monotonic() + interval
 
         self.state = LoginState.LOGGED_IN
         logger.info("IBController > login completed")
 
-    async def _after_mfa_closed_gateway(
-        self, splash_closed: asyncio.Task[WindowEvent], outcome_timeout: float
-    ) -> None:
+    async def _after_mfa_closed_gateway(self, outcome_timeout: float) -> float | None:
         """Gateway variant of `_after_mfa_closed_tws` -- never recurses into
-        a fresh wait: `_wait_for_outcome_gateway`'s own `splash_closed`
-        future is already pending and will resolve on its own once Gateway
-        actually finishes authenticating. Only arms the shorter
-        exit-interval watchdog (raising `LoginError` on timeout, if
-        `relogin_after_mfa_timeout` is enabled) or schedules a retry.
-        `asyncio.shield` on the watchdog wait is deliberate: a timeout there
-        must not cancel `splash_closed` itself, since the caller's own loop
-        still owns and awaits that future regardless of what this method
-        does."""
+        a fresh wait: the caller's loop keeps waiting for the splash to close.
+        Returns the exit-interval (seconds) the caller must enforce as a
+        watchdog when `relogin_after_mfa_timeout` is enabled and 2FA closed
+        within `mfa_timeout`, `None` when the caller just keeps waiting.
+        Schedules a retry itself when 2FA's own timeout expired."""
         elapsed = time.monotonic() - (self._login_start_time or time.monotonic())
 
         if elapsed < self._config.mfa_timeout:
             if not self._config.relogin_after_mfa_timeout:
-                return
-            try:
-                await asyncio.wait_for(
-                    asyncio.shield(splash_closed),
-                    timeout=self._config.mfa_exit_interval,
-                )
-            except TimeoutError as exc:
-                raise MfaTimeoutError(
-                    "login did not complete within "
-                    f"{self._config.mfa_exit_interval}s "
-                    "of second factor authentication completing (IBC's own "
-                    "SecondFactorAuthenticationExitInterval watchdog)"
-                ) from exc
-            return
+                return None
+            return self._config.mfa_exit_interval
 
         if not self._config.relogin_after_mfa_timeout:
             logger.info(
                 "IBController > re-login after second factor authentication "
                 "timeout not required"
             )
-            return
+            return None
         logger.info(
             "IBController > re-login after second factor authentication timeout in %ss",
             _IBC_RELOGIN_DELAY_SECONDS,
@@ -562,3 +538,4 @@ class LoginManager:
         await self.retry_login(
             _IBC_RELOGIN_DELAY_SECONDS, outcome_timeout=outcome_timeout
         )
+        return None

@@ -159,7 +159,7 @@ async def test_window_events_receives_only_window_events(sock_path, event_sock_p
         async with FakeEventServer(event_sock, scripted):
             dispatcher, _cmd_conn = await _start(sock_path, event_sock)
             received = []
-            async for msg in dispatcher.window_events.aiter():
+            async for msg in dispatcher._window_events.aiter():
                 received.append(msg)
                 break
             await dispatcher.stop()
@@ -182,7 +182,7 @@ async def test_overflow_ends_the_event_reader(sock_path, event_sock_path, caplog
     async with FakeCommandServer(sock_path, lambda _req: {"ok": True}):
         async with FakeEventServer(event_sock_path, scripted):
             dispatcher, _cmd_conn = await _start(sock_path, event_sock_path)
-            dispatcher.window_events.connect(received.append)
+            dispatcher._window_events.connect(received.append)
             with caplog.at_level(logging.WARNING, logger="ibcontroller.dispatch"):
                 await asyncio.wait([dispatcher.tasks[0]], timeout=2)
             exc = dispatcher.tasks[0].exception()
@@ -199,7 +199,7 @@ async def test_event_arrivals_logged_at_debug(sock_path, event_sock_path, caplog
     (2026-09-08) -- IBC's own always-on per-window-event one-liner
     (`TwsListener.logWindow`), mapped onto this project's level-based logging at its
     single event chokepoint. Independent of trace mode (the structured NDJSON
-    mirror, gated by configure_trace); `window_events` fan-out is unaffected. At the
+    mirror, gated by configure_trace); `_window_events` fan-out is unaffected. At the
     INFO default these lines never appear (DEBUG is filtered at the logger level)."""
     scripted = [
         {"type": "hello", "protocol_version": 1},
@@ -219,7 +219,7 @@ async def test_event_arrivals_logged_at_debug(sock_path, event_sock_path, caplog
     async with FakeCommandServer(sock_path, lambda _req: {"ok": True}):
         async with FakeEventServer(event_sock_path, scripted):
             dispatcher, _cmd_conn = await _start(sock_path, event_sock_path)
-            dispatcher.window_events.connect(received.append)
+            dispatcher._window_events.connect(received.append)
             with caplog.at_level(logging.DEBUG, logger="ibcontroller.dispatch"):
                 await asyncio.sleep(0.05)
             await dispatcher.stop()
@@ -255,7 +255,7 @@ async def test_stop_cancels_background_tasks(sock_path, event_sock_path):
 async def test_trace_mode_writes_both_files(sock_path, event_sock_path, tmp_path):
     """Replaces the socat watch-relay workflow: one JSONL line per command
     (sent/result) and one per raw event message, independent of the typed
-    `window_events` fan-out. Tracing itself is configured through
+    `_window_events` fan-out. Tracing itself is configured through
     logging_setup.configure_trace (2026-09-08); the Dispatcher only emits into
     the instance-scoped loggers."""
     trace_dir = tmp_path / "trace"
@@ -635,7 +635,9 @@ async def test_registry_is_updated_before_the_event_is_emitted(
     ):
         cmd_conn = AgentCommandConnection(sock_path)
         dispatcher = Dispatcher(cmd_conn, AgentEventConnection(event_sock_path))
-        dispatcher.window_events.connect(lambda e: seen.append(set(dispatcher.windows)))
+        dispatcher._window_events.connect(
+            lambda e: seen.append(set(dispatcher.windows))
+        )
         await dispatcher.start()
         await asyncio.wait([dispatcher.tasks[0]], timeout=2)
         await dispatcher.stop()
@@ -661,7 +663,7 @@ async def test_subscription_gets_every_event_in_order_and_disconnects(
 
     assert [e.seq for e in got_first] == [1, 2, 3]
     assert [e.seq for e in got_second] == [1, 2, 3]
-    assert len(dispatcher.window_events) == 0
+    assert len(dispatcher._window_events) == 0
 
 
 async def test_subscription_wait_skips_non_matching_and_times_out(

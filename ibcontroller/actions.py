@@ -14,7 +14,7 @@ branches on `ElementNotFoundError` specifically.
 
 `ACTIONS` maps action names to these functions, for callers that select an
 action by name (config rules, delegate JSON, plugins) rather than calling it
-directly. `wait_for_event` is not in `ACTIONS` -- it's a caller-side
+directly. `wait_for_window` is not in `ACTIONS` -- it's a caller-side
 primitive, paired directly with `click`/`navigate_menu` by whoever needs to
 know an action's effect has happened.
 """
@@ -24,14 +24,14 @@ from __future__ import annotations
 import asyncio
 import functools
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, cast
+from typing import Any
 
 from typed_settings.types import Secret
 
 from ibcontroller.agent_client import (
     Component,
     ElementNotFoundError,
-    WindowEvent,
+    WindowInfo,
 )
 from ibcontroller.dispatch import Dispatcher
 
@@ -77,7 +77,7 @@ async def click(
     propagates immediately.
 
     Fire-and-forget: confirms the agent accepted the command, not that its
-    effect has happened yet -- pair with `wait_for_event` when the caller
+    effect has happened yet -- pair with `wait_for_window` when the caller
     needs to know. `window_id`, if given, scopes the action to one window."""
     candidates = [labels] if isinstance(labels, str) else list(labels)
     last_error: ElementNotFoundError | None = None
@@ -234,30 +234,34 @@ async def dump(
     return await _forward(dispatcher, "dump", window, window_id)
 
 
-async def wait_for_event(
+async def wait_for_window(
     dispatcher: Dispatcher,
-    kind: str,
-    matches: Callable[[WindowEvent], bool] = lambda _event: True,
+    matches: Callable[[WindowInfo], bool],
     *,
-    timeout: float | None,
-) -> WindowEvent:
-    """Waits for the next `dispatcher.window_events` event of the given
-    `kind` for which `matches(event)` is true, up to `timeout` seconds
-    (`None` for no timeout). Pairs with `click`/`navigate_menu` where a
-    caller needs to know an action's effect has happened, not just that the
-    request was sent. Raises `asyncio.TimeoutError` if no matching event
-    arrives in time."""
-    filtered = dispatcher.window_events.filter(
-        lambda event: event.kind == kind and matches(event)
-    )
-    try:
-        # window_events only ever emits WindowEvent (dispatch.py's
-        # _event_reader), so this narrows what's already true at runtime.
-        return cast(WindowEvent, await asyncio.wait_for(filtered, timeout=timeout))
-    finally:
-        dispatcher.window_events.disconnect(
-            filtered.on_source, filtered.on_source_error, filtered.on_source_done
+    closed: bool = False,
+    timeout: float,
+) -> WindowInfo | None:
+    """Level wait: returns once a window matching `matches` is open (or, with
+    `closed`, once none is), checking `dispatcher.windows` first and then
+    waiting for the event. Returns the matching `WindowInfo`, or `None` when
+    waiting for close. Raises `TimeoutError` after `timeout` seconds; an
+    exception in `matches` propagates."""
+    # Subscribe before reading the registry so no event lands in between.
+    with dispatcher.subscribe() as sub:
+        current = next((w for w in dispatcher.windows.values() if matches(w)), None)
+        if closed:
+            if current is None:
+                return None
+            await sub.wait(
+                "window_closed", lambda e: matches(e.window), timeout=timeout
+            )
+            return None
+        if current is not None:
+            return current
+        event = await sub.wait(
+            "window_opened", lambda e: matches(e.window), timeout=timeout
         )
+        return event.window
 
 
 ACTIONS: dict[str, Callable[..., Awaitable[object]]] = {

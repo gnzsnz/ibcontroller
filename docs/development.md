@@ -198,7 +198,7 @@ Any contribution must follow this separation of concerns.
 
 - **Owns:** one `Dispatcher` per instance: both L3 connections, command serialization (one FIFO
   worker, one command on the wire at a time), event fan-out, and the optional wire trace.
-- **Provides:** `send_command`, `window_events`, `windows` (read-only registry of the open windows
+- **Provides:** `send_command`, `windows` (read-only registry of the open windows
   by `window_id`), `subscribe()` (an eager, ordered, buffered stream of `WindowEvent`s with
   `wait(kind, matches, timeout)`), `tasks` (for L6 to detect a lost connection: the
   event reader ends on an event connection loss, the command worker on a broken command
@@ -212,8 +212,11 @@ Any contribution must follow this separation of concerns.
 ### L5-1 Actions (`actions.py`, `labels.py`)
 
 - **Owns:** the action vocabulary (`click`, `type_text`, `toggle`, `navigate_menu`, `expand_tree`,
-  `dump`, `wait_for_event`, …) and the label data.
-- **Rules:** the only L5 code that calls `send_command`. L3 exceptions propagate unchanged. Actions
+  `dump`, …), `wait_for_window` and the label data.
+- **Rules:** the only L5 code that calls `send_command`. L3 exceptions propagate unchanged.
+  `wait_for_window(matches, closed=, timeout)` is the level wait (open or closed now, or later).
+  Edge waits (the next window to open after an action) hold a `Dispatcher.subscribe()` across the
+  action. Nothing outside L4 touches the raw event stream except through `subscribe()`. Actions
   take a `window_id` wherever the agent supports one. Callers pass it whenever they hold one: the
   unscoped lookups pick the first matching window, which may be the wrong one (#40, #76).
 
@@ -236,8 +239,8 @@ Any contribution must follow this separation of concerns.
   - A recogniser acts only on the window it matched (`window_id`). The dialogs registry never acts
     on a window with a visible credential field.
 - **Known deviations:**
-  - `recognisers.py` and `diagnostics.py` subscribe to `window_events` directly instead of through
-    L5-1.
+  - `recognisers.py` and `diagnostics.py` iterate `Dispatcher.subscribe()` directly instead of going
+    through L5-1.
   - The registry construction and the settings sequence live in `control_loop.py`.
   - Scheduled shutdown timing lives in L6 (`schedule.py` maths, `control_loop.py` trigger); the
     shutdown itself is Management's `clean_shutdown`.

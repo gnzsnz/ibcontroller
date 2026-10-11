@@ -151,12 +151,12 @@ class Dispatcher:
     """Owns one command socket connection and one event socket connection
     for a single running agent instance.
 
-    `window_events` carries `WindowEvent` messages only -- `Hello` is a
+    `_window_events` carries `WindowEvent` messages only -- `Hello` is a
     connection-lifecycle marker and `Keepalive` is a liveness signal, neither
     is forwarded. `Snapshot` seeds `windows`. `Overflow` (events lost on the
     agent's side) ends the event reader with `ProtocolError`. All still reach
     the trace file when tracing is enabled (see the module docstring) -- that
-    stream mirrors raw traffic, unlike `window_events`.
+    stream mirrors raw traffic, unlike `_window_events`.
 
     `windows` is the registry of windows currently open, keyed by
     `window_id`. Only the event reader writes it, before it emits the event,
@@ -179,7 +179,7 @@ class Dispatcher:
         self._command_queue: asyncio.Queue[
             tuple[_CommandCall[object], asyncio.Future[object], int]
         ] = asyncio.Queue()
-        self.window_events: eventkit.Event = eventkit.Event()
+        self._window_events: eventkit.Event = eventkit.Event()
         self._windows: dict[str, WindowInfo] = {}
         self._tasks: list[asyncio.Task[None]] = []
         self._in_flight: asyncio.Future[object] | None = None
@@ -232,15 +232,15 @@ class Dispatcher:
 
     @contextlib.contextmanager
     def subscribe(self) -> Iterator[Subscription]:
-        """Connects a `Subscription` to `window_events` immediately (no event
+        """Connects a `Subscription` to `_window_events` immediately (no event
         emitted after entering is missed) and disconnects it on exit. Each
         subscription gets every event, in wire order."""
         subscription = Subscription()
-        self.window_events.connect(subscription._put)
+        self._window_events.connect(subscription._put)
         try:
             yield subscription
         finally:
-            self.window_events.disconnect(subscription._put)
+            self._window_events.disconnect(subscription._put)
 
     @property
     def tasks(self) -> tuple[asyncio.Task[None], ...]:
@@ -306,7 +306,7 @@ class Dispatcher:
 
     async def _event_reader(self) -> None:
         """Reads events from `AgentEventConnection.messages()`, keeps
-        `windows` current, emits each `WindowEvent` on `window_events`, and
+        `windows` current, emits each `WindowEvent` on `_window_events`, and
         logs every message at DEBUG and to the trace file. Deliberately
         doesn't catch anything -- a malformed line or an `Overflow` (events
         lost, so `windows` can no longer be trusted) raises `ProtocolError`;
@@ -325,7 +325,7 @@ class Dispatcher:
                 }
             elif isinstance(msg, WindowEvent):
                 self._track(msg)
-                self.window_events.emit(msg)
+                self._window_events.emit(msg)
             elif isinstance(msg, Overflow):
                 logger.warning(
                     "agent event queue overflow, events lost from seq=%s",

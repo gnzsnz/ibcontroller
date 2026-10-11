@@ -991,7 +991,7 @@ async def test_open_settings_dialog_navigates_and_waits_for_configuration_window
                 open_settings_dialog(dispatcher, LABELS.settings, timeout=5.0)
             )
             await asyncio.sleep(0.02)
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 _window_event(
                     1,
                     "window_opened",
@@ -1036,7 +1036,7 @@ async def test_open_settings_dialog_uses_tws_mosaic_menu_path(
                 )
             )
             await asyncio.sleep(0.02)
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 _window_event(
                     1,
                     "window_opened",
@@ -1093,7 +1093,7 @@ async def test_open_settings_dialog_retries_missing_menu_item_before_failing(
                 open_settings_dialog(dispatcher, LABELS.settings, timeout=5.0)
             )
             await asyncio.sleep(0.02)
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 _window_event(
                     1,
                     "window_opened",
@@ -1165,18 +1165,32 @@ async def test_open_settings_dialog_waits_for_splash_screen_to_close_first(
 
     def responder(request):
         calls.append(request)
-        if request.get("cmd") == "dump":
-            return {"ok": True, "components": [{"class": "javax.swing.JFrame"}]}
         if request.get("cmd") == "navigate_menu":
             return {"ok": True, "clicked": True}
         return {"ok": True}
 
     async with (
         FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
+        FakeEventServer(
+            event_sock_path,
+            [
+                {
+                    "type": "snapshot",
+                    "windows": [
+                        {
+                            "class": "some.splash.class",
+                            "title": "Starting application...",
+                            "window_id": "w1",
+                        }
+                    ],
+                }
+            ],
+        ),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
+            while "w1" not in dispatcher.windows:  # snapshot seeded
+                await asyncio.sleep(0.01)
             task = asyncio.ensure_future(
                 open_settings_dialog(dispatcher, LABELS.settings, timeout=5.0)
             )
@@ -1186,13 +1200,17 @@ async def test_open_settings_dialog_waits_for_splash_screen_to_close_first(
                 "path": "Configure/Settings",
             } not in calls, "must not touch the menu before the splash closes"
 
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 _window_event(
-                    1, "window_closed", "some.splash.class", "Starting application..."
+                    1,
+                    "window_closed",
+                    "some.splash.class",
+                    "Starting application...",
+                    "w1",
                 )
             )
             await asyncio.sleep(0.02)
-            dispatcher.window_events.emit(
+            dispatcher._window_events.emit(
                 _window_event(
                     2,
                     "window_opened",

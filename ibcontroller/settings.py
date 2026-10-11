@@ -50,8 +50,6 @@ the rest of the file."""
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import logging
 import tomllib
 from datetime import datetime
@@ -65,13 +63,12 @@ from anyio.to_thread import run_sync
 
 from ibcontroller.actions import (
     click,
-    dump,
     expand_tree,
     navigate_menu,
     toggle,
     type_text,
     type_text_near_label,
-    wait_for_event,
+    wait_for_window,
 )
 from ibcontroller.agent_client import ElementNotFoundError
 from ibcontroller.config import Config
@@ -283,29 +280,14 @@ async def _await_menu_ready(
     accessed before the splash closes, even once the item itself is
     enabled.
 
-    Check-then-wait, not wait-then-check: the splash may have already
-    closed by the time this runs (the common case, since login/2FA/
-    non-brokerage-dialog dismissal all take real time first), so a bare
-    `wait_for_event` could hang forever waiting for a `window_closed` that
-    already happened. Arms the wait first, then checks via
-    `dump(window=...)` whether the splash is *currently* still open; if
-    not, the armed wait is cancelled and discarded rather than awaited."""
-    wait_future = asyncio.ensure_future(
-        wait_for_event(
-            dispatcher,
-            "window_closed",
-            lambda e: labels.splash_title_marker in (e.window.title or ""),
-            timeout=timeout,
-        )
+    Level wait: returns at once if the splash is not open now, otherwise
+    waits for its `window_closed`."""
+    await wait_for_window(
+        dispatcher,
+        lambda w: labels.splash_title_marker in (w.title or ""),
+        closed=True,
+        timeout=timeout,
     )
-    await asyncio.sleep(0)  # let .filter() connect before checking current state
-    still_open = await dump(dispatcher, window=labels.splash_title_marker)
-    if not still_open:
-        wait_future.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await wait_future
-        return
-    await wait_future
 
 
 async def open_settings_dialog(
@@ -357,41 +339,23 @@ async def open_settings_dialog(
     `dialog_title_marker` (never happens in practice, since the wait
     predicate already requires it).
 
-    The dialog-open wait is armed before the menu is touched (so its
-    `window_opened` can't be missed), then guaranteed cancelled and drained
-    if the menu navigation raises -- otherwise the armed wait leaks to its
-    own `timeout` and asyncio complains about an unretrieved exception at GC
-    time (#38, a direct consequence of this same gap)."""
+    The subscription opens before the menu is touched, so the dialog's
+    `window_opened` cannot be missed."""
     await _await_menu_ready(dispatcher, labels, timeout=timeout)
-    wait_future = asyncio.ensure_future(
-        wait_for_event(
-            dispatcher,
+    menu_path = (
+        labels.gateway_menu_path
+        if program.lower() == "gateway"
+        else labels.tws_menu_path
+    )
+    with dispatcher.subscribe() as sub:
+        await navigate_menu(
+            dispatcher, menu_path, timeout=timeout, window_id=main_window_id
+        )
+        event = await sub.wait(
             "window_opened",
             lambda e: labels.dialog_title_marker in (e.window.title or ""),
             timeout=timeout,
         )
-    )
-    await asyncio.sleep(0)  # let the wait's own .filter() connect before we click
-    try:
-        menu_path = (
-            labels.gateway_menu_path
-            if program.lower() == "gateway"
-            else labels.tws_menu_path
-        )
-        await navigate_menu(
-            dispatcher, menu_path, timeout=timeout, window_id=main_window_id
-        )
-    except BaseException:
-        # wait_future's own `timeout` runs concurrently with the menu-nav
-        # attempt above and can expire first -- it may already be done with a
-        # `TimeoutError` of its own by the time we get here, not just
-        # cancellable, so draining it must discard whatever it produced,
-        # not just a `CancelledError`; the real error is `raise`d below.
-        wait_future.cancel()
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            await wait_future
-        raise
-    event = await wait_future
     return event.window.window_id
 
 

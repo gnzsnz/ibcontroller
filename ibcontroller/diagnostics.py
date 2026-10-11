@@ -15,7 +15,6 @@ Off by default (`Config.diagnostic_when` defaults to `NEVER`)."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Callable
 
@@ -87,16 +86,10 @@ async def watch_for_diagnostics(
         else {"window_opened", "window_closed"}
     )
 
-    queue: asyncio.Queue[WindowEvent] = asyncio.Queue()
-
-    def on_event(event: WindowEvent) -> None:
-        if event.kind in wanted_kinds:
-            queue.put_nowait(event)
-
-    dispatcher.window_events.connect(on_event)
-    try:
-        while True:
-            event = await queue.get()
+    with dispatcher.subscribe() as sub:
+        async for event in sub:
+            if event.kind not in wanted_kinds:
+                continue
             try:
                 components = await dump(
                     dispatcher,
@@ -115,5 +108,3 @@ async def watch_for_diagnostics(
                 if (scope is DiagnosticScope.KNOWN) != known:
                     continue
             sink(event, format_dump(event, components))
-    finally:
-        dispatcher.window_events.disconnect(on_event)
