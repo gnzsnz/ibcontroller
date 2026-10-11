@@ -47,6 +47,7 @@ from ibcontroller.agent_client import (
     Hello,
     Keepalive,
     Overflow,
+    ProtocolError,
     Snapshot,
     WindowEvent,
     converter,
@@ -137,6 +138,9 @@ class Dispatcher:
         ] = asyncio.Queue()
         self.window_events: eventkit.Event = eventkit.Event()
         self._tasks: list[asyncio.Task[None]] = []
+        self._in_flight: asyncio.Future[object] | None = None
+        # Set once the worker can no longer run commands; later sends fail with it.
+        self._closed_reason: str | None = None
         self._trace_cmd_logger: logging.Logger | None = None
         self._trace_event_logger: logging.Logger | None = None
         # A single gate covering both streams: configure_trace sets both to
@@ -155,7 +159,11 @@ class Dispatcher:
         """Connects both sockets and starts the event-reader/command-worker
         coroutines as background tasks. Call once; not idempotent."""
         await self._command_conn.connect()
-        await self._event_conn.connect()
+        try:
+            await self._event_conn.connect()
+        except BaseException:
+            await self._command_conn.close()
+            raise
         self._tasks = [
             asyncio.create_task(self._event_reader(), name="ibcontroller-event-reader"),
             asyncio.create_task(
@@ -175,25 +183,29 @@ class Dispatcher:
     def tasks(self) -> tuple[asyncio.Task[None], ...]:
         """The background event-reader/command-worker tasks, for an external
         supervisor to watch for either one ending unexpectedly (e.g. the
-        agent process died, or Gateway closed) -- a connection loss ends
-        `_event_reader`'s loop with no exception, nothing to catch here."""
+        agent process died, or Gateway closed). `_event_reader` ends on an
+        event connection loss; `_command_worker` ends when the command
+        connection is broken."""
         return tuple(self._tasks)
 
     async def stop(self) -> None:
-        """Cancels both background tasks and closes both connections. Any
-        command still queued or in flight is abandoned -- its
-        `send_command` caller sees a `CancelledError`, not a result. Trace
-        streams are `logging_setup.py`'s concern, not this layer's; the
-        caller drains those separately via `logging_setup.stop_logging()`."""
+        """Cancels both background tasks and closes both connections; never
+        raises. A task that ended with an exception is logged once. Any
+        command still queued or in flight fails with `ProtocolError("dispatcher
+        stopped")`, and so does any later `send_command`. Trace streams are
+        `logging_setup.py`'s concern, not this layer's; the caller drains
+        those separately via `logging_setup.stop_logging()`."""
         for task in self._tasks:
             task.cancel()
-        for task in self._tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        await self._command_conn.close()
-        await self._event_conn.close()
+        outcomes = await asyncio.gather(*self._tasks, return_exceptions=True)
+        for task, outcome in zip(self._tasks, outcomes, strict=True):
+            if isinstance(outcome, Exception):
+                logger.warning("%s ended with %r", task.get_name(), outcome)
+        self._fail_pending("dispatcher stopped")
+        try:
+            await self._command_conn.close()
+        finally:
+            await self._event_conn.close()
 
     async def send_command(self, call: _CommandCall[T]) -> T:
         """Queues `call` and waits for the single `_command_worker` to run
@@ -202,17 +214,32 @@ class Dispatcher:
         `functools.partial` of a bound `AgentCommandConnection` method, e.g.
         `functools.partial(dispatcher.command_conn.set_text, "u", "x")` --
         the trace file can only name the command and its arguments when it
-        can introspect `call.func`/`call.args`."""
+        can introspect `call.func`/`call.args`. Raises `ProtocolError` at once
+        when the dispatcher has stopped or the command connection is broken."""
+        if self._closed_reason is not None:
+            raise ProtocolError(self._closed_reason)
         loop = asyncio.get_running_loop()
         done: asyncio.Future[T] = loop.create_future()
         self._trace_seq += 1
-        seq = self._trace_seq
-        self._trace_cmd({"seq": seq, "direction": "sent", **_describe_call(call)})
         # The queue is declared over `object` so one queue can carry every command's
         # differently-typed result; a per-call `T` narrows correctly at the type
         # checker's boundary here but not through the queue's own invariant generic.
-        await self._command_queue.put((call, done, seq))  # type: ignore[arg-type]
+        self._command_queue.put_nowait((call, done, self._trace_seq))  # type: ignore[arg-type]
         return await done
+
+    def _fail_pending(self, reason: str) -> None:
+        """Fails the in-flight and every queued command with
+        `ProtocolError(reason)` and makes later sends fail the same way.
+        Keeps the first reason when called again."""
+        if self._closed_reason is None:
+            self._closed_reason = reason
+        pending = [self._in_flight] if self._in_flight is not None else []
+        self._in_flight = None
+        while not self._command_queue.empty():
+            pending.append(self._command_queue.get_nowait()[1])
+        for future in pending:
+            if not future.done():
+                future.set_exception(ProtocolError(self._closed_reason))
 
     async def _event_reader(self) -> None:
         """Reads events from `AgentEventConnection.messages()`, emits each
@@ -222,10 +249,12 @@ class Dispatcher:
         not a transient hiccup; the task ending is the correct signal for
         whatever supervises this instance to notice and act on."""
         async for msg in self._event_conn.messages():
-            logger.debug("%s", _describe_event(msg))
-            self._trace_event(
-                {"class": type(msg).__name__, **_safe_unstructure(msg)}  # type: ignore[dict-item]
-            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("%s", _describe_event(msg))
+            if self._trace_enabled:
+                self._trace_event(
+                    {"class": type(msg).__name__, **_safe_unstructure(msg)}  # type: ignore[dict-item]
+                )
             if isinstance(msg, WindowEvent):
                 self.window_events.emit(msg)
             elif isinstance(msg, Overflow):
@@ -239,34 +268,54 @@ class Dispatcher:
         result or the raised exception. Catches broad `Exception`
         deliberately -- one bad command must not kill this task, which
         would silently stop every future command for this instance from
-        ever being processed."""
-        while True:
-            call, done, seq = await self._command_queue.get()
-            if done.cancelled():
-                continue
-            try:
-                result = await call()
-            except Exception as exc:
-                code = (
-                    exc.__class__.__name__
-                    if isinstance(exc, AgentClientError)
-                    else None
-                )
-                self._trace_cmd(
-                    {"seq": seq, "direction": "error", "error": code or repr(exc)}
-                )
-                if not done.cancelled():
-                    done.set_exception(exc)
-            else:
-                self._trace_cmd(
-                    {
-                        "seq": seq,
-                        "direction": "result",
-                        "result": _safe_unstructure(result),
-                    }
-                )
-                if not done.cancelled():
-                    done.set_result(result)
+        ever being processed. The exception is a broken command connection:
+        the task ends so the supervisor sees it (see `tasks`). However it
+        ends, pending commands are failed."""
+        try:
+            while True:
+                call, done, seq = await self._command_queue.get()
+                if done.cancelled():
+                    continue
+                self._in_flight = done
+                if self._trace_enabled:
+                    self._trace_cmd(
+                        {"seq": seq, "direction": "sent", **_describe_call(call)}
+                    )
+                try:
+                    result = await call()
+                except Exception as exc:
+                    if self._trace_enabled:
+                        code = (
+                            exc.__class__.__name__
+                            if isinstance(exc, AgentClientError)
+                            else None
+                        )
+                        self._trace_cmd(
+                            {
+                                "seq": seq,
+                                "direction": "error",
+                                "error": code or repr(exc),
+                            }
+                        )
+                    if not done.cancelled():
+                        done.set_exception(exc)
+                    if self._command_conn.broken:
+                        self._closed_reason = "connection broken"
+                        return
+                else:
+                    if self._trace_enabled:
+                        self._trace_cmd(
+                            {
+                                "seq": seq,
+                                "direction": "result",
+                                "result": _safe_unstructure(result),
+                            }
+                        )
+                    if not done.cancelled():
+                        done.set_result(result)
+                self._in_flight = None
+        finally:
+            self._fail_pending("dispatcher stopped")
 
     def _trace_cmd(self, payload: dict[str, Any]) -> None:
         self._trace(self._trace_cmd_logger, payload)

@@ -276,6 +276,12 @@ class AgentCommandConnection:
     async def __aexit__(self, *exc_info: object) -> None:
         await self.close()
 
+    @property
+    def broken(self) -> bool:
+        """True once a request failure left the stream at an unknown position;
+        every later request raises `ProtocolError` until `connect()`."""
+        return self._broken
+
     def _mark_broken(self) -> None:
         self._broken = True
         if self._writer is not None:

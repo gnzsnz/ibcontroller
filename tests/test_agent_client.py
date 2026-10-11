@@ -737,6 +737,21 @@ async def test_failed_request_after_eof_marks_connection_broken(sock_path):
         await server.wait_closed()
 
 
+async def test_broken_property_follows_connection_state(sock_path):
+    async with FakeCommandServer(sock_path, lambda _req: {"ok": True}):
+        conn = AgentCommandConnection(sock_path)
+        assert not conn.broken
+        await conn.connect()
+        try:
+            assert not conn.broken
+            conn._mark_broken()
+            assert conn.broken
+            await conn.connect()
+            assert not conn.broken
+        finally:
+            await conn.close()
+
+
 async def test_malformed_response_marks_connection_broken(sock_path):
     async def handle(reader, writer):
         await reader.readline()

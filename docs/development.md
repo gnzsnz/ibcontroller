@@ -196,9 +196,12 @@ Any contribution must follow this separation of concerns.
 
 - **Owns:** one `Dispatcher` per instance: both L3 connections, command serialization (one FIFO
   worker, one command on the wire at a time), event fan-out, and the optional wire trace.
-- **Provides:** `send_command`, `window_events`, `tasks` (for L6 to detect a lost connection),
-  `start`/`stop`.
-- **Rules:** never interprets commands or events beyond routing them.
+- **Provides:** `send_command`, `window_events`, `tasks` (for L6 to detect a lost connection: the
+  event reader ends on an event connection loss, the command worker on a broken command
+  connection), `start`/`stop`.
+- **Rules:** never interprets commands or events beyond routing them. `stop()` never raises and
+  closes both connections. When the worker ends (stop or broken connection) every queued and
+  in-flight caller, and any later `send_command`, gets `ProtocolError`.
 
 ### L5-1 Actions (`actions.py`, `labels.py`)
 

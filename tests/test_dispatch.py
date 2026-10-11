@@ -12,11 +12,13 @@ import logging
 
 import pytest
 
+from ibcontroller import dispatch
 from ibcontroller.agent_client import (
     AgentCommandConnection,
     AgentEventConnection,
     ElementNotFoundError,
     PingResult,
+    ProtocolError,
     WindowEvent,
     WindowInfo,
 )
@@ -358,3 +360,184 @@ async def test_trace_disabled_emits_no_files(sock_path, event_sock_path, tmp_pat
     stop_logging()
     assert not (trace_dir / "cmd-paper.jsonl").exists()
     assert not (trace_dir / "events-paper.jsonl").exists()
+
+
+class _SilentCommandServer:
+    """Accepts a command connection and reads requests but never answers."""
+
+    def __init__(self, path):
+        self._path = str(path)
+        self._server: asyncio.Server | None = None
+
+    async def __aenter__(self) -> _SilentCommandServer:
+        self._server = await asyncio.start_unix_server(self._handle, path=self._path)
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        assert self._server is not None
+        self._server.close()
+        await self._server.wait_closed()
+
+    @staticmethod
+    async def _handle(reader, writer):
+        try:
+            while await reader.readline():
+                pass
+        finally:
+            writer.close()
+
+
+async def test_stop_returns_and_closes_after_event_reader_failed(
+    sock_path, event_sock_path
+):
+    """A malformed event line ends the reader with ProtocolError; stop() must not
+    re-raise it and must still close the command connection."""
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, ["not json"]),
+    ):
+        dispatcher, cmd_conn = await _start(sock_path, event_sock_path)
+        await asyncio.wait([dispatcher.tasks[0]], timeout=2)
+        assert isinstance(dispatcher.tasks[0].exception(), ProtocolError)
+        await dispatcher.stop()
+
+    with pytest.raises(ProtocolError, match="not connected"):
+        await cmd_conn.ping()
+
+
+async def test_stop_fails_in_flight_and_queued_callers(sock_path, event_sock_path):
+    async with _SilentCommandServer(sock_path), FakeEventServer(event_sock_path, []):
+        dispatcher, cmd_conn = await _start(sock_path, event_sock_path)
+        in_flight = asyncio.ensure_future(dispatcher.send_command(cmd_conn.ping))
+        queued = asyncio.ensure_future(dispatcher.send_command(cmd_conn.ping))
+        await asyncio.sleep(0.05)
+        await dispatcher.stop()
+        for future in (in_flight, queued):
+            with pytest.raises(ProtocolError, match="dispatcher stopped"):
+                await asyncio.wait_for(future, timeout=1)
+        with pytest.raises(ProtocolError, match="dispatcher stopped"):
+            await dispatcher.send_command(cmd_conn.ping)
+
+
+async def test_broken_command_connection_ends_worker_and_fails_pending(
+    sock_path, event_sock_path
+):
+    cmd_conn = AgentCommandConnection(sock_path, request_timeout=0.1)
+    async with _SilentCommandServer(sock_path), FakeEventServer(event_sock_path, []):
+        dispatcher = Dispatcher(cmd_conn, AgentEventConnection(event_sock_path))
+        await dispatcher.start()
+        try:
+            first = asyncio.ensure_future(dispatcher.send_command(cmd_conn.ping))
+            queued = asyncio.ensure_future(dispatcher.send_command(cmd_conn.ping))
+            with pytest.raises(ProtocolError, match="no response"):
+                await asyncio.wait_for(first, timeout=2)
+            with pytest.raises(ProtocolError, match="connection broken"):
+                await asyncio.wait_for(queued, timeout=2)
+            await asyncio.wait([dispatcher.tasks[1]], timeout=2)
+            assert dispatcher.tasks[1].done()
+            with pytest.raises(ProtocolError, match="connection broken"):
+                await dispatcher.send_command(cmd_conn.ping)
+        finally:
+            await dispatcher.stop()
+
+
+async def test_unusable_response_shape_does_not_end_worker(sock_path, event_sock_path):
+    """A failure after a fully read response (here: a missing field) leaves the
+    connection usable, so the worker keeps running."""
+
+    def responder(request):
+        if request["cmd"] == "ping":
+            return {"ok": True}  # no version/uptime_s
+        return {"ok": True, "clicked": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher, cmd_conn = await _start(sock_path, event_sock_path)
+        try:
+            with pytest.raises(ProtocolError):
+                await dispatcher.send_command(cmd_conn.ping)
+            assert not cmd_conn.broken
+            assert not dispatcher.tasks[1].done()
+            await dispatcher.send_command(lambda: cmd_conn.click("IB API"))
+        finally:
+            await dispatcher.stop()
+
+
+async def test_start_closes_command_connection_when_event_connect_fails(
+    sock_path, event_sock_path
+):
+    """No event server is listening: start() fails, the command side is closed."""
+    async with FakeCommandServer(sock_path, lambda _req: {"ok": True}):
+        cmd_conn = AgentCommandConnection(sock_path)
+        dispatcher = Dispatcher(cmd_conn, AgentEventConnection(event_sock_path))
+        with pytest.raises(OSError):
+            await dispatcher.start()
+        with pytest.raises(ProtocolError, match="not connected"):
+            await cmd_conn.ping()
+
+
+async def test_trace_sent_line_is_written_when_the_worker_takes_it(
+    sock_path, event_sock_path, tmp_path
+):
+    """The first command holds the wire for 0.2s; the second's "sent" line must
+    not be stamped until the worker picks it up."""
+    trace_dir = tmp_path / "trace"
+    configure_trace(instance="paper", enabled=True, trace_dir=trace_dir)
+
+    async def handle(reader, writer):
+        while line := await reader.readline():
+            if json.loads(line)["target"] == "slow":
+                await asyncio.sleep(0.2)
+            writer.write(b'{"ok": true, "value": "x"}\n')
+            await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock_path))
+    async with FakeEventServer(event_sock_path, []):
+        cmd_conn = AgentCommandConnection(sock_path)
+        dispatcher = Dispatcher(
+            cmd_conn, AgentEventConnection(event_sock_path), instance="paper"
+        )
+        await dispatcher.start()
+        try:
+            await asyncio.gather(
+                dispatcher.send_command(functools.partial(cmd_conn.get_text, "slow")),
+                dispatcher.send_command(functools.partial(cmd_conn.get_text, "fast")),
+            )
+        finally:
+            await dispatcher.stop()
+            server.close()
+            await server.wait_closed()
+
+    stop_logging()
+    lines = [
+        json.loads(line)
+        for line in (trace_dir / "cmd-paper.jsonl").read_text().splitlines()
+    ]
+    sent = {entry["seq"]: entry for entry in lines if entry["direction"] == "sent"}
+    result = {entry["seq"]: entry for entry in lines if entry["direction"] == "result"}
+    assert sent[2]["_ts"] >= result[1]["_ts"]
+
+
+async def test_trace_payloads_not_built_when_tracing_is_off(
+    sock_path, event_sock_path, monkeypatch
+):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("trace payload built with tracing off")
+
+    monkeypatch.setattr(dispatch, "_describe_call", boom)
+    monkeypatch.setattr(dispatch, "_safe_unstructure", boom)
+    monkeypatch.setattr(dispatch, "_describe_event", boom)
+
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, [{"type": "keepalive", "ts": 1}]),
+    ):
+        dispatcher, cmd_conn = await _start(sock_path, event_sock_path)
+        try:
+            await dispatcher.send_command(lambda: cmd_conn.click("IB API"))
+            await asyncio.sleep(0.05)  # let the keepalive event through
+        finally:
+            await dispatcher.stop()
