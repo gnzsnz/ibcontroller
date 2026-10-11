@@ -75,6 +75,8 @@ _STREAM_READ_LIMIT = 8 * 1024 * 1024
 _REQUEST_TIMEOUT = 30.0
 _DUMP_TIMEOUT = 60.0
 
+_EXCERPT_LIMIT = 300  # raw wire data embedded in an error message
+
 _ERROR_CODES: dict[str, type[AgentClientError]] = {
     "not_found": ElementNotFoundError,
     "refused_credential_field": CredentialRefusedError,
@@ -115,9 +117,9 @@ class Component:
 @attrs.define(frozen=True)
 class WindowInfo:
     """Identifies one window. `window_id` is the agent's opaque, per-window ID
-    -- pass it back on a later `click`/`set_text`/`toggle`/`expand_tree`/
-    `set_text_near_label` to scope that command to this exact window instead
-    of an agent-side search across every open window."""
+    -- pass it back on any command that takes `window_id` to scope that
+    command to this exact window instead of an agent-side search across every
+    open window."""
 
     class_: str
     title: str | None = None
@@ -192,7 +194,15 @@ def _structure(data: object, cls: Any, what: str) -> Any:
     try:
         return converter.structure(data, cls)
     except (cattrs.BaseValidationError, KeyError, TypeError) as exc:
-        raise ProtocolError(f"unexpected {what} shape: {data!r}") from exc
+        raise ProtocolError(f"unexpected {what} shape: {_excerpt(data)}") from exc
+
+
+def _excerpt(value: object) -> str:
+    """`repr(value)`, cut to `_EXCERPT_LIMIT` characters plus the full length."""
+    text = repr(value)
+    if len(text) <= _EXCERPT_LIMIT:
+        return text
+    return f"{text[:_EXCERPT_LIMIT]}... ({len(text)} chars)"
 
 
 def _field(response: Mapping[str, Any], key: str) -> Any:
@@ -308,9 +318,13 @@ class AgentCommandConnection:
                 try:
                     response = json.loads(raw)
                 except json.JSONDecodeError as exc:
-                    raise ProtocolError(f"malformed response line: {raw!r}") from exc
+                    raise ProtocolError(
+                        f"malformed response line: {_excerpt(raw)}"
+                    ) from exc
                 if not isinstance(response, dict) or "ok" not in response:
-                    raise ProtocolError(f"unexpected response shape: {response!r}")
+                    raise ProtocolError(
+                        f"unexpected response shape: {_excerpt(response)}"
+                    )
             except ProtocolError:
                 self._mark_broken()
                 raise
@@ -460,7 +474,7 @@ class AgentCommandConnection:
         response = await self._request(payload)
         if not response["ok"]:
             self._raise_for_error(response)
-        return bool(response.get("clicked", True))
+        return bool(_field(response, "clicked"))
 
     async def expand_tree(self, path: str, window_id: str | None = None) -> None:
         """Selects a section of the Global Configuration dialog's tree (e.g.
@@ -536,7 +550,7 @@ class AgentEventConnection:
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError as exc:
-                raise ProtocolError(f"malformed event line: {raw!r}") from exc
+                raise ProtocolError(f"malformed event line: {_excerpt(raw)}") from exc
             if not isinstance(data, dict):
-                raise ProtocolError(f"unexpected event shape: {data!r}")
+                raise ProtocolError(f"unexpected event shape: {_excerpt(data)}")
             yield parse_event_message(data)

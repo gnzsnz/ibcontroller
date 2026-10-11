@@ -454,9 +454,7 @@ async def test_navigate_menu_reports_disabled_without_clicking(sock_path):
             assert await conn.navigate_menu("Configure/Settings") is False
 
 
-async def test_navigate_menu_defaults_clicked_true_when_field_omitted(sock_path):
-    """Backward/forward compatibility: an older or fake server that predates the
-    `clicked` field still gets treated as a successful click, not a KeyError."""
+async def test_navigate_menu_missing_clicked_raises_protocol_error(sock_path):
     sock = sock_path
 
     def responder(request):
@@ -464,7 +462,8 @@ async def test_navigate_menu_defaults_clicked_true_when_field_omitted(sock_path)
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            assert await conn.navigate_menu("File/Close") is True
+            with pytest.raises(ProtocolError, match="no 'clicked'"):
+                await conn.navigate_menu("File/Close")
 
 
 async def test_navigate_menu_sends_window_id_when_given(sock_path):
@@ -945,6 +944,39 @@ async def test_messages_stops_cleanly_on_eof(sock_path):
         async with AgentEventConnection(sock) as conn:
             received = [msg async for msg in conn.messages()]
     assert received == [Hello(protocol_version=1)]
+
+
+async def test_malformed_response_message_is_truncated(sock_path):
+    sock = sock_path
+
+    async def handle(reader, writer):
+        await reader.readline()
+        writer.write(b"x" * 5000 + b"\n")
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=str(sock))
+    try:
+        async with AgentCommandConnection(sock) as conn:
+            with pytest.raises(ProtocolError, match="malformed response") as info:
+                await conn.ping()
+    finally:
+        server.close()
+        await server.wait_closed()
+    assert len(str(info.value)) < 400
+    assert "(5005 chars)" in str(info.value)  # repr length: b'' + 5000 x + \n
+
+
+async def test_malformed_event_message_is_truncated(sock_path):
+    sock = sock_path
+
+    async with FakeEventServer(sock, ["x" * 5000]):
+        async with AgentEventConnection(sock) as conn:
+            with pytest.raises(ProtocolError, match="malformed event line") as info:
+                async for _ in conn.messages():
+                    pass
+    assert len(str(info.value)) < 400
+    assert " chars)" in str(info.value)
 
 
 async def test_messages_raises_on_malformed_line(sock_path):

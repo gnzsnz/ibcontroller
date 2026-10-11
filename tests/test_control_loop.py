@@ -746,6 +746,8 @@ def _tracking_responder(calls: list[dict]):
         calls.append(request)
         if request.get("cmd") == "dump":
             return {"ok": True, "components": []}
+        if request.get("cmd") == "navigate_menu":
+            return {"ok": True, "clicked": True}
         return {"ok": True}
 
     return responder

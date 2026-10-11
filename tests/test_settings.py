@@ -78,6 +78,8 @@ def _tracking_responder(calls: list[dict]):
         calls.append(request)
         if request.get("cmd") == "dump":
             return {"ok": True, "components": []}
+        if request.get("cmd") == "navigate_menu":
+            return {"ok": True, "clicked": True}
         return {"ok": True}
 
     return responder
@@ -1077,6 +1079,8 @@ async def test_open_settings_dialog_retries_missing_menu_item_before_failing(
             attempts["n"] += 1
             if attempts["n"] < 3:
                 return {"ok": False, "error": "not_found", "detail": "boom"}
+        if request.get("cmd") == "navigate_menu":
+            return {"ok": True, "clicked": True}
         return {"ok": True}
 
     async with (
@@ -1123,6 +1127,8 @@ async def test_open_settings_dialog_cleans_up_armed_wait_on_navigate_failure(
             return {"ok": True, "components": []}
         if request.get("cmd") == "navigate_menu":
             return {"ok": False, "error": "not_found", "detail": "boom"}
+        if request.get("cmd") == "navigate_menu":
+            return {"ok": True, "clicked": True}
         return {"ok": True}
 
     async with (
@@ -1161,6 +1167,8 @@ async def test_open_settings_dialog_waits_for_splash_screen_to_close_first(
         calls.append(request)
         if request.get("cmd") == "dump":
             return {"ok": True, "components": [{"class": "javax.swing.JFrame"}]}
+        if request.get("cmd") == "navigate_menu":
+            return {"ok": True, "clicked": True}
         return {"ok": True}
 
     async with (
