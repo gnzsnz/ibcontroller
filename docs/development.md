@@ -219,6 +219,8 @@ Any contribution must follow this separation of concerns.
   action. Nothing outside L4 touches the raw event stream except through `subscribe()`. Actions
   take a `window_id` wherever the agent supports one. Callers pass it whenever they hold one: the
   unscoped lookups pick the first matching window, which may be the wrong one (#40, #76).
+  `load_labels` is strict: a wrong type or an empty candidate list raises `LabelsError`, a
+  `ConfigError` (exit 78) naming the file and field; unknown keys are logged and ignored.
 
 ### L5 Domains
 

@@ -474,3 +474,8 @@ async def test_wait_for_window_predicate_error_propagates():
     dispatcher._window_events.emit(_win_event("window_opened", "w1", "x"))
     with pytest.raises(ValueError, match="bad predicate"):
         await task
+
+
+async def test_click_with_no_candidates_raises_value_error():
+    with pytest.raises(ValueError, match="at least one"):
+        await click(_idle_dispatcher(), [])

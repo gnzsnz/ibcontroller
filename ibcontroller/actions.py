@@ -89,7 +89,8 @@ async def click(
             return
         except ElementNotFoundError as exc:
             last_error = exc
-    assert last_error is not None  # candidates is never empty in practice
+    if last_error is None:
+        raise ValueError("click needs at least one candidate label")
     raise last_error
 
 

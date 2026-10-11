@@ -28,6 +28,7 @@ from ibcontroller.config import (
 )
 from ibcontroller.control_loop import OPERATIONAL_ERRORS as _CYCLE_OPERATIONAL_ERRORS
 from ibcontroller.control_loop import ShutdownCause
+from ibcontroller.labels import LabelsError
 from ibcontroller.launcher import AgentStartupError, LauncherError
 from ibcontroller.login import LoginError, MfaTimeoutError
 from ibcontroller.recognisers import LoginFailedError
@@ -248,6 +249,8 @@ def run(  # noqa: PLR0913, PLR0917 -- one typer.Option per Config field, not
                 "IBC_USERID/IBC_PASSWORD.",
                 err=True,
             )
+        elif isinstance(exc, LabelsError):
+            typer.echo(f"\nCheck {config_dir / 'labels.json'}.", err=True)
         else:
             typer.echo(
                 f"\nCheck {config_dir / 'ibcontroller.toml'} and the environment "

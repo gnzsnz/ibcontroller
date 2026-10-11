@@ -18,7 +18,11 @@
     "    here (as done below) before adding your own, or you'll lose the built-in ones.",
     "",
     "Remove this _readme key before using the file for real -- it is not a real Labels",
-    "field and is harmless where cattrs ignores unknown keys, but it's not meant to ship.",
+    "field; an unknown key is logged as a warning and ignored, but it's not meant to ship.",
+    "",
+    "A malformed file stops startup with exit code 78 and a message naming the file and the",
+    "field: a string where a list is expected, an empty list of titles or buttons, invalid",
+    "JSON, or a dismiss_rules entry without match_title/match_text.",
     "See labels.py's own module docstring and DismissRule's docstring for the full",
     "mechanism."
   ],

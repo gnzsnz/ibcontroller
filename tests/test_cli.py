@@ -15,6 +15,7 @@ from ibcontroller import main as _main
 from ibcontroller.agent_client import AgentClientError
 from ibcontroller.config import ConfigError
 from ibcontroller.control_loop import ShutdownCause
+from ibcontroller.labels import LabelsError
 from ibcontroller.launcher import AgentStartupError, LauncherError
 from ibcontroller.login import LoginError, MfaTimeoutError
 from ibcontroller.recognisers import LoginFailedError
@@ -285,3 +286,24 @@ def test_version_prints_something():
 
     assert result.exit_code == 0
     assert result.output.strip()
+
+
+def test_run_labels_error_exits_78_with_labels_hint(tmp_path, monkeypatch):
+    """Gitea #93: a malformed `labels.json` is a config error pointing at
+    `labels.json`, not at `ibcontroller.toml`."""
+    app_dir = tmp_path / "app"
+    monkeypatch.setenv("IBC_APP_DIR", str(app_dir))
+
+    async def fake_run_async(
+        config_dir, log_dir, *, dotenv_path=None, cli_overrides=None
+    ):
+        raise LabelsError("labels.json: expected a list of strings @ $.login")
+
+    monkeypatch.setattr(_main, "run_async", fake_run_async)
+
+    result = runner.invoke(_cli.app, ["run"])
+
+    assert result.exit_code == 78  # EX_CONFIG
+    assert "expected a list of strings" in result.output
+    assert "labels.json" in result.output
+    assert "ibcontroller.toml" not in result.output

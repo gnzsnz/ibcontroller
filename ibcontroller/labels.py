@@ -25,6 +25,7 @@ per-deployment) is still a different, larger thing than a `DismissRule`
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
@@ -33,14 +34,49 @@ from typing import Any
 import attrs
 import cattrs
 
+from ibcontroller.config import ConfigError
+
+logger = logging.getLogger(__name__)
+
 converter = cattrs.Converter()
+
+
+class LabelsError(ConfigError):
+    """A malformed `labels.json` (bundled or override) -- invalid JSON, a wrong
+    type, an empty candidate list, or a `DismissRule` with neither
+    `match_title` nor `match_text` set. A `ConfigError`, so `cli.py` exits 78."""
+
+
+def _structure_str(value: Any, _type: Any) -> str:
+    if not isinstance(value, str):
+        raise LabelsError(f"expected a string, got {type(value).__name__}")
+    return value
+
+
+def _structure_str_list(value: Any, _type: Any) -> list[str]:
+    # A bare string is iterable: cattrs would split it into characters.
+    if not isinstance(value, list):
+        raise LabelsError(f"expected a list of strings, got {type(value).__name__}")
+    return [_structure_str(item, str) for item in value]
+
+
+converter.register_structure_hook(str, _structure_str)
+converter.register_structure_hook_func(lambda t: t == list[str], _structure_str_list)
+
+
+def _non_empty(instance: Any, attribute: attrs.Attribute[list[str]], value: list[str]):
+    """Validator for candidate lists: an empty one can never match or click."""
+    if not value:
+        raise LabelsError(
+            f"{type(instance).__name__}.{attribute.name} must not be empty"
+        )
 
 
 @attrs.define(frozen=True)
 class LoginLabels:
-    gateway_titles: list[str]
-    tws_titles: list[str]
-    login_buttons: list[str]
+    gateway_titles: list[str] = attrs.field(validator=_non_empty)
+    tws_titles: list[str] = attrs.field(validator=_non_empty)
+    login_buttons: list[str] = attrs.field(validator=_non_empty)
     api_type_ib_api: str
     api_type_fix: str
     trading_mode_live: str
@@ -69,8 +105,8 @@ class MfaLabels:
 @attrs.define(frozen=True)
 class ExistingSessionLabels:
     title: str
-    continue_buttons: list[str]
-    cancel_buttons: list[str]
+    continue_buttons: list[str] = attrs.field(validator=_non_empty)
+    cancel_buttons: list[str] = attrs.field(validator=_non_empty)
 
 
 @attrs.define(frozen=True)
@@ -79,8 +115,8 @@ class AcceptIncomingConnectionLabels:
     "No"."""
 
     title: str
-    accept_buttons: list[str]
-    reject_buttons: list[str]
+    accept_buttons: list[str] = attrs.field(validator=_non_empty)
+    reject_buttons: list[str] = attrs.field(validator=_non_empty)
 
 
 @attrs.define(frozen=True)
@@ -128,11 +164,6 @@ class GatewayConnectionFailedLabels:
     message_prefix: str
     known_reasons: list[str]
     dismiss_button: str
-
-
-class LabelsError(Exception):
-    """A malformed entry in `labels.json` (bundled or override) -- e.g. a
-    `DismissRule` with neither `match_title` nor `match_text` set."""
 
 
 @attrs.define(frozen=True)
@@ -270,17 +301,64 @@ def _load_bundled_default() -> dict[str, Any]:
     return json.loads(raw)
 
 
+def _warn_unknown_keys(data: Mapping[str, Any], cls: type, path: str) -> None:
+    """Logs each key of `data` that `cls` (an attrs class) has no field for;
+    recurses into nested attrs classes and lists of them."""
+    fields = attrs.fields_dict(attrs.resolve_types(cls))
+    for key, value in data.items():
+        dotted = f"{path}.{key}" if path else key
+        field = fields.get(key)
+        if field is None:
+            logger.warning("labels.json: unknown key %r ignored", dotted)
+            continue
+        field_type = field.type
+        if field_type is None:
+            continue
+        if attrs.has(field_type) and isinstance(value, Mapping):
+            _warn_unknown_keys(value, field_type, dotted)
+        elif getattr(field_type, "__origin__", None) is list and isinstance(
+            value, list
+        ):
+            (item_type,) = getattr(field_type, "__args__")  # noqa: B009
+            if attrs.has(item_type):
+                for index, item in enumerate(value):
+                    if isinstance(item, Mapping):
+                        _warn_unknown_keys(item, item_type, f"{dotted}[{index}]")
+
+
+def _describe(exception: BaseException, _type: type | None) -> str:
+    return str(exception) if isinstance(exception, LabelsError) else repr(exception)
+
+
 def load_labels(config_dir: str | Path | None = None) -> Labels:
     """Loads the bundled default, then merges an optional `{config_dir}/labels.json`
     override on top if one exists. `config_dir` is typically
     `app_dirs.resolve_app_dirs()`'s first element -- passed explicitly rather than
     resolved here, matching
     `config.py`'s own convention of callers resolving app dirs once and threading the
-    result through."""
+    result through.
+
+    Raises `LabelsError` (a `ConfigError`) naming the file and the field for invalid
+    JSON, a wrong type (e.g. a string where a list is expected), an empty candidate
+    list or a malformed `dismiss_rules` entry. Unknown keys are logged and ignored."""
     data = _load_bundled_default()
+    source = "bundled labels.json"
     if config_dir is not None:
         override_path = Path(config_dir) / "labels.json"
         if override_path.is_file():
-            override_data = json.loads(override_path.read_text(encoding="utf-8"))
+            source = str(override_path)
+            try:
+                override_data = json.loads(override_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise LabelsError(f"{source}: invalid JSON: {exc}") from exc
+            if not isinstance(override_data, dict):
+                raise LabelsError(f"{source}: expected a JSON object at the top level")
+            _warn_unknown_keys(override_data, Labels, "")
             data = _deep_merge(data, override_data)
-    return converter.structure(data, Labels)
+    try:
+        return converter.structure(data, Labels)
+    except cattrs.ClassValidationError as exc:
+        details = "; ".join(cattrs.transform_error(exc, format_exception=_describe))
+        raise LabelsError(f"{source}: {details}") from exc
+    except LabelsError as exc:
+        raise LabelsError(f"{source}: {exc}") from exc
