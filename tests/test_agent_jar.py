@@ -14,8 +14,12 @@ import pytest_asyncio
 
 from ibcontroller.agent_client import (
     AgentCommandConnection,
+    AgentEventConnection,
     BadRequestError,
+    Hello,
+    Snapshot,
     WindowGoneError,
+    derive_event_socket_path,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -112,3 +116,17 @@ async def test_get_text_with_unknown_window_id_is_window_gone(agent):
         with pytest.raises(WindowGoneError):
             await conn.get_text("Username", window_id="nope")
         assert (await conn.ping()).version
+
+
+@requires_agent
+async def test_event_stream_starts_with_hello_then_snapshot(agent):
+    conn = AgentEventConnection(derive_event_socket_path(agent))
+    await conn.connect()
+    try:
+        messages = conn.messages()
+        first = await asyncio.wait_for(anext(messages), timeout=5)
+        second = await asyncio.wait_for(anext(messages), timeout=5)
+    finally:
+        await conn.close()
+    assert isinstance(first, Hello)
+    assert second == Snapshot(windows=[])  # headless: no windows exist

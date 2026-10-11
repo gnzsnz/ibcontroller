@@ -21,6 +21,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -65,7 +66,7 @@ final class EventBridge {
      * in sync together) because {@link #registerWindow}/{@link #unregisterWindow} run on the EDT
      * ({@code onAwtEvent}, guaranteed by the JDK) while {@link #resolveWindow} is read from the
      * command-socket thread ({@code Protocol.handleCommandClient}, via {@code WriteOps}) and
-     * {@link #sendSnapshot} from the event-socket thread -- three different threads, genuinely
+     * {@link #registeredWindows} from the event-socket thread -- three different threads, genuinely
      * concurrent, unlike the plain {@code HashMap}s the rest of this class otherwise uses for
      * single-threaded, per-message construction.
      */
@@ -73,6 +74,14 @@ final class EventBridge {
 
     private static final Map<String, Window> windowsById = new ConcurrentHashMap<>();
     private static final AtomicLong nextWindowId = new AtomicLong(1);
+
+    /**
+     * Held while the id registry changes together with the matching queue offer, and while a new
+     * client's snapshot is taken together with the queue reset, so the stream a client sees is
+     * {@code snapshot}, then only events newer than it. Anything written before the snapshot is
+     * older than it.
+     */
+    private static final Object LOCK = new Object();
 
     private static volatile PrintWriter currentWriter;
 
@@ -86,7 +95,7 @@ final class EventBridge {
     static void install() {
         Toolkit.getDefaultToolkit()
                 .addAWTEventListener(EventBridge::onAwtEvent, AWTEvent.WINDOW_EVENT_MASK);
-        startDaemon(EventBridge::writerLoop, "ibcontroller-event-writer");
+        startWriter();
         startDaemon(EventBridge::keepaliveLoop, "ibcontroller-event-keepalive");
     }
 
@@ -110,16 +119,26 @@ final class EventBridge {
             return;
         }
         Window window = windowEvent.getWindow();
-        String id = "window_opened".equals(kind) ? registerWindow(window) : unregisterWindow(window);
-        Map<String, Object> message = new LinkedHashMap<>();
-        message.put("type", "event");
-        message.put("seq", seq.incrementAndGet());
-        message.put("kind", kind);
-        message.put("window", describeWindow(window, id));
-        if (!queue.offer(message)) {
-            overflowed.set(true);
-            LOG.warning("event queue full (" + QUEUE_CAPACITY + "): dropped window event "
-                    + kind + " " + window.getClass().getName());
+        synchronized (LOCK) {
+            String id =
+                    "window_opened".equals(kind) ? registerWindow(window) : unregisterWindow(window);
+            enqueueEvent(kind, describeWindow(window, id));
+        }
+    }
+
+    /** Queues one window event; a full queue is reported via the {@code overflow} flag. */
+    static void enqueueEvent(String kind, Map<String, Object> window) {
+        synchronized (LOCK) {
+            Map<String, Object> message = new LinkedHashMap<>();
+            message.put("type", "event");
+            message.put("seq", seq.incrementAndGet());
+            message.put("kind", kind);
+            message.put("window", window);
+            if (!queue.offer(message)) {
+                overflowed.set(true);
+                LOG.warning("event queue full (" + QUEUE_CAPACITY + "): dropped window event "
+                        + kind + " " + window.get("class"));
+            }
         }
     }
 
@@ -237,10 +256,8 @@ final class EventBridge {
                         new BufferedReader(Channels.newReader(client, StandardCharsets.UTF_8));
                 PrintWriter out =
                         new PrintWriter(Channels.newWriter(client, StandardCharsets.UTF_8), true)) {
-            currentWriter = out;
             LOG.fine("event client connected");
-            sendHello(out);
-            sendSnapshot(out);
+            attachClient(out, EventBridge::registeredWindows);
             // Push-only: the client sends nothing on this socket. Block on read purely to
             // detect disconnection (EOF) -- there's nothing to do with an actual line if one
             // somehow arrived.
@@ -255,6 +272,26 @@ final class EventBridge {
         }
     }
 
+    /**
+     * Sends {@code hello}, then makes {@code out} the event stream's target with a {@code
+     * snapshot} queued first. Under {@link #LOCK}: the writer is set, events queued before this
+     * client (already reflected in the snapshot) are dropped, and the snapshot goes in ahead of
+     * every later event. An older event the writer thread already took may still be written
+     * before the snapshot; the snapshot supersedes it.
+     */
+    static void attachClient(PrintWriter out, Supplier<List<Object>> windows) {
+        sendHello(out);
+        synchronized (LOCK) {
+            currentWriter = out;
+            queue.clear();
+            overflowed.set(false);
+            Map<String, Object> snapshot = new LinkedHashMap<>();
+            snapshot.put("type", "snapshot");
+            snapshot.put("windows", windows.get());
+            queue.offer(snapshot);
+        }
+    }
+
     private static void sendHello(PrintWriter out) {
         Map<String, Object> hello = new LinkedHashMap<>();
         hello.put("type", "hello");
@@ -262,16 +299,17 @@ final class EventBridge {
         writeMessage(out, hello);
     }
 
-    private static void sendSnapshot(PrintWriter out) {
-        Map<String, Object> snapshot = new LinkedHashMap<>();
-        snapshot.put("type", "snapshot");
+    /** The windows between {@code WINDOW_OPENED} and {@code WINDOW_CLOSED}: the id registry. */
+    private static List<Object> registeredWindows() {
         List<Object> windows = new ArrayList<>();
-        for (Window window : Window.getWindows()) {
-            if (window.isDisplayable()) {
-                windows.add(describeWindow(window, windowIds.get(window)));
-            }
+        for (Map.Entry<String, Window> entry : windowsById.entrySet()) {
+            windows.add(describeWindow(entry.getValue(), entry.getKey()));
         }
-        snapshot.put("windows", windows);
-        writeMessage(out, snapshot);
+        return windows;
+    }
+
+    /** Starts the queue-to-socket writer thread; {@link #install} does this in production. */
+    static void startWriter() {
+        startDaemon(EventBridge::writerLoop, "ibcontroller-event-writer");
     }
 }

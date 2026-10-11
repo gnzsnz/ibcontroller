@@ -30,11 +30,13 @@ bare value. A `Secret` passed as a `set_text` argument serializes as
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import UTC, datetime
+from types import MappingProxyType
 from typing import Any, TypeVar
 
 import eventkit
@@ -50,6 +52,7 @@ from ibcontroller.agent_client import (
     ProtocolError,
     Snapshot,
     WindowEvent,
+    WindowInfo,
     converter,
 )
 
@@ -109,16 +112,56 @@ def _describe_event(msg: AgentEventMessage) -> str:
     return f"event: {type(msg).__name__}"
 
 
+class Subscription:
+    """A buffered, ordered stream of `WindowEvent`s from `Dispatcher.subscribe()`.
+    Events emitted while the subscription is open queue up in wire order, so
+    none is missed between awaits. Iterate it or call `wait`."""
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue[WindowEvent] = asyncio.Queue()
+
+    def _put(self, event: WindowEvent) -> None:
+        self._queue.put_nowait(event)
+
+    def __aiter__(self) -> Subscription:
+        return self
+
+    async def __anext__(self) -> WindowEvent:
+        return await self._queue.get()
+
+    async def wait(
+        self,
+        kind: str,
+        matches: Callable[[WindowEvent], bool] = lambda _event: True,
+        *,
+        timeout: float | None,
+    ) -> WindowEvent:
+        """Returns the next queued or arriving event of `kind` for which
+        `matches(event)` is true; events that don't match are consumed.
+        Raises `TimeoutError` after `timeout` seconds (`None` waits forever).
+        An exception in `matches` propagates."""
+        async with asyncio.timeout(timeout):
+            while True:
+                event = await self._queue.get()
+                if event.kind == kind and matches(event):
+                    return event
+
+
 class Dispatcher:
     """Owns one command socket connection and one event socket connection
     for a single running agent instance.
 
-    `window_events` carries `WindowEvent` messages only -- `Hello`/`Snapshot`
-    are connection-lifecycle markers and `Keepalive` is a liveness signal,
-    none of the three are forwarded. `Overflow` is logged as a warning (real
-    event loss on the agent's own side), not silently dropped. All four
-    still reach the trace file when tracing is enabled (see the module
-    docstring) -- that stream mirrors raw traffic, unlike `window_events`.
+    `window_events` carries `WindowEvent` messages only -- `Hello` is a
+    connection-lifecycle marker and `Keepalive` is a liveness signal, neither
+    is forwarded. `Snapshot` seeds `windows`. `Overflow` (events lost on the
+    agent's side) ends the event reader with `ProtocolError`. All still reach
+    the trace file when tracing is enabled (see the module docstring) -- that
+    stream mirrors raw traffic, unlike `window_events`.
+
+    `windows` is the registry of windows currently open, keyed by
+    `window_id`. Only the event reader writes it, before it emits the event,
+    so a consumer lagging behind the stream may see a registry already ahead
+    of the event it is handling.
     """
 
     def __init__(
@@ -137,6 +180,7 @@ class Dispatcher:
             tuple[_CommandCall[object], asyncio.Future[object], int]
         ] = asyncio.Queue()
         self.window_events: eventkit.Event = eventkit.Event()
+        self._windows: dict[str, WindowInfo] = {}
         self._tasks: list[asyncio.Task[None]] = []
         self._in_flight: asyncio.Future[object] | None = None
         # Set once the worker can no longer run commands; later sends fail with it.
@@ -178,6 +222,25 @@ class Dispatcher:
         without threading a second, always-the-same reference alongside
         `dispatcher`."""
         return self._command_conn
+
+    @property
+    def windows(self) -> Mapping[str, WindowInfo]:
+        """Read-only live view of the open windows by `window_id`. Mirrors
+        the agent's id registry: a `Snapshot` replaces it, `window_opened`
+        adds, `window_closed` removes; a window without an id is not tracked."""
+        return MappingProxyType(self._windows)
+
+    @contextlib.contextmanager
+    def subscribe(self) -> Iterator[Subscription]:
+        """Connects a `Subscription` to `window_events` immediately (no event
+        emitted after entering is missed) and disconnects it on exit. Each
+        subscription gets every event, in wire order."""
+        subscription = Subscription()
+        self.window_events.connect(subscription._put)
+        try:
+            yield subscription
+        finally:
+            self.window_events.disconnect(subscription._put)
 
     @property
     def tasks(self) -> tuple[asyncio.Task[None], ...]:
@@ -242,12 +305,13 @@ class Dispatcher:
                 future.set_exception(ProtocolError(self._closed_reason))
 
     async def _event_reader(self) -> None:
-        """Reads events from `AgentEventConnection.messages()`, emits each
-        `WindowEvent` on `window_events`, and logs every message at DEBUG
-        and to the trace file. Deliberately doesn't catch anything -- a
-        malformed line (`ProtocolError`) means the connection is desynced,
-        not a transient hiccup; the task ending is the correct signal for
-        whatever supervises this instance to notice and act on."""
+        """Reads events from `AgentEventConnection.messages()`, keeps
+        `windows` current, emits each `WindowEvent` on `window_events`, and
+        logs every message at DEBUG and to the trace file. Deliberately
+        doesn't catch anything -- a malformed line or an `Overflow` (events
+        lost, so `windows` can no longer be trusted) raises `ProtocolError`;
+        the task ending is the correct signal for whatever supervises this
+        instance to notice and act on."""
         async for msg in self._event_conn.messages():
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("%s", _describe_event(msg))
@@ -255,13 +319,30 @@ class Dispatcher:
                 self._trace_event(
                     {"class": type(msg).__name__, **_safe_unstructure(msg)}  # type: ignore[dict-item]
                 )
-            if isinstance(msg, WindowEvent):
+            if isinstance(msg, Snapshot):
+                self._windows = {
+                    w.window_id: w for w in msg.windows if w.window_id is not None
+                }
+            elif isinstance(msg, WindowEvent):
+                self._track(msg)
                 self.window_events.emit(msg)
             elif isinstance(msg, Overflow):
                 logger.warning(
                     "agent event queue overflow, events lost from seq=%s",
                     msg.from_seq,
                 )
+                raise ProtocolError("agent event queue overflow")
+
+    def _track(self, event: WindowEvent) -> None:
+        """Applies `event` to `windows`. Ids are never reused, so a repeated
+        or late event is harmless; an event without an id is ignored."""
+        window_id = event.window.window_id
+        if window_id is None:
+            return
+        if event.kind == "window_opened":
+            self._windows[window_id] = event.window
+        else:
+            self._windows.pop(window_id, None)
 
     async def _command_worker(self) -> None:
         """Runs one queued command at a time, resolving its future with the

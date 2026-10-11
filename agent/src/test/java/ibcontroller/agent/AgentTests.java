@@ -1,6 +1,12 @@
 package ibcontroller.agent;
 
 import java.io.IOException;
+import java.io.PipedReader;
+import java.io.PipedWriter;
+import java.io.BufferedReader;
+import java.io.PrintWriter;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.net.SocketAddress;
 import java.net.SocketOption;
 import java.nio.channels.ClosedChannelException;
@@ -29,6 +35,7 @@ public final class AgentTests {
         run("deferred click failure is logged", AgentTests::deferredClickLogged);
         run("get_text with a stale window_id is window_gone", AgentTests::getTextStaleWindow);
         run("get_text without a target is bad_request", AgentTests::getTextBadRequest);
+        run("event stream is hello, snapshot, then newer events", AgentTests::eventStreamOrder);
         if (failures > 0) {
             System.out.println(failures + " test(s) failed");
             System.exit(1);
@@ -193,5 +200,44 @@ public final class AgentTests {
 
         @Override
         protected void implConfigureBlocking(boolean block) {}
+    }
+
+    /** Events queued before a client attaches are superseded by its snapshot; later ones follow it. */
+    private static void eventStreamOrder() {
+        try {
+            EventBridge.startWriter();
+            EventBridge.enqueueEvent("window_opened", window("w1")); // before any client
+            PipedWriter pipe = new PipedWriter();
+            BufferedReader in = new BufferedReader(new PipedReader(pipe));
+            PrintWriter out = new PrintWriter(pipe, true);
+            EventBridge.attachClient(out, () -> List.of(window("w1")));
+            EventBridge.enqueueEvent("window_closed", window("w1"));
+            List<String> types = new ArrayList<>();
+            List<String> kinds = new ArrayList<>();
+            while (kinds.isEmpty() || !kinds.get(kinds.size() - 1).equals("window_closed")) {
+                String line = in.readLine();
+                check(line != null, "stream ended early: " + types);
+                @SuppressWarnings("unchecked")
+                Map<String, Object> message = (Map<String, Object>) Protocol.Json.parse(line);
+                types.add((String) message.get("type"));
+                if (message.get("kind") != null) {
+                    kinds.add((String) message.get("kind"));
+                }
+            }
+            check(types.get(0).equals("hello"), "first message: " + types);
+            int snapshot = types.indexOf("snapshot");
+            check(snapshot == 1, "snapshot not right after hello: " + types);
+            check(!types.subList(0, snapshot).contains("event"), "event before snapshot: " + types);
+            check(kinds.equals(List.of("window_closed")), "stale event survived: " + kinds);
+        } catch (IOException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static Map<String, Object> window(String id) {
+        Map<String, Object> info = new LinkedHashMap<>();
+        info.put("class", "test.Window");
+        info.put("window_id", id);
+        return info;
     }
 }

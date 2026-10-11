@@ -177,7 +177,9 @@ Any contribution must follow this separation of concerns.
   refuses).
 - **Provides:** the wire protocol to L3.
 - **Rules:** the agent reports and executes; it makes no login, dialog or lifecycle decisions. Any
-  protocol change updates L3 in the same change.
+  protocol change updates L3 in the same change. The event stream is `hello`, `snapshot`, then only
+  events newer than the snapshot; the snapshot lists exactly the windows in the window-ID registry
+  (between `WINDOW_OPENED` and `WINDOW_CLOSED`).
 
 ### L3 Agent client (`agent_client.py`)
 
@@ -196,10 +198,14 @@ Any contribution must follow this separation of concerns.
 
 - **Owns:** one `Dispatcher` per instance: both L3 connections, command serialization (one FIFO
   worker, one command on the wire at a time), event fan-out, and the optional wire trace.
-- **Provides:** `send_command`, `window_events`, `tasks` (for L6 to detect a lost connection: the
+- **Provides:** `send_command`, `window_events`, `windows` (read-only registry of the open windows
+  by `window_id`), `subscribe()` (an eager, ordered, buffered stream of `WindowEvent`s with
+  `wait(kind, matches, timeout)`), `tasks` (for L6 to detect a lost connection: the
   event reader ends on an event connection loss, the command worker on a broken command
   connection), `start`/`stop`.
-- **Rules:** never interprets commands or events beyond routing them. `stop()` never raises and
+- **Rules:** never interprets commands or events beyond routing them and keeping `windows`
+  (idempotent updates keyed by `window_id`; a `snapshot` replaces it). An `overflow` event ends the
+  event reader with `ProtocolError` (events were lost, so `windows` can't be trusted). `stop()` never raises and
   closes both connections. When the worker ends (stop or broken connection) every queued and
   in-flight caller, and any later `send_command`, gets `ProtocolError`.
 

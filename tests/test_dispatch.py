@@ -173,20 +173,23 @@ async def test_window_events_receives_only_window_events(sock_path, event_sock_p
     ]
 
 
-async def test_overflow_is_logged_not_forwarded(sock_path, event_sock_path, caplog):
-    event_sock = event_sock_path
+async def test_overflow_ends_the_event_reader(sock_path, event_sock_path, caplog):
+    """Events were lost, so the registry can't be trusted: warn, then end the
+    reader with ProtocolError (L6 reports CONNECTION_LOST)."""
     scripted = [{"type": "overflow", "from_seq": 42}]
-
     received = []
 
     async with FakeCommandServer(sock_path, lambda _req: {"ok": True}):
-        async with FakeEventServer(event_sock, scripted):
-            dispatcher, _cmd_conn = await _start(sock_path, event_sock)
+        async with FakeEventServer(event_sock_path, scripted):
+            dispatcher, _cmd_conn = await _start(sock_path, event_sock_path)
             dispatcher.window_events.connect(received.append)
             with caplog.at_level(logging.WARNING, logger="ibcontroller.dispatch"):
-                await asyncio.sleep(0.05)
+                await asyncio.wait([dispatcher.tasks[0]], timeout=2)
+            exc = dispatcher.tasks[0].exception()
             await dispatcher.stop()
 
+    assert isinstance(exc, ProtocolError)
+    assert "overflow" in str(exc)
     assert received == []
     assert any("overflow" in message.lower() for message in caplog.messages)
 
@@ -541,3 +544,161 @@ async def test_trace_payloads_not_built_when_tracing_is_off(
             await asyncio.sleep(0.05)  # let the keepalive event through
         finally:
             await dispatcher.stop()
+
+
+def _opened(seq, window_id, title="T"):
+    return {
+        "type": "event",
+        "seq": seq,
+        "kind": "window_opened",
+        "window": {"class": "c", "title": title, "window_id": window_id},
+    }
+
+
+def _closed(seq, window_id):
+    return {
+        "type": "event",
+        "seq": seq,
+        "kind": "window_closed",
+        "window": {"class": "c", "window_id": window_id},
+    }
+
+
+async def _registry_after(sock_path, event_sock_path, scripted):
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, scripted),
+    ):
+        dispatcher, _cmd_conn = await _start(sock_path, event_sock_path)
+        await asyncio.wait([dispatcher.tasks[0]], timeout=2)
+        windows = dict(dispatcher.windows)
+        await dispatcher.stop()
+    return windows
+
+
+async def test_registry_is_seeded_from_the_snapshot(sock_path, event_sock_path):
+    scripted = [
+        {"type": "hello", "protocol_version": 1},
+        {
+            "type": "snapshot",
+            "windows": [
+                {"class": "c", "title": "A", "window_id": "w1"},
+                {"class": "c", "title": "no id"},  # not tracked
+            ],
+        },
+    ]
+    windows = await _registry_after(sock_path, event_sock_path, scripted)
+    assert windows == {"w1": WindowInfo(class_="c", title="A", window_id="w1")}
+
+
+async def test_registry_follows_open_and_close_events(sock_path, event_sock_path):
+    scripted = [
+        {"type": "snapshot", "windows": []},
+        _opened(1, "w1"),
+        _opened(2, "w2"),
+        _closed(3, "w1"),
+        _closed(4, "w9"),  # unknown id: ignored
+        _closed(5, None),  # no id: ignored
+    ]
+    windows = await _registry_after(sock_path, event_sock_path, scripted)
+    assert list(windows) == ["w2"]
+
+
+async def test_registry_ignores_a_repeated_event(sock_path, event_sock_path):
+    scripted = [
+        {"type": "snapshot", "windows": []},
+        _opened(1, "w1"),
+        _opened(1, "w1"),
+        _closed(2, "w1"),
+        _closed(2, "w1"),
+    ]
+    assert await _registry_after(sock_path, event_sock_path, scripted) == {}
+
+
+async def test_a_later_snapshot_replaces_the_registry(sock_path, event_sock_path):
+    scripted = [
+        _opened(1, "w1"),  # older than the snapshot below
+        {"type": "snapshot", "windows": [{"class": "c", "window_id": "w2"}]},
+        _opened(2, "w3"),
+    ]
+    windows = await _registry_after(sock_path, event_sock_path, scripted)
+    assert list(windows) == ["w2", "w3"]
+
+
+async def test_registry_is_updated_before_the_event_is_emitted(
+    sock_path, event_sock_path
+):
+    seen = []
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, [_opened(1, "w1")]),
+    ):
+        cmd_conn = AgentCommandConnection(sock_path)
+        dispatcher = Dispatcher(cmd_conn, AgentEventConnection(event_sock_path))
+        dispatcher.window_events.connect(lambda e: seen.append(set(dispatcher.windows)))
+        await dispatcher.start()
+        await asyncio.wait([dispatcher.tasks[0]], timeout=2)
+        await dispatcher.stop()
+    assert seen == [{"w1"}]
+
+
+async def test_subscription_gets_every_event_in_order_and_disconnects(
+    sock_path, event_sock_path
+):
+    scripted = [_opened(1, "w1"), _opened(2, "w2"), _closed(3, "w1")]
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, scripted),
+    ):
+        cmd_conn = AgentCommandConnection(sock_path)
+        dispatcher = Dispatcher(cmd_conn, AgentEventConnection(event_sock_path))
+        with dispatcher.subscribe() as first, dispatcher.subscribe() as second:
+            await dispatcher.start()  # events are emitted from here on
+            await asyncio.wait([dispatcher.tasks[0]], timeout=2)
+            got_first = [await first.__anext__() for _ in range(3)]
+            got_second = [await second.__anext__() for _ in range(3)]
+        await dispatcher.stop()
+
+    assert [e.seq for e in got_first] == [1, 2, 3]
+    assert [e.seq for e in got_second] == [1, 2, 3]
+    assert len(dispatcher.window_events) == 0
+
+
+async def test_subscription_wait_skips_non_matching_and_times_out(
+    sock_path, event_sock_path
+):
+    scripted = [_opened(1, "w1", "other"), _closed(2, "w1"), _opened(3, "w2", "want")]
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, scripted),
+    ):
+        cmd_conn = AgentCommandConnection(sock_path)
+        dispatcher = Dispatcher(cmd_conn, AgentEventConnection(event_sock_path))
+        with dispatcher.subscribe() as sub:
+            await dispatcher.start()
+            event = await sub.wait(
+                "window_opened", lambda e: e.window.title == "want", timeout=2
+            )
+            with pytest.raises(TimeoutError):
+                await sub.wait("window_opened", timeout=0.05)
+        await dispatcher.stop()
+    assert event.window.window_id == "w2"
+
+
+async def test_subscription_wait_propagates_a_predicate_error(
+    sock_path, event_sock_path
+):
+    def bad(_event):
+        raise KeyError("predicate bug")
+
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, [_opened(1, "w1")]),
+    ):
+        cmd_conn = AgentCommandConnection(sock_path)
+        dispatcher = Dispatcher(cmd_conn, AgentEventConnection(event_sock_path))
+        with dispatcher.subscribe() as sub:
+            await dispatcher.start()
+            with pytest.raises(KeyError, match="predicate bug"):
+                await sub.wait("window_opened", bad, timeout=2)
+        await dispatcher.stop()
