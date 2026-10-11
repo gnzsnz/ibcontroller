@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
@@ -35,11 +36,17 @@ from ibcontroller.agent_client import (
 )
 from ibcontroller.dispatch import Dispatcher
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_DISMISS_LABELS = ("OK", "Close", "Dismiss")
 
 _MENU_RETRY_INTERVAL = 0.25
 """Delay, in seconds, between `navigate_menu` retries while the resolved
 menu item is disabled."""
+
+_MENU_NOT_FOUND_TIMEOUT = 5.0
+"""Default seconds `navigate_menu` keeps retrying a path that does not resolve:
+covers TWS populating its menu bar after login (#37, measured 0.3-0.6s)."""
 
 
 async def _forward(dispatcher: Dispatcher, method: str, *args: object) -> Any:
@@ -152,6 +159,7 @@ async def navigate_menu(
     path: str,
     *,
     timeout: float = 30.0,
+    not_found_timeout: float = _MENU_NOT_FOUND_TIMEOUT,
     window_id: str | None = None,
 ) -> None:
     """Walks menu `path` (e.g. `"File/Close"`) and clicks the item at the
@@ -167,18 +175,19 @@ async def navigate_menu(
     exactly this reason). `None` (the default) keeps the old global search.
 
     Retries every `_MENU_RETRY_INTERVAL` seconds while the resolved item is
-    disabled (e.g. a blocking dialog is still open) or not yet resolvable at
-    all (e.g. TWS is still populating its menubar right after login -- a
-    real race, not a wrong path: IBC avoids it upstream by gating the whole
-    config-dialog step on `MainWindowManager.getMainWindow()`/
-    `SessionManager.awaitReady()` before ever touching the menu; this
-    project's equivalent is `LoginManager.main_window_id` plus this same
-    retry as a bounded-poll substitute for IBC's blocking wait, since a
-    single asyncio loop doesn't need a `Future`-based one), up to `timeout`
-    seconds, then re-raises the last failure (`ElementNotFoundError` or
-    `TimeoutError`)."""
+    disabled (e.g. a blocking dialog is still open), up to `timeout` seconds,
+    then raises `TimeoutError`. A path that does not resolve (TWS still
+    populating its menubar right after login, #37) is retried for only
+    `not_found_timeout` seconds from its first failure, then
+    `ElementNotFoundError` is re-raised: a wrong path fails fast instead of
+    spending `timeout`. The not-found clock restarts if the path resolves and
+    the item is then disabled. Both are capped by `timeout`. IBC's
+    `Utils.invokeMenuItem` is the model; this project's equivalent of its
+    `MainWindowManager`/`SessionManager.awaitReady()` gate is
+    `LoginManager.main_window_id`."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
+    not_found_since: float | None = None
     while True:
         try:
             clicked = await dispatcher.send_command(
@@ -187,10 +196,21 @@ async def navigate_menu(
                 )
             )
         except ElementNotFoundError:
-            if loop.time() >= deadline:
+            now = loop.time()
+            if not_found_since is None:
+                not_found_since = now
+                logger.info(
+                    "IBController > menu path %r not found (window_id=%s), "
+                    "retrying for up to %ss",
+                    path,
+                    window_id,
+                    not_found_timeout,
+                )
+            if now >= deadline or now - not_found_since >= not_found_timeout:
                 raise
             await asyncio.sleep(_MENU_RETRY_INTERVAL)
             continue
+        not_found_since = None
         if clicked:
             return
         if loop.time() >= deadline:

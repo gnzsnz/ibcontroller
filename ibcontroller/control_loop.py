@@ -302,6 +302,12 @@ async def _apply_declarative_settings_or_log(
     unhandled exception."""
     try:
         await _apply_declarative_settings(launched, labels, config, main_window_id)
+    except (AgentClientError, TimeoutError) as exc:  # expected: bad path, no dialog
+        logger.error(
+            "IBController > declarative settings application failed: %s -- "
+            "continuing without them",
+            exc,
+        )
     except Exception:
         logger.exception(
             "IBController > declarative settings application failed -- "

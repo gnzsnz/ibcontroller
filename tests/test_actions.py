@@ -356,6 +356,117 @@ async def test_navigate_menu_times_out_if_never_enabled(sock_path, event_sock_pa
             await dispatcher.stop()
 
 
+async def test_navigate_menu_not_found_fails_after_not_found_timeout(
+    sock_path, event_sock_path
+):
+    attempts = []
+
+    def responder(request):
+        attempts.append(request)
+        return {"ok": False, "error": "not_found", "detail": "no such menu"}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            loop = asyncio.get_running_loop()
+            start = loop.time()
+            with pytest.raises(ElementNotFoundError):
+                await navigate_menu(
+                    dispatcher, "File/Nope", timeout=30.0, not_found_timeout=0.6
+                )
+            elapsed = loop.time() - start
+        finally:
+            await dispatcher.stop()
+
+    assert 0.5 <= elapsed < 5.0  # not the 30s `timeout`
+    assert len(attempts) >= 2
+
+
+async def test_navigate_menu_not_found_then_resolves_succeeds(
+    sock_path, event_sock_path
+):
+    attempts = []
+
+    def responder(request):
+        attempts.append(request)
+        if len(attempts) < 3:
+            return {"ok": False, "error": "not_found", "detail": "not yet"}
+        return {"ok": True, "clicked": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await navigate_menu(dispatcher, "File/Close", not_found_timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert len(attempts) == 3
+
+
+async def test_navigate_menu_disabled_is_not_cut_by_not_found_timeout(
+    sock_path, event_sock_path
+):
+    attempts = []
+
+    def responder(request):
+        attempts.append(request)
+        return {"ok": True, "clicked": len(attempts) >= 4}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await navigate_menu(
+                dispatcher, "File/Close", timeout=5.0, not_found_timeout=0.1
+            )
+        finally:
+            await dispatcher.stop()
+
+    assert len(attempts) == 4
+
+
+async def test_navigate_menu_not_found_clock_restarts_after_path_resolves(
+    sock_path, event_sock_path
+):
+    """not_found, disabled (path resolved), then not_found again: the second
+    not_found gets a fresh window instead of failing at once."""
+    replies = [
+        {"ok": False, "error": "not_found", "detail": "x"},
+        {"ok": True, "clicked": False},
+        {"ok": True, "clicked": False},
+        {"ok": True, "clicked": False},
+        {"ok": False, "error": "not_found", "detail": "x"},
+        {"ok": True, "clicked": True},
+    ]
+    attempts = []
+
+    def responder(request):
+        attempts.append(request)
+        return replies[len(attempts) - 1]
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await navigate_menu(
+                dispatcher, "File/Close", timeout=10.0, not_found_timeout=0.6
+            )
+        finally:
+            await dispatcher.stop()
+
+    assert len(attempts) == 6
+
+
 async def test_expand_tree_sends_path(sock_path, event_sock_path):
     def responder(request):
         assert request == {"cmd": "expand_tree", "path": "API/Settings"}

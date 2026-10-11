@@ -322,8 +322,8 @@ async def open_settings_dialog(
 
     `timeout` bounds the wait for the splash frame to close
     (`_await_menu_ready`), the menu navigation itself (`navigate_menu`
-    retries while the resolved item is disabled or not yet resolvable, e.g.
-    TWS is still populating its menubar right after login -- a real,
+    retries a disabled item for `timeout` and an unresolvable path briefly,
+    e.g. TWS is still populating its menubar right after login -- a real,
     live-caught race, see #37), and the wait for the dialog to open; needs
     to be long enough to span a real 2FA wait, since Settings may be
     attempted right after login while Gateway is still gated on a human

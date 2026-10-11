@@ -23,6 +23,7 @@ from ibcontroller import control_loop
 from ibcontroller.agent_client import (
     AgentCommandConnection,
     AgentEventConnection,
+    ElementNotFoundError,
     WindowEvent,
     WindowInfo,
 )
@@ -31,6 +32,7 @@ from ibcontroller.control_loop import (
     ShutdownCause,
     StartupState,
     _apply_declarative_settings,
+    _apply_declarative_settings_or_log,
     _build_registry,
     _log_transition,
     _PhaseAborted,
@@ -967,6 +969,37 @@ async def test_apply_declarative_settings_passes_second_factor_timeout(
 
     assert captured["timeout"] == 42.0
     assert captured["main_window_id"] == "w5"
+
+
+@pytest.mark.parametrize(
+    ("error", "has_traceback"),
+    [
+        (ElementNotFoundError("no component Configure/Nope"), False),
+        (TimeoutError("dialog never opened"), False),
+        (RuntimeError("bug"), True),
+    ],
+)
+async def test_apply_declarative_settings_or_log_traceback_only_for_unexpected(
+    monkeypatch, caplog, error, has_traceback
+):
+    async def _raise(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(control_loop, "_apply_declarative_settings", _raise)
+
+    with caplog.at_level(logging.ERROR, logger="ibcontroller.control_loop"):
+        await _apply_declarative_settings_or_log(
+            None,  # type: ignore[arg-type]
+            LABELS,
+            _config(),
+            None,
+        )
+
+    (record,) = caplog.records
+    assert "continuing without them" in record.getMessage()
+    assert (record.exc_info is not None) is has_traceback
+    if not has_traceback:
+        assert str(error) in record.getMessage()
 
 
 async def test_run_to_completion_survives_repeated_cancellation():
