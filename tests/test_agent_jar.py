@@ -62,6 +62,9 @@ async def agent(sock_path):
                 probe.close()
                 await probe.wait_closed()
                 break
+            # agent binds the event socket after the command socket
+            while not Path(derive_event_socket_path(sock_path)).exists():
+                await asyncio.sleep(0.05)
         yield sock_path
         assert proc.returncode is None, "agent exited during the test"
     finally:
