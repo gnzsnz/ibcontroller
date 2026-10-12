@@ -75,7 +75,7 @@
 # Optional: when unset, defaults to the platformdirs user-log dir (or
 # $IBC_APP_DIR/log in docker mode). Every instance's files (log, trace,
 # gateway stdout) land flat in this one directory.
-# log_dir = "~/.local/share/ibcontroller"
+# log_dir = "~/.local/state/ibcontroller/log"
 # log_dir = "~/Library/Logs/ibcontroller"
 # log_dir = ""
 

@@ -175,7 +175,7 @@ When environment variable `IBC_APP_DIR` is not set, then
 | --- | --- | --- |
 | `config_dir` | `~/.config/ibcontroller` | Linux |
 | `config_dir` | `~/Library/Application Support/ibcontroller` | macOS |
-| `log_dir` | `~/.local/share/ibcontroller` | Linux |
+| `log_dir` | `~/.local/state/ibcontroller/log` | Linux |
 | `log_dir` | `~/Library/Logs/ibcontroller` | macOS |
 | `socket_dir` | `/run/user/<uid>/ibcontroller` | Linux |
 | `socket_dir` | `~/Library/Caches/TemporaryItems/ibcontroller` | macOS |
