@@ -303,6 +303,9 @@ the field: a string where a list is expected, an empty list of titles or buttons
 JSON, or a `dismiss_rules` entry without `match_title`/`match_text`. A misspelled key is
 logged as a warning and ignored, so check the log if an override seems to have no effect.
 
+`generic.dismiss_buttons` lists the buttons tried, in order, to close a pop-up no specific
+handler recognises (default `OK`, `Close`, `Dismiss`).
+
 The one part of `labels.json` that isn't just text is `dismiss_rules` — a list of
 "if a window matches, click this button" entries, checked on every window that opens.
 Each entry needs at least one of `match_title`/`match_text` (both, if given, must

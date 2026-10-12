@@ -43,6 +43,9 @@
     "known_reasons": ["has multiple Paper Trading users associated with it"],
     "dismiss_button": "OK"
   },
+  "generic": {
+    "dismiss_buttons": ["OK", "Close", "Dismiss"]
+  },
   "dismiss_rules": [
     {
       "name": "non_brokerage_account",

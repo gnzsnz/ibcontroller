@@ -254,6 +254,13 @@ class SettingsLabels:
 
 
 @attrs.define(frozen=True)
+class GenericLabels:
+    """Buttons for a pop-up no specific handler recognises. See `actions.dismiss`."""
+
+    dismiss_buttons: list[str] = attrs.field(validator=_non_empty)
+
+
+@attrs.define(frozen=True)
 class ShutdownLabels:
     """The graceful shutdown menu item: Gateway's `File > Close` or TWS's
     `File > Exit`. See `management.clean_shutdown`."""
@@ -275,6 +282,7 @@ class Labels:
     too_many_failed_login_attempts: TooManyFailedLoginAttemptsLabels
     settings: SettingsLabels
     shutdown: ShutdownLabels
+    generic: GenericLabels
     dismiss_rules: list[DismissRule] = attrs.field(factory=list)
 
 

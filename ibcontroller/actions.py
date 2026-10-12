@@ -38,8 +38,6 @@ from ibcontroller.dispatch import Dispatcher
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DISMISS_LABELS = ("OK", "Close", "Dismiss")
-
 _MENU_RETRY_INTERVAL = 0.25
 """Delay, in seconds, between `navigate_menu` retries while the resolved
 menu item is disabled."""
@@ -116,25 +114,23 @@ async def toggle(
 
 async def dismiss(
     dispatcher: Dispatcher,
-    labels: str | Sequence[str] | None = None,
+    labels: str | Sequence[str],
     *,
     window_id: str | None = None,
 ) -> None:
-    """Clicks `labels` to dismiss a generic pop-up, defaulting to common
-    OK/Close/Dismiss labels when the caller doesn't have a more specific
-    one. `window_id`, if given, scopes the action to one window."""
-    await click(
-        dispatcher,
-        labels if labels is not None else _DEFAULT_DISMISS_LABELS,
-        window_id=window_id,
-    )
+    """Clicks `labels` (the first candidate found) to dismiss a generic
+    pop-up; callers pass `Labels.generic.dismiss_buttons` when they have no
+    more specific one. `window_id`, if given, scopes the action to one window."""
+    await click(dispatcher, labels, window_id=window_id)
 
 
 async def read_text(
     dispatcher: Dispatcher, field: str, *, window_id: str | None = None
 ) -> str:
-    """Returns the text of `field`. `window_id`, if given, scopes the read to
-    one window. Raises `CredentialRefusedError` if `field` is a password
+    """Returns the text of `field`; needed to read a settings field before
+    writing it, so an unchanged value is left alone and a change that raises a
+    confirmation dialog can be anticipated. `window_id`, if given, scopes the
+    read to one window. Raises `CredentialRefusedError` if `field` is a password
     field."""
     return await _forward(dispatcher, "get_text", field, window_id)
 
@@ -298,4 +294,5 @@ ACTIONS: dict[str, Callable[..., Awaitable[object]]] = {
     "dump": dump,
 }
 """Name -> function table for callers (config rules, delegate JSON, plugins)
-that select an action by name rather than calling it directly."""
+that select an action by name rather than calling it directly. Reserved API:
+no production caller selects by name yet."""

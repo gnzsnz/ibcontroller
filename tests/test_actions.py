@@ -179,7 +179,7 @@ async def test_toggle_sends_set_checkbox(sock_path, event_sock_path):
             await dispatcher.stop()
 
 
-async def test_dismiss_uses_default_labels_when_none_given(sock_path, event_sock_path):
+async def test_dismiss_clicks_the_labels_it_is_given(sock_path, event_sock_path):
     attempts = []
 
     def responder(request):
@@ -193,11 +193,11 @@ async def test_dismiss_uses_default_labels_when_none_given(sock_path, event_sock
         dispatcher = await _start(sock_path, event_sock_path)
         try:
             with pytest.raises(ElementNotFoundError):
-                await dismiss(dispatcher)
+                await dismiss(dispatcher, ["OK", "Close"])
         finally:
             await dispatcher.stop()
 
-    assert attempts == ["OK", "Close", "Dismiss"]
+    assert attempts == ["OK", "Close"]
 
 
 async def test_read_text_returns_value(sock_path, event_sock_path):

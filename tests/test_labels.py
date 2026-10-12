@@ -41,6 +41,16 @@ def test_bundled_default_loads_and_structures():
     assert non_brokerage.click == "I understand and accept"
 
 
+def test_generic_dismiss_buttons_load_from_bundled_file():
+    assert load_labels().generic.dismiss_buttons == ["OK", "Close", "Dismiss"]
+
+
+def test_generic_dismiss_buttons_reject_empty_override(tmp_path):
+    (tmp_path / "labels.json").write_text('{"generic": {"dismiss_buttons": []}}')
+    with pytest.raises(LabelsError):
+        load_labels(config_dir=tmp_path)
+
+
 def test_dismiss_rule_needs_at_least_one_match_field():
     with pytest.raises(LabelsError):
         DismissRule(name="bad", click="OK")
