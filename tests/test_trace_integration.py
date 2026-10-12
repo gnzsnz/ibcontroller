@@ -9,12 +9,16 @@ pattern the other test files use."""
 
 from __future__ import annotations
 
-import functools
 import json
 
 import pytest
 
-from ibcontroller.agent_client import AgentCommandConnection, AgentEventConnection
+from ibcontroller.agent_client import (
+    AgentCommandConnection,
+    AgentEventConnection,
+    Click,
+    SetText,
+)
 from ibcontroller.app_dirs import resolve_app_dirs
 from ibcontroller.config import load_config
 from ibcontroller.dispatch import Dispatcher
@@ -71,9 +75,7 @@ async def test_config_log_dir_reaches_a_real_dispatcher(
             )
             await dispatcher.start()
             try:
-                await dispatcher.send_command(
-                    functools.partial(cmd_conn.click, "IB API")
-                )
+                await dispatcher.send(Click("IB API"))
             finally:
                 await dispatcher.stop()
 
@@ -121,9 +123,7 @@ async def test_config_password_never_reaches_trace_file_as_plaintext(
             )
             await dispatcher.start()
             try:
-                await dispatcher.send_command(
-                    functools.partial(cmd_conn.set_text, "Password", config.password)
-                )
+                await dispatcher.send(SetText("Password", config.password))
             finally:
                 await dispatcher.stop()
 
@@ -133,7 +133,8 @@ async def test_config_password_never_reaches_trace_file_as_plaintext(
     assert "pappass" not in raw_text  # the real credential from _BASE_ENV
     lines = [json.loads(line) for line in raw_text.splitlines()]
     sent = next(entry for entry in lines if entry["direction"] == "sent")
-    assert sent["args"] == ["Password", "Secret('*******')"]
+    assert sent["cmd"] == "set_text"
+    assert sent["args"] == {"target": "Password", "value": "<redacted>"}
 
 
 # Deliberately no "defaults to the real platformdirs path" variant here that actually

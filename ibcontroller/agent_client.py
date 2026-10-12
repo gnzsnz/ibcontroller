@@ -16,7 +16,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import attrs
 import cattrs
@@ -226,6 +226,199 @@ def derive_event_socket_path(command_socket_path: str | Path) -> Path:
     return path.with_name(name + ".events")
 
 
+_REDACTED = "<redacted>"
+
+
+@attrs.define(frozen=True)
+class Request[R]:
+    """One agent command: its fields are the wire fields (a `None` field is
+    left out of the request), `cmd` the wire command name, `timeout` the
+    round-trip bound (`None` = the connection's `request_timeout`). `R` is
+    what `parse` returns for an `ok` response."""
+
+    cmd: ClassVar[str]
+    timeout: ClassVar[float | None] = None
+
+    def _fields(self, *, reveal: bool) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        for attribute in attrs.fields(type(self)):
+            value = getattr(self, attribute.name)
+            if value is None:
+                continue
+            if isinstance(value, Secret):
+                value = value.get_secret_value() if reveal else _REDACTED
+            fields[attribute.name] = value
+        return fields
+
+    def wire(self) -> dict[str, Any]:
+        """The request as sent. The one point where a `Secret` becomes a bare
+        string."""
+        return {"cmd": self.cmd, **self._fields(reveal=True)}
+
+    def trace(self) -> dict[str, Any]:
+        """The fields for the trace file, `Secret` values redacted."""
+        return self._fields(reveal=False)
+
+    def parse(self, response: Mapping[str, Any]) -> R:
+        """Structures an `ok` response. Raises `ProtocolError` on a missing
+        field."""
+        raise NotImplementedError
+
+
+@attrs.define(frozen=True)
+class _Ack(Request[None]):
+    """A command whose `ok` response carries no data."""
+
+    def parse(self, response: Mapping[str, Any]) -> None:
+        return None
+
+
+@attrs.define(frozen=True)
+class Ping(Request[PingResult]):
+    """Asks the agent for its version and uptime."""
+
+    cmd: ClassVar[str] = "ping"
+
+    def parse(self, response: Mapping[str, Any]) -> PingResult:
+        return _structure(response, PingResult, "response")
+
+
+@attrs.define(frozen=True)
+class Dump(Request[list[Component]]):
+    """Returns the current component tree, optionally scoped by `window` (a
+    title substring) or `window_id` (an exact, opaque ID, taking precedence
+    when both are given). `WindowGoneError` if `window_id` no longer resolves
+    to an open window."""
+
+    cmd: ClassVar[str] = "dump"
+    timeout: ClassVar[float | None] = _DUMP_TIMEOUT
+    window: str | None = None
+    window_id: str | None = None
+
+    def parse(self, response: Mapping[str, Any]) -> list[Component]:
+        return _structure(_field(response, "components"), list[Component], "response")
+
+
+@attrs.define(frozen=True)
+class GetText(Request[str]):
+    """Returns the text of the component identified by `target`.
+    `window_id`, if given, scopes the search to one window.
+    `CredentialRefusedError` if `target` is a password field,
+    `WindowGoneError` if `window_id` no longer resolves to an open window."""
+
+    cmd: ClassVar[str] = "get_text"
+    target: str
+    window_id: str | None = None
+
+    def parse(self, response: Mapping[str, Any]) -> str:
+        return str(_field(response, "value"))
+
+
+@attrs.define(frozen=True)
+class SetText(_Ack):
+    """Sets the text of the component identified by `target`. `value` may be
+    a `Secret` (credentials) or a plain string. `window_id`, if given, scopes
+    the search to one window. `WindowGoneError` if `window_id` no longer
+    resolves to an open window."""
+
+    cmd: ClassVar[str] = "set_text"
+    target: str
+    value: str | Secret
+    window_id: str | None = None
+
+
+@attrs.define(frozen=True)
+class SetCheckbox(_Ack):
+    """Sets the checked state of the component identified by `target`.
+    `window_id`, if given, scopes the search to one window."""
+
+    cmd: ClassVar[str] = "set_checkbox"
+    target: str
+    checked: bool
+    window_id: str | None = None
+
+
+@attrs.define(frozen=True)
+class Click(_Ack):
+    """Clicks the component identified by `target`. Fire-and-forget on the
+    agent side: the response only confirms the agent accepted the command,
+    not that the click's effect has landed. `window_id`, if given, scopes the
+    search to one window."""
+
+    cmd: ClassVar[str] = "click"
+    target: str
+    window_id: str | None = None
+
+
+@attrs.define(frozen=True)
+class SetTextNearLabel(_Ack):
+    """Sets the text of the `index`-th text field found within the container
+    of the component labelled `label` -- for fields with no accessible name
+    of their own. `value` may be a `Secret` or a plain string. `window_id`, if
+    given, scopes the search to one window."""
+
+    cmd: ClassVar[str] = "set_text_near_label"
+    label: str
+    index: int
+    value: str | Secret
+    window_id: str | None = None
+
+
+@attrs.define(frozen=True)
+class NavigateMenu(Request[bool]):
+    """Walks a menu path (e.g. `"File/Close"`) and clicks the item at the end.
+    `Click` cannot reach menu items -- a menu's dropdown lives outside the
+    ordinary component tree while closed. Fire-and-forget once a click is
+    actually queued.
+
+    `window_id`, if given, resolves directly to that window's own menu bar
+    instead of the agent's global "first displayable frame with a menu bar"
+    search (#40); `None` keeps that global search, for callers without a
+    validated main-window id (e.g. Gateway, whose `login.py` path never
+    captures one, see `LoginManager.main_window_id`).
+
+    Parses to whether the item was actually clicked: `False` means the
+    resolved item exists but is currently disabled (a retriable condition,
+    e.g. a blocking dialog still open), distinct from `ElementNotFoundError`
+    (the path itself doesn't resolve). `actions.navigate_menu` owns the retry
+    loop."""
+
+    cmd: ClassVar[str] = "navigate_menu"
+    path: str
+    window_id: str | None = None
+
+    def parse(self, response: Mapping[str, Any]) -> bool:
+        return bool(_field(response, "clicked"))
+
+
+@attrs.define(frozen=True)
+class ExpandTree(_Ack):
+    """Selects a section of the Global Configuration dialog's tree (e.g.
+    `"API/Settings"`). Unlike `NavigateMenu`/`Click`, this can be trusted
+    immediately -- selecting a tree node only swaps an already-visible panel,
+    it can't open a new modal. `window_id`, if given, resolves directly to
+    that dialog instead of searching by title."""
+
+    cmd: ClassVar[str] = "expand_tree"
+    path: str
+    window_id: str | None = None
+
+
+@attrs.define(frozen=True)
+class MenuItemExists(Request[tuple[bool, bool]]):
+    """Reports whether `path` (e.g. `"Help/About Gateway"`) resolves to a real
+    menu item under `window_id`'s menu bar, and whether it's currently
+    enabled, without clicking it. Parses to `(exists, enabled)`. Diagnostic
+    use -- `window_id` is required."""
+
+    cmd: ClassVar[str] = "menu_item_exists"
+    path: str
+    window_id: str
+
+    def parse(self, response: Mapping[str, Any]) -> tuple[bool, bool]:
+        return bool(_field(response, "exists")), bool(_field(response, "enabled"))
+
+
 class AgentCommandConnection:
     """One persistent connection to the agent's command socket: send one JSON
     line, read one JSON line back, per command. The wire protocol has no
@@ -236,19 +429,17 @@ class AgentCommandConnection:
     `ProtocolError` (reconnecting needs a new `connect()`).
 
     `request_timeout` bounds each request's wire round trip (not the wait for
-    the lock); `dump_timeout` replaces it for `dump`. A request that times out
-    breaks the connection."""
+    the lock) unless the request sets its own `timeout`. A request that times
+    out breaks the connection."""
 
     def __init__(
         self,
         path: str | Path,
         *,
         request_timeout: float = _REQUEST_TIMEOUT,
-        dump_timeout: float = _DUMP_TIMEOUT,
     ) -> None:
         self._path = str(path)
         self._request_timeout = request_timeout
-        self._dump_timeout = dump_timeout
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
@@ -344,169 +535,19 @@ class AgentCommandConnection:
         detail = str(response.get("detail", ""))
         raise _ERROR_CODES.get(code, AgentError)(detail)
 
+    async def request[R](self, request: Request[R]) -> R:
+        """Sends `request` and returns its parsed response. Raises the typed
+        `AgentClientError` subclass for an agent-reported error, and
+        `ProtocolError` for a transport failure or an unexpected response
+        shape."""
+        response = await self._request(request.wire(), request.timeout)
+        if not response["ok"]:
+            self._raise_for_error(response)
+        return request.parse(response)
+
     async def ping(self) -> PingResult:
         """Pings the agent. Returns its version and uptime."""
-        response = await self._request({"cmd": "ping"})
-        if not response["ok"]:
-            self._raise_for_error(response)
-        return _structure(response, PingResult, "response")
-
-    async def dump(
-        self, window: str | None = None, window_id: str | None = None
-    ) -> list[Component]:
-        """Returns the current component tree, optionally scoped by `window`
-        (a title substring) or `window_id` (an exact, opaque ID, taking
-        precedence when both are given). Raises `WindowGoneError` if
-        `window_id` no longer resolves to an open window."""
-        payload: dict[str, Any] = {"cmd": "dump"}
-        if window is not None:
-            payload["window"] = window
-        if window_id is not None:
-            payload["window_id"] = window_id
-        response = await self._request(payload, self._dump_timeout)
-        if not response["ok"]:
-            self._raise_for_error(response)
-        return _structure(_field(response, "components"), list[Component], "response")
-
-    async def get_text(self, target: str, window_id: str | None = None) -> str:
-        """Returns the text of the component identified by `target`.
-        `window_id`, if given, scopes the search to one window. Raises
-        `CredentialRefusedError` if `target` is a password field, and
-        `WindowGoneError` if `window_id` no longer resolves to an open window."""
-        payload: dict[str, Any] = {"cmd": "get_text", "target": target}
-        if window_id is not None:
-            payload["window_id"] = window_id
-        response = await self._request(payload)
-        if not response["ok"]:
-            self._raise_for_error(response)
-        return str(_field(response, "value"))
-
-    async def set_text(
-        self, target: str, value: str | Secret, window_id: str | None = None
-    ) -> None:
-        """Sets the text of the component identified by `target`. `value` may
-        be a `Secret` (credentials) or a plain string -- a `Secret` is
-        unwrapped here, immediately before building the request, the one
-        point where a credential becomes a bare string. `window_id`, if
-        given, scopes the search to one window. Raises `WindowGoneError` if
-        `window_id` no longer resolves to an open window."""
-        real_value = value.get_secret_value() if isinstance(value, Secret) else value
-        payload: dict[str, Any] = {
-            "cmd": "set_text",
-            "target": target,
-            "value": real_value,
-        }
-        if window_id is not None:
-            payload["window_id"] = window_id
-        response = await self._request(payload)
-        if not response["ok"]:
-            self._raise_for_error(response)
-
-    async def set_checkbox(
-        self, target: str, checked: bool, window_id: str | None = None
-    ) -> None:
-        """Sets the checked state of the component identified by `target`.
-        `window_id`, if given, scopes the search to one window."""
-        payload: dict[str, Any] = {
-            "cmd": "set_checkbox",
-            "target": target,
-            "checked": checked,
-        }
-        if window_id is not None:
-            payload["window_id"] = window_id
-        response = await self._request(payload)
-        if not response["ok"]:
-            self._raise_for_error(response)
-
-    async def click(self, target: str, window_id: str | None = None) -> None:
-        """Clicks the component identified by `target`. Fire-and-forget on
-        the agent side: this only confirms the agent accepted the command,
-        not that the click's effect has landed. `window_id`, if given, scopes
-        the search to one window."""
-        payload: dict[str, Any] = {"cmd": "click", "target": target}
-        if window_id is not None:
-            payload["window_id"] = window_id
-        response = await self._request(payload)
-        if not response["ok"]:
-            self._raise_for_error(response)
-
-    async def set_text_near_label(
-        self,
-        label: str,
-        index: int,
-        value: str | Secret,
-        window_id: str | None = None,
-    ) -> None:
-        """Sets the text of the `index`-th text field found within the
-        container of the component labelled `label` -- for fields with no
-        accessible name of their own. `value` may be a `Secret` or a plain
-        string, same unwrap contract as `set_text`. `window_id`, if given,
-        scopes the search to one window."""
-        real_value = value.get_secret_value() if isinstance(value, Secret) else value
-        payload: dict[str, Any] = {
-            "cmd": "set_text_near_label",
-            "label": label,
-            "index": index,
-            "value": real_value,
-        }
-        if window_id is not None:
-            payload["window_id"] = window_id
-        response = await self._request(payload)
-        if not response["ok"]:
-            self._raise_for_error(response)
-
-    async def navigate_menu(self, path: str, window_id: str | None = None) -> bool:
-        """Walks a menu path (e.g. `"File/Close"`) and clicks the item at the
-        end. `click` cannot reach menu items -- a menu's dropdown lives
-        outside the ordinary component tree while closed. Fire-and-forget
-        once a click is actually queued.
-
-        `window_id`, if given, resolves directly to that window's own menu
-        bar (matching `menu_item_exists`'s scoping) instead of the agent's
-        own global "first displayable frame with a menu bar" search (#40) --
-        `None` (the default) keeps that global search, for callers that
-        don't have a validated main-window id to give (e.g. Gateway, whose
-        `login.py` path never captures one, see `LoginManager.main_window_id`).
-
-        Returns whether the item was actually clicked: `False` means the
-        resolved item exists but is currently disabled (a retriable
-        condition, e.g. a blocking dialog still open), distinct from
-        `ElementNotFoundError` (the path itself doesn't resolve to anything).
-        `actions.navigate_menu` owns the retry loop this return value is
-        for."""
-        payload: dict[str, Any] = {"cmd": "navigate_menu", "path": path}
-        if window_id is not None:
-            payload["window_id"] = window_id
-        response = await self._request(payload)
-        if not response["ok"]:
-            self._raise_for_error(response)
-        return bool(_field(response, "clicked"))
-
-    async def expand_tree(self, path: str, window_id: str | None = None) -> None:
-        """Selects a section of the Global Configuration dialog's tree (e.g.
-        `"API/Settings"`). Unlike `navigate_menu`/`click`, this can be
-        trusted immediately -- selecting a tree node only swaps an
-        already-visible panel, it can't open a new modal. `window_id`, if
-        given, resolves directly to that dialog instead of searching by
-        title."""
-        payload: dict[str, Any] = {"cmd": "expand_tree", "path": path}
-        if window_id is not None:
-            payload["window_id"] = window_id
-        response = await self._request(payload)
-        if not response["ok"]:
-            self._raise_for_error(response)
-
-    async def menu_item_exists(self, path: str, window_id: str) -> tuple[bool, bool]:
-        """Reports whether `path` (e.g. `"Help/About Gateway"`) resolves to a
-        real menu item under `window_id`'s menu bar, and whether it's
-        currently enabled, without clicking it. Returns `(exists, enabled)`.
-        `window_id` is required -- diagnostic use, not general scoping."""
-        response = await self._request(
-            {"cmd": "menu_item_exists", "path": path, "window_id": window_id}
-        )
-        if not response["ok"]:
-            self._raise_for_error(response)
-        return bool(_field(response, "exists")), bool(_field(response, "enabled"))
+        return await self.request(Ping())
 
 
 class AgentEventConnection:

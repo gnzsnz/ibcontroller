@@ -21,23 +21,21 @@ human-readable line per message, via `_describe_event`), independent of
 trace mode.
 
 Credentials never reach this file as plaintext: `Config.username`/`password`
-are `Secret`, not `str`; `agent_client.set_text` is the only place that ever
-unwraps one, so nothing downstream (including this module) ever sees the
-bare value. A `Secret` passed as a `set_text` argument serializes as
-`"Secret('<redacted>')"` via this file's existing `repr` fallback.
+are `Secret`, not `str`; `Request.wire` is the only place that ever unwraps
+one, so nothing downstream (including this module) ever sees the bare value.
+The trace logs `Request.trace()`, which redacts every `Secret` field.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import functools
 import json
 import logging
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Any, TypeVar
+from typing import Any
 
 import eventkit
 
@@ -50,6 +48,7 @@ from ibcontroller.agent_client import (
     Keepalive,
     Overflow,
     ProtocolError,
+    Request,
     Snapshot,
     WindowEvent,
     WindowInfo,
@@ -58,26 +57,9 @@ from ibcontroller.agent_client import (
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
-_CommandCall = Callable[[], Awaitable[T]]
-
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
-
-
-def _describe_call(call: _CommandCall[object]) -> dict[str, Any]:
-    """Best-effort trace-file description of `call`. Only a
-    `functools.partial` of a bound `AgentCommandConnection` method (the
-    documented convention for `send_command` calls) can actually be named
-    and have its arguments logged."""
-    if isinstance(call, functools.partial):
-        return {
-            "cmd": getattr(call.func, "__name__", repr(call.func)),
-            "args": list(call.args),
-        }
-    return {"cmd": getattr(call, "__name__", repr(call))}
 
 
 def _safe_unstructure(value: object) -> object:
@@ -177,12 +159,12 @@ class Dispatcher:
         self._command_conn = command_conn
         self._event_conn = event_conn
         self._command_queue: asyncio.Queue[
-            tuple[_CommandCall[object], asyncio.Future[object], int]
+            tuple[Request[Any], asyncio.Future[Any], int]
         ] = asyncio.Queue()
         self._window_events: eventkit.Event = eventkit.Event()
         self._windows: dict[str, WindowInfo] = {}
         self._tasks: list[asyncio.Task[None]] = []
-        self._in_flight: asyncio.Future[object] | None = None
+        self._in_flight: asyncio.Future[Any] | None = None
         # Set once the worker can no longer run commands; later sends fail with it.
         self._closed_reason: str | None = None
         self._trace_cmd_logger: logging.Logger | None = None
@@ -216,14 +198,6 @@ class Dispatcher:
         ]
 
     @property
-    def command_conn(self) -> AgentCommandConnection:
-        """The `AgentCommandConnection` this Dispatcher owns -- lets
-        `actions.py`'s functions build `send_command` calls against it
-        without threading a second, always-the-same reference alongside
-        `dispatcher`."""
-        return self._command_conn
-
-    @property
     def windows(self) -> Mapping[str, WindowInfo]:
         """Read-only live view of the open windows by `window_id`. Mirrors
         the agent's id registry: a `Snapshot` replaces it, `window_opened`
@@ -255,7 +229,7 @@ class Dispatcher:
         """Cancels both background tasks and closes both connections; never
         raises. A task that ended with an exception is logged once. Any
         command still queued or in flight fails with `ProtocolError("dispatcher
-        stopped")`, and so does any later `send_command`. Trace streams are
+        stopped")`, and so does any later `send`. Trace streams are
         `logging_setup.py`'s concern, not this layer's; the caller drains
         those separately via `logging_setup.stop_logging()`."""
         for task in self._tasks:
@@ -270,24 +244,18 @@ class Dispatcher:
         finally:
             await self._event_conn.close()
 
-    async def send_command(self, call: _CommandCall[T]) -> T:
-        """Queues `call` and waits for the single `_command_worker` to run
+    async def send[R](self, request: Request[R]) -> R:
+        """Queues `request` and waits for the single `_command_worker` to run
         it, never overlapping another command on the same connection (the
-        wire protocol has no request IDs). `call` should be a
-        `functools.partial` of a bound `AgentCommandConnection` method, e.g.
-        `functools.partial(dispatcher.command_conn.set_text, "u", "x")` --
-        the trace file can only name the command and its arguments when it
-        can introspect `call.func`/`call.args`. Raises `ProtocolError` at once
-        when the dispatcher has stopped or the command connection is broken."""
+        wire protocol has no request IDs). Returns the parsed response.
+        Raises `ProtocolError` at once when the dispatcher has stopped or the
+        command connection is broken."""
         if self._closed_reason is not None:
             raise ProtocolError(self._closed_reason)
         loop = asyncio.get_running_loop()
-        done: asyncio.Future[T] = loop.create_future()
+        done: asyncio.Future[R] = loop.create_future()
         self._trace_seq += 1
-        # The queue is declared over `object` so one queue can carry every command's
-        # differently-typed result; a per-call `T` narrows correctly at the type
-        # checker's boundary here but not through the queue's own invariant generic.
-        self._command_queue.put_nowait((call, done, self._trace_seq))  # type: ignore[arg-type]
+        self._command_queue.put_nowait((request, done, self._trace_seq))
         return await done
 
     def _fail_pending(self, reason: str) -> None:
@@ -354,16 +322,21 @@ class Dispatcher:
         ends, pending commands are failed."""
         try:
             while True:
-                call, done, seq = await self._command_queue.get()
+                request, done, seq = await self._command_queue.get()
                 if done.cancelled():
                     continue
                 self._in_flight = done
                 if self._trace_enabled:
                     self._trace_cmd(
-                        {"seq": seq, "direction": "sent", **_describe_call(call)}
+                        {
+                            "seq": seq,
+                            "direction": "sent",
+                            "cmd": request.cmd,
+                            "args": request.trace(),
+                        }
                     )
                 try:
-                    result = await call()
+                    result = await self._command_conn.request(request)
                 except Exception as exc:
                     if self._trace_enabled:
                         code = (

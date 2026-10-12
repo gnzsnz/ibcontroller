@@ -11,6 +11,7 @@ import asyncio
 import json
 
 import pytest
+from typed_settings.types import Secret
 
 from ibcontroller import agent_client
 from ibcontroller.agent_client import (
@@ -18,14 +19,23 @@ from ibcontroller.agent_client import (
     AgentError,
     AgentEventConnection,
     BadRequestError,
+    Click,
     Component,
     CredentialRefusedError,
+    Dump,
     ElementNotFoundError,
+    ExpandTree,
+    GetText,
     Hello,
     Keepalive,
+    MenuItemExists,
+    NavigateMenu,
     Overflow,
     PingResult,
     ProtocolError,
+    SetCheckbox,
+    SetText,
+    SetTextNearLabel,
     Snapshot,
     UnknownCommandError,
     WindowEvent,
@@ -127,6 +137,33 @@ def test_parse_event_message_unknown_type_raises():
         parse_event_message({"type": "something_new"})
 
 
+# --- Request ------------------------------------------------------------------------
+
+
+def test_request_wire_leaves_out_none_fields_and_unwraps_secrets():
+    request = SetText("Password", Secret("s3cret"))
+    assert request.wire() == {
+        "cmd": "set_text",
+        "target": "Password",
+        "value": "s3cret",
+    }
+
+
+def test_request_trace_redacts_secrets():
+    request = SetTextNearLabel("Label", 1, Secret("s3cret"), "w1")
+    assert request.trace() == {
+        "label": "Label",
+        "index": 1,
+        "value": "<redacted>",
+        "window_id": "w1",
+    }
+    assert "s3cret" not in repr(request.trace())
+
+
+def test_request_trace_has_no_cmd_and_keeps_plain_values():
+    assert SetText("Field", "plain").trace() == {"target": "Field", "value": "plain"}
+
+
 # --- AgentCommandConnection ---------------------------------------------------------
 
 
@@ -164,7 +201,7 @@ async def test_dump_success(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            components = await conn.dump()
+            components = await conn.request(Dump())
     assert components == [
         Component(
             class_="twslaunch.trader.common.document.q",
@@ -206,7 +243,7 @@ async def test_dump_parses_text_truncation_fields(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            components = await conn.dump()
+            components = await conn.request(Dump())
     assert components == [
         Component(
             class_="javax.swing.JTextArea",
@@ -249,7 +286,7 @@ async def test_dump_survives_a_response_past_the_default_stream_limit(sock_path)
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            components = await conn.dump()
+            components = await conn.request(Dump())
     assert len(components) == 50
 
 
@@ -262,7 +299,7 @@ async def test_dump_with_window_filter(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            await conn.dump(window="login")
+            await conn.request(Dump(window="login"))
 
 
 async def test_dump_with_window_id_ignores_title_filter_on_the_wire(sock_path):
@@ -280,7 +317,7 @@ async def test_dump_with_window_id_ignores_title_filter_on_the_wire(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            await conn.dump(window="IBKR Gateway", window_id="w7")
+            await conn.request(Dump(window="IBKR Gateway", window_id="w7"))
 
 
 async def test_dump_window_gone_raises_window_gone_error(sock_path):
@@ -296,7 +333,7 @@ async def test_dump_window_gone_raises_window_gone_error(sock_path):
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
             with pytest.raises(WindowGoneError, match="no longer open"):
-                await conn.dump(window_id="w7")
+                await conn.request(Dump(window_id="w7"))
 
 
 async def test_get_text_success(sock_path):
@@ -304,7 +341,7 @@ async def test_get_text_success(sock_path):
 
     async with FakeCommandServer(sock, lambda _req: {"ok": True, "value": "jsmith"}):
         async with AgentCommandConnection(sock) as conn:
-            assert await conn.get_text("Username") == "jsmith"
+            assert await conn.request(GetText("Username")) == "jsmith"
 
 
 async def test_get_text_sends_window_id_only_when_given(sock_path):
@@ -317,8 +354,8 @@ async def test_get_text_sends_window_id_only_when_given(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            await conn.get_text("Username")
-            await conn.get_text("Username", window_id="w7")
+            await conn.request(GetText("Username"))
+            await conn.request(GetText("Username", window_id="w7"))
 
     assert seen == [
         {"cmd": "get_text", "target": "Username"},
@@ -339,7 +376,7 @@ async def test_get_text_window_gone_raises_window_gone_error(sock_path):
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
             with pytest.raises(WindowGoneError, match="no longer open"):
-                await conn.get_text("Username", window_id="w7")
+                await conn.request(GetText("Username", window_id="w7"))
 
 
 async def test_set_text_success(sock_path):
@@ -351,7 +388,7 @@ async def test_set_text_success(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            await conn.set_text("Username", "jsmith")
+            await conn.request(SetText("Username", "jsmith"))
 
 
 async def test_set_checkbox_success(sock_path):
@@ -367,7 +404,7 @@ async def test_set_checkbox_success(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            await conn.set_checkbox("Paper Trading", True)
+            await conn.request(SetCheckbox("Paper Trading", True))
 
 
 async def test_click_success(sock_path):
@@ -379,7 +416,7 @@ async def test_click_success(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            await conn.click("IB API")
+            await conn.request(Click("IB API"))
 
 
 async def test_click_omits_window_id_when_not_given(sock_path):
@@ -393,7 +430,7 @@ async def test_click_omits_window_id_when_not_given(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            await conn.click("IB API")
+            await conn.request(Click("IB API"))
 
 
 async def test_click_includes_window_id_when_given(sock_path):
@@ -407,7 +444,7 @@ async def test_click_includes_window_id_when_given(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            await conn.click("OK", window_id="w7")
+            await conn.request(Click("OK", window_id="w7"))
 
 
 async def test_click_window_gone_raises_window_gone_error(sock_path):
@@ -423,7 +460,7 @@ async def test_click_window_gone_raises_window_gone_error(sock_path):
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
             with pytest.raises(WindowGoneError, match="no longer open"):
-                await conn.click("OK", window_id="w7")
+                await conn.request(Click("OK", window_id="w7"))
 
 
 async def test_navigate_menu_success(sock_path):
@@ -435,7 +472,7 @@ async def test_navigate_menu_success(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            assert await conn.navigate_menu("File/Close") is True
+            assert await conn.request(NavigateMenu("File/Close")) is True
 
 
 async def test_navigate_menu_reports_disabled_without_clicking(sock_path):
@@ -451,7 +488,7 @@ async def test_navigate_menu_reports_disabled_without_clicking(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            assert await conn.navigate_menu("Configure/Settings") is False
+            assert await conn.request(NavigateMenu("Configure/Settings")) is False
 
 
 async def test_navigate_menu_missing_clicked_raises_protocol_error(sock_path):
@@ -463,7 +500,7 @@ async def test_navigate_menu_missing_clicked_raises_protocol_error(sock_path):
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
             with pytest.raises(ProtocolError, match="no 'clicked'"):
-                await conn.navigate_menu("File/Close")
+                await conn.request(NavigateMenu("File/Close"))
 
 
 async def test_navigate_menu_sends_window_id_when_given(sock_path):
@@ -484,7 +521,8 @@ async def test_navigate_menu_sends_window_id_when_given(sock_path):
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
             assert (
-                await conn.navigate_menu("File/Global Configuration...", "w2") is True
+                await conn.request(NavigateMenu("File/Global Configuration...", "w2"))
+                is True
             )
 
 
@@ -497,7 +535,7 @@ async def test_navigate_menu_omits_window_id_when_none(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            assert await conn.navigate_menu("File/Close", None) is True
+            assert await conn.request(NavigateMenu("File/Close", None)) is True
 
 
 async def test_expand_tree_success(sock_path):
@@ -509,7 +547,7 @@ async def test_expand_tree_success(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            await conn.expand_tree("API/Settings")
+            await conn.request(ExpandTree("API/Settings"))
 
 
 async def test_set_text_near_label_success(sock_path):
@@ -526,7 +564,9 @@ async def test_set_text_near_label_success(sock_path):
 
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
-            await conn.set_text_near_label("Set Auto Restart Time (HH:MM)", 0, "09:30")
+            await conn.request(
+                SetTextNearLabel("Set Auto Restart Time (HH:MM)", 0, "09:30")
+            )
 
 
 @pytest.mark.parametrize(
@@ -552,7 +592,7 @@ async def test_error_codes_map_to_typed_exceptions(sock_path, code, exc_type):
     async with FakeCommandServer(sock, responder):
         async with AgentCommandConnection(sock) as conn:
             with pytest.raises(exc_type, match="boom"):
-                await conn.get_text("Password")
+                await conn.request(GetText("Password"))
 
 
 async def test_malformed_response_raises_protocol_error(sock_path):
@@ -623,8 +663,8 @@ async def test_concurrent_requests_do_not_interleave(sock_path):
     try:
         async with AgentCommandConnection(sock) as conn:
             results = await asyncio.gather(
-                conn.get_text("slow"),
-                conn.get_text("fast"),
+                conn.request(GetText("slow")),
+                conn.request(GetText("fast")),
             )
     finally:
         server.close()
@@ -686,23 +726,26 @@ async def test_write_to_a_gone_peer_raises_protocol_error(
 
             monkeypatch.setattr(conn._writer, "drain", drain)
             with pytest.raises(ProtocolError) as excinfo:
-                await conn.click("OK")
+                await conn.request(Click("OK"))
             assert excinfo.value.__cause__ is failure
             with pytest.raises(ProtocolError, match="connection broken"):
-                await conn.click("OK")
+                await conn.request(Click("OK"))
 
 
 @pytest.mark.parametrize(
     ("call", "response"),
     [
         (lambda conn: conn.ping(), {"ok": True, "version": "v"}),
-        (lambda conn: conn.dump(), {"ok": True}),
-        (lambda conn: conn.dump(), {"ok": True, "components": [{"name": "x"}]}),
-        (lambda conn: conn.dump(), {"ok": True, "components": "nope"}),
-        (lambda conn: conn.get_text("t"), {"ok": True}),
-        (lambda conn: conn.menu_item_exists("File/Exit", "w1"), {"ok": True}),
+        (lambda conn: conn.request(Dump()), {"ok": True}),
         (
-            lambda conn: conn.menu_item_exists("File/Exit", "w1"),
+            lambda conn: conn.request(Dump()),
+            {"ok": True, "components": [{"name": "x"}]},
+        ),
+        (lambda conn: conn.request(Dump()), {"ok": True, "components": "nope"}),
+        (lambda conn: conn.request(GetText("t")), {"ok": True}),
+        (lambda conn: conn.request(MenuItemExists("File/Exit", "w1")), {"ok": True}),
+        (
+            lambda conn: conn.request(MenuItemExists("File/Exit", "w1")),
             {"ok": True, "exists": True},
         ),
     ],
@@ -833,15 +876,17 @@ async def test_request_times_out_and_breaks_the_connection(sock_path):
     try:
         async with AgentCommandConnection(sock_path, request_timeout=0.1) as conn:
             with pytest.raises(ProtocolError, match=r"no response within 0\.1s"):
-                await conn.click("OK")
+                await conn.request(Click("OK"))
             with pytest.raises(ProtocolError, match="connection broken"):
-                await conn.click("OK")
+                await conn.request(Click("OK"))
     finally:
         server.close()
         await server.wait_closed()
 
 
-async def test_dump_uses_its_own_longer_timeout(sock_path):
+async def test_dump_uses_its_own_longer_timeout(sock_path, monkeypatch):
+    monkeypatch.setattr(Dump, "timeout", 2.0)
+
     async def handle(reader, writer):
         while await reader.readline():
             await asyncio.sleep(0.2)
@@ -851,25 +896,22 @@ async def test_dump_uses_its_own_longer_timeout(sock_path):
 
     server = await asyncio.start_unix_server(handle, path=str(sock_path))
     try:
-        async with AgentCommandConnection(
-            sock_path, request_timeout=0.05, dump_timeout=2.0
-        ) as conn:
-            assert await conn.dump() == []
+        async with AgentCommandConnection(sock_path, request_timeout=0.05) as conn:
+            assert await conn.request(Dump()) == []
             with pytest.raises(ProtocolError, match=r"no response within 0\.05s"):
-                await conn.click("OK")
+                await conn.request(Click("OK"))
     finally:
         server.close()
         await server.wait_closed()
 
 
-async def test_dump_times_out_at_its_own_limit(sock_path):
+async def test_dump_times_out_at_its_own_limit(sock_path, monkeypatch):
+    monkeypatch.setattr(Dump, "timeout", 0.1)
     server = await _silent_server(sock_path)
     try:
-        async with AgentCommandConnection(
-            sock_path, request_timeout=5.0, dump_timeout=0.1
-        ) as conn:
+        async with AgentCommandConnection(sock_path, request_timeout=5.0) as conn:
             with pytest.raises(ProtocolError, match=r"no response within 0\.1s"):
-                await conn.dump()
+                await conn.request(Dump())
     finally:
         server.close()
         await server.wait_closed()
@@ -889,7 +931,9 @@ async def test_time_waiting_for_the_lock_does_not_count_towards_the_timeout(
     try:
         async with AgentCommandConnection(sock_path, request_timeout=0.25) as conn:
             # The second caller waits ~0.15s for the lock, then ~0.15s on the wire.
-            results = await asyncio.gather(conn.get_text("a"), conn.get_text("b"))
+            results = await asyncio.gather(
+                conn.request(GetText("a")), conn.request(GetText("b"))
+            )
         assert results == ["v", "v"]
     finally:
         server.close()

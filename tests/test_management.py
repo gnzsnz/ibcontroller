@@ -148,7 +148,7 @@ async def test_clean_shutdown_terminates_when_the_agent_dies_mid_navigate_menu(
         async def drain():
             raise ConnectionResetError("reset by peer")
 
-        monkeypatch.setattr(dispatcher.command_conn._writer, "drain", drain)
+        monkeypatch.setattr(dispatcher._command_conn._writer, "drain", drain)
         process = FakeProcess(returncode=None)
         launched = _launched(process, dispatcher, sock_path, event_sock_path)
         await clean_shutdown(

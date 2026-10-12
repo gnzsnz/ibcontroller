@@ -48,7 +48,7 @@ async def clean_shutdown(
     ordinary buttons -- `click`'s `findByAccessibleName` lookup can never
     find them, since a `JMenu`'s dropdown lives in a `JPopupMenu`, outside
     the ordinary component tree while the menu is closed. Goes through
-    `actions.navigate_menu` rather than a direct `dispatcher.send_command`
+    `actions.navigate_menu` rather than a direct `dispatcher.send`
     call, so a shutdown landing while the menu item is momentarily disabled
     still retries instead of failing immediately; a short `timeout` bounds
     that retry so a genuinely stuck menu still falls through to the

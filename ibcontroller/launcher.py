@@ -113,10 +113,9 @@ class LaunchPlan:
 
 @dataclass(frozen=True)
 class LaunchedInstance:
-    """What `launch_instance` hands back. `management.clean_shutdown` and ad
-    hoc callers build `send_command` calls against `dispatcher.command_conn`
-    directly, so there's no separate `command_conn` field here to keep in
-    sync with it."""
+    """What `launch_instance` hands back. Commands go through
+    `dispatcher.send`, so there is no separate command connection field here
+    to keep in sync with it."""
 
     process: asyncio.subprocess.Process
     dispatcher: Dispatcher

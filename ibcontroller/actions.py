@@ -3,9 +3,8 @@ config rules, plugins, delegate responses) acts through -- a config rule's
 action string, a delegate's JSON, and a plugin's direct Python call all
 resolve to the same function.
 
-Each function is `async def foo(dispatcher, ...)` and runs one command
-through `dispatcher.send_command`, reached via `dispatcher.command_conn` (an
-`AgentCommandConnection`, see `agent_client.py`). Errors are
+Each function is `async def foo(dispatcher, ...)` and runs one command by
+sending its `agent_client.Request` through `dispatcher.send`. Errors are
 `agent_client.py`'s typed exceptions (`ElementNotFoundError`,
 `CredentialRefusedError`, `BadRequestError`, `UnknownCommandError`,
 `AgentError`, `ProtocolError`), propagated unchanged -- this module does not
@@ -22,16 +21,23 @@ know an action's effect has happened.
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any
 
 from typed_settings.types import Secret
 
 from ibcontroller.agent_client import (
+    Click,
     Component,
+    Dump,
     ElementNotFoundError,
+    ExpandTree,
+    GetText,
+    MenuItemExists,
+    NavigateMenu,
+    SetCheckbox,
+    SetText,
+    SetTextNearLabel,
     WindowInfo,
 )
 from ibcontroller.dispatch import Dispatcher
@@ -47,15 +53,6 @@ _MENU_NOT_FOUND_TIMEOUT = 5.0
 covers TWS populating its menu bar after login (#37, measured 0.3-0.6s)."""
 
 
-async def _forward(dispatcher: Dispatcher, method: str, *args: object) -> Any:
-    """Runs one `AgentCommandConnection` method (named by `method`) through
-    the dispatcher's command queue. Shared body for every action below that
-    adds no logic beyond that."""
-    return await dispatcher.send_command(
-        functools.partial(getattr(dispatcher.command_conn, method), *args)
-    )
-
-
 async def type_text(
     dispatcher: Dispatcher,
     field: str,
@@ -65,9 +62,9 @@ async def type_text(
 ) -> None:
     """Sets `field`'s text to `value`. `value` may be a `Secret`
     (credentials) or a plain string -- only ever unwrapped inside
-    `agent_client.set_text`. `window_id`, if given, scopes the action to one
+    `Request.wire`. `window_id`, if given, scopes the action to one
     window."""
-    await _forward(dispatcher, "set_text", field, value, window_id)
+    await dispatcher.send(SetText(field, value, window_id))
 
 
 async def click(
@@ -88,9 +85,7 @@ async def click(
     last_error: ElementNotFoundError | None = None
     for label in candidates:
         try:
-            await dispatcher.send_command(
-                functools.partial(dispatcher.command_conn.click, label, window_id)
-            )
+            await dispatcher.send(Click(label, window_id))
             return
         except ElementNotFoundError as exc:
             last_error = exc
@@ -109,7 +104,7 @@ async def toggle(
     """Sets `label`'s checkbox to `checked`. Idempotent on the agent side --
     only clicks if the current state differs from `checked`. `window_id`, if
     given, scopes the action to one window."""
-    await _forward(dispatcher, "set_checkbox", label, checked, window_id)
+    await dispatcher.send(SetCheckbox(label, checked, window_id))
 
 
 async def dismiss(
@@ -132,7 +127,7 @@ async def read_text(
     confirmation dialog can be anticipated. `window_id`, if given, scopes the
     read to one window. Raises `CredentialRefusedError` if `field` is a password
     field."""
-    return await _forward(dispatcher, "get_text", field, window_id)
+    return await dispatcher.send(GetText(field, window_id))
 
 
 async def type_text_near_label(
@@ -147,7 +142,7 @@ async def type_text_near_label(
     with no accessible name of their own. `value` may be a `Secret` or a
     plain string, same contract as `type_text`. `window_id`, if given,
     scopes the action to one window."""
-    await _forward(dispatcher, "set_text_near_label", label, index, value, window_id)
+    await dispatcher.send(SetTextNearLabel(label, index, value, window_id))
 
 
 async def navigate_menu(
@@ -186,11 +181,7 @@ async def navigate_menu(
     not_found_since: float | None = None
     while True:
         try:
-            clicked = await dispatcher.send_command(
-                functools.partial(
-                    dispatcher.command_conn.navigate_menu, path, window_id
-                )
-            )
+            clicked = await dispatcher.send(NavigateMenu(path, window_id))
         except ElementNotFoundError:
             now = loop.time()
             if not_found_since is None:
@@ -223,7 +214,7 @@ async def expand_tree(
     """Selects a section of the Global Configuration dialog's tree (e.g.
     `"API/Settings"`). `window_id`, if given, resolves directly to that
     dialog instead of searching by title."""
-    await _forward(dispatcher, "expand_tree", path, window_id)
+    await dispatcher.send(ExpandTree(path, window_id))
 
 
 async def menu_item_exists(
@@ -236,7 +227,7 @@ async def menu_item_exists(
     `window_id`, without clicking it. Returns `(exists, enabled)`.
     Diagnostic use -- e.g. checking readiness, or researching a new
     declarative recogniser/setting before it's authored."""
-    return await _forward(dispatcher, "menu_item_exists", path, window_id)
+    return await dispatcher.send(MenuItemExists(path, window_id))
 
 
 async def dump(
@@ -248,7 +239,7 @@ async def dump(
     """Returns the current component tree, optionally scoped by `window` (a
     title substring) or `window_id` (an exact window, taking precedence when
     both are given). Read-only."""
-    return await _forward(dispatcher, "dump", window, window_id)
+    return await dispatcher.send(Dump(window, window_id))
 
 
 async def wait_for_window(

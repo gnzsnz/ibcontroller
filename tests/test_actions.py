@@ -248,7 +248,7 @@ def test_actions_table_contains_the_real_vocabulary_only():
     this layer once login.py's TWS main-window detection became its first real
     caller (ported from IBC's own MainWindowFrameHandler.recogniseWindow). dump
     joined 2026-09-11, promoted from a direct, unqueued cmd_conn.dump() call in
-    settings.py -- routing it through send_command like every other action
+    settings.py -- routing it through Dispatcher.send like every other action
     closed a real serialization/tracing gap."""
     assert set(ACTIONS) == {
         "type_text",

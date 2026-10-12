@@ -185,12 +185,15 @@ Any contribution must follow this separation of concerns.
 
 - **Owns:** the two socket connections, JSON line framing, the typed message schemas
   (`attrs`/`cattrs`), and the typed exceptions mapping L2's error codes.
-- **Provides:** one typed method per agent command; an async iterator over event messages.
-- **Rules:** no scheduling, no fan-out, no imports from other `ibcontroller` modules. `set_text` and
-  `set_text_near_label` are the only places a `Secret` is unwrapped. The wire has no request IDs, so
+- **Provides:** one frozen `attrs` `Request` class per agent command (fields are the wire fields,
+  class-level `cmd` and `timeout`, `parse()` for the response), `request()` to send one, `ping()`
+  for the launcher probe; an async iterator over event messages.
+- **Rules:** no scheduling, no fan-out, no imports from other `ibcontroller` modules. A request
+  serializes itself: `Request.wire()` is the only place a `Secret` is unwrapped, `trace()` redacts
+  it. A new command is a new `Request` class, never a method. The wire has no request IDs, so
   a command connection that fails mid-request (transport error, malformed line, cancellation) is
   marked broken and every later request raises `ProtocolError`; there is no reconnect. Each
-  request's wire round trip is bounded (30 s, 60 s for `dump`; constants, not config) and a timeout
+  request's wire round trip is bounded (30 s, 60 s for `Dump`; constants, not config) and a timeout
   breaks the connection the same way. Transport
   and response-shape failures are `ProtocolError`; only `connect()` raises `OSError`.
 
@@ -198,7 +201,7 @@ Any contribution must follow this separation of concerns.
 
 - **Owns:** one `Dispatcher` per instance: both L3 connections, command serialization (one FIFO
   worker, one command on the wire at a time), event fan-out, and the optional wire trace.
-- **Provides:** `send_command`, `windows` (read-only registry of the open windows
+- **Provides:** `send(request)`, `windows` (read-only registry of the open windows
   by `window_id`), `subscribe()` (an eager, ordered, buffered stream of `WindowEvent`s with
   `wait(kind, matches, timeout)`), `tasks` (for L6 to detect a lost connection: the
   event reader ends on an event connection loss, the command worker on a broken command
@@ -207,13 +210,14 @@ Any contribution must follow this separation of concerns.
   (idempotent updates keyed by `window_id`; a `snapshot` replaces it). An `overflow` event ends the
   event reader with `ProtocolError` (events were lost, so `windows` can't be trusted). `stop()` never raises and
   closes both connections. When the worker ends (stop or broken connection) every queued and
-  in-flight caller, and any later `send_command`, gets `ProtocolError`.
+  in-flight caller, and any later `send`, gets `ProtocolError`.
 
 ### L5-1 Actions (`actions.py`, `labels.py`)
 
 - **Owns:** the action vocabulary (`click`, `type_text`, `toggle`, `navigate_menu`, `expand_tree`,
   `dump`, …), `wait_for_window` and the label data.
-- **Rules:** the only L5 code that calls `send_command`. L3 exceptions propagate unchanged.
+- **Rules:** the only L5 code that calls `Dispatcher.send`; each action builds its L3 `Request`.
+  L3 exceptions propagate unchanged.
   `wait_for_window(matches, closed=, timeout)` is the level wait (open or closed now, or later).
   Edge waits (the next window to open after an action) hold a `Dispatcher.subscribe()` across the
   action. Nothing outside L4 touches the raw event stream except through `subscribe()`. Actions

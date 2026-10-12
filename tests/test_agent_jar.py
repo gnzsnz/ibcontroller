@@ -16,6 +16,7 @@ from ibcontroller.agent_client import (
     AgentCommandConnection,
     AgentEventConnection,
     BadRequestError,
+    GetText,
     Hello,
     Snapshot,
     WindowGoneError,
@@ -117,7 +118,7 @@ async def test_agent_survives_repeated_connect_and_abrupt_close(agent):
 async def test_get_text_with_unknown_window_id_is_window_gone(agent):
     async with AgentCommandConnection(agent) as conn:
         with pytest.raises(WindowGoneError):
-            await conn.get_text("Username", window_id="nope")
+            await conn.request(GetText("Username", window_id="nope"))
         assert (await conn.ping()).version
 
 

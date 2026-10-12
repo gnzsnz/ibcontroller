@@ -6,7 +6,6 @@ tests use, so the queue/worker/fan-out logic gets real socket-level coverage."""
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import logging
 
@@ -16,9 +15,13 @@ from ibcontroller import dispatch
 from ibcontroller.agent_client import (
     AgentCommandConnection,
     AgentEventConnection,
+    Click,
     ElementNotFoundError,
+    GetText,
+    Ping,
     PingResult,
     ProtocolError,
+    Request,
     WindowEvent,
     WindowInfo,
 )
@@ -31,15 +34,15 @@ pytestmark = pytest.mark.asyncio
 
 async def _start(cmd_sock, event_sock) -> tuple[Dispatcher, AgentCommandConnection]:
     """Builds the same objects real calling code would: the caller owns the
-    connection object it passes in, and keeps using it to build `call` thunks for
-    `send_command` -- `Dispatcher` doesn't hand it back out."""
+    connection object it passes in, and keeps it for direct calls and state checks --
+    `Dispatcher` doesn't hand it back out."""
     cmd_conn = AgentCommandConnection(cmd_sock)
     dispatcher = Dispatcher(cmd_conn, AgentEventConnection(event_sock))
     await dispatcher.start()
     return dispatcher, cmd_conn
 
 
-async def test_send_command_returns_result(sock_path, event_sock_path):
+async def test_send_returns_result(sock_path, event_sock_path):
     event_sock = event_sock_path
 
     def responder(request):
@@ -50,16 +53,16 @@ async def test_send_command_returns_result(sock_path, event_sock_path):
         FakeCommandServer(sock_path, responder),
         FakeEventServer(event_sock, []),
     ):
-        dispatcher, cmd_conn = await _start(sock_path, event_sock)
+        dispatcher, _cmd_conn = await _start(sock_path, event_sock)
         try:
-            result = await dispatcher.send_command(cmd_conn.ping)
+            result = await dispatcher.send(Ping())
         finally:
             await dispatcher.stop()
 
     assert result == PingResult(version="0.0.1-dev", uptime_s=7)
 
 
-async def test_send_command_propagates_typed_exception(sock_path, event_sock_path):
+async def test_send_propagates_typed_exception(sock_path, event_sock_path):
     event_sock = event_sock_path
 
     def responder(_request):
@@ -69,15 +72,15 @@ async def test_send_command_propagates_typed_exception(sock_path, event_sock_pat
         FakeCommandServer(sock_path, responder),
         FakeEventServer(event_sock, []),
     ):
-        dispatcher, cmd_conn = await _start(sock_path, event_sock)
+        dispatcher, _cmd_conn = await _start(sock_path, event_sock)
         try:
             with pytest.raises(ElementNotFoundError, match="no such button"):
-                await dispatcher.send_command(lambda: cmd_conn.click("Log In"))
+                await dispatcher.send(Click("Log In"))
         finally:
             await dispatcher.stop()
 
 
-async def test_concurrent_send_commands_stay_ordered(sock_path, event_sock_path):
+async def test_concurrent_sends_stay_ordered(sock_path, event_sock_path):
     event_sock = event_sock_path
     call_order = []
 
@@ -98,11 +101,11 @@ async def test_concurrent_send_commands_stay_ordered(sock_path, event_sock_path)
 
     server = await asyncio.start_unix_server(handle, path=str(sock_path))
     async with FakeEventServer(event_sock, []):
-        dispatcher, cmd_conn = await _start(sock_path, event_sock)
+        dispatcher, _cmd_conn = await _start(sock_path, event_sock)
         try:
             results = await asyncio.gather(
-                dispatcher.send_command(lambda: cmd_conn.get_text("slow")),
-                dispatcher.send_command(lambda: cmd_conn.get_text("fast")),
+                dispatcher.send(GetText("slow")),
+                dispatcher.send(GetText("fast")),
             )
         finally:
             await dispatcher.stop()
@@ -127,15 +130,18 @@ async def test_worker_survives_unexpected_exception(sock_path, event_sock_path):
     ):
         dispatcher, cmd_conn = await _start(sock_path, event_sock)
         try:
+            real_request = cmd_conn.request
 
-            async def boom():
+            async def boom(request):
+                cmd_conn.request = real_request  # fail the first command only
                 raise RuntimeError("unexpected bug")
 
+            cmd_conn.request = boom
             with pytest.raises(RuntimeError, match="unexpected bug"):
-                await dispatcher.send_command(boom)
+                await dispatcher.send(Click("IB API"))
 
             # the worker task must still be alive and processing commands
-            result = await dispatcher.send_command(lambda: cmd_conn.click("IB API"))
+            result = await dispatcher.send(Click("IB API"))
             assert result is None
         finally:
             await dispatcher.stop()
@@ -274,7 +280,7 @@ async def test_trace_mode_writes_both_files(sock_path, event_sock_path, tmp_path
                 instance="paper",
             )
             await dispatcher.start()
-            await dispatcher.send_command(functools.partial(cmd_conn.click, "IB API"))
+            await dispatcher.send(Click("IB API"))
             await asyncio.sleep(0.05)  # let the event line land
             await dispatcher.stop()
 
@@ -292,7 +298,7 @@ async def test_trace_mode_writes_both_files(sock_path, event_sock_path, tmp_path
 
     assert [entry["direction"] for entry in cmd_lines] == ["sent", "result"]
     assert cmd_lines[0]["cmd"] == "click"
-    assert cmd_lines[0]["args"] == ["IB API"]
+    assert cmd_lines[0]["args"] == {"target": "IB API"}
     assert all("_ts" in entry for entry in cmd_lines)
 
     assert [entry["class"] for entry in event_lines] == ["Keepalive"]
@@ -328,7 +334,7 @@ async def test_trace_mode_truncates_stale_files_on_start(
             cmd_conn, AgentEventConnection(event_sock_path), instance="paper"
         )
         await dispatcher.start()
-        await dispatcher.send_command(functools.partial(cmd_conn.click, "IB API"))
+        await dispatcher.send(Click("IB API"))
         await dispatcher.stop()
 
     stop_logging()
@@ -357,7 +363,7 @@ async def test_trace_disabled_emits_no_files(sock_path, event_sock_path, tmp_pat
             cmd_conn, AgentEventConnection(event_sock_path), instance="paper"
         )
         await dispatcher.start()
-        await dispatcher.send_command(functools.partial(cmd_conn.click, "IB API"))
+        await dispatcher.send(Click("IB API"))
         await dispatcher.stop()
 
     stop_logging()
@@ -410,16 +416,16 @@ async def test_stop_returns_and_closes_after_event_reader_failed(
 
 async def test_stop_fails_in_flight_and_queued_callers(sock_path, event_sock_path):
     async with _SilentCommandServer(sock_path), FakeEventServer(event_sock_path, []):
-        dispatcher, cmd_conn = await _start(sock_path, event_sock_path)
-        in_flight = asyncio.ensure_future(dispatcher.send_command(cmd_conn.ping))
-        queued = asyncio.ensure_future(dispatcher.send_command(cmd_conn.ping))
+        dispatcher, _cmd_conn = await _start(sock_path, event_sock_path)
+        in_flight = asyncio.ensure_future(dispatcher.send(Ping()))
+        queued = asyncio.ensure_future(dispatcher.send(Ping()))
         await asyncio.sleep(0.05)
         await dispatcher.stop()
         for future in (in_flight, queued):
             with pytest.raises(ProtocolError, match="dispatcher stopped"):
                 await asyncio.wait_for(future, timeout=1)
         with pytest.raises(ProtocolError, match="dispatcher stopped"):
-            await dispatcher.send_command(cmd_conn.ping)
+            await dispatcher.send(Ping())
 
 
 async def test_broken_command_connection_ends_worker_and_fails_pending(
@@ -430,8 +436,8 @@ async def test_broken_command_connection_ends_worker_and_fails_pending(
         dispatcher = Dispatcher(cmd_conn, AgentEventConnection(event_sock_path))
         await dispatcher.start()
         try:
-            first = asyncio.ensure_future(dispatcher.send_command(cmd_conn.ping))
-            queued = asyncio.ensure_future(dispatcher.send_command(cmd_conn.ping))
+            first = asyncio.ensure_future(dispatcher.send(Ping()))
+            queued = asyncio.ensure_future(dispatcher.send(Ping()))
             with pytest.raises(ProtocolError, match="no response"):
                 await asyncio.wait_for(first, timeout=2)
             with pytest.raises(ProtocolError, match="connection broken"):
@@ -439,7 +445,7 @@ async def test_broken_command_connection_ends_worker_and_fails_pending(
             await asyncio.wait([dispatcher.tasks[1]], timeout=2)
             assert dispatcher.tasks[1].done()
             with pytest.raises(ProtocolError, match="connection broken"):
-                await dispatcher.send_command(cmd_conn.ping)
+                await dispatcher.send(Ping())
         finally:
             await dispatcher.stop()
 
@@ -460,10 +466,10 @@ async def test_unusable_response_shape_does_not_end_worker(sock_path, event_sock
         dispatcher, cmd_conn = await _start(sock_path, event_sock_path)
         try:
             with pytest.raises(ProtocolError):
-                await dispatcher.send_command(cmd_conn.ping)
+                await dispatcher.send(Ping())
             assert not cmd_conn.broken
             assert not dispatcher.tasks[1].done()
-            await dispatcher.send_command(lambda: cmd_conn.click("IB API"))
+            await dispatcher.send(Click("IB API"))
         finally:
             await dispatcher.stop()
 
@@ -506,8 +512,8 @@ async def test_trace_sent_line_is_written_when_the_worker_takes_it(
         await dispatcher.start()
         try:
             await asyncio.gather(
-                dispatcher.send_command(functools.partial(cmd_conn.get_text, "slow")),
-                dispatcher.send_command(functools.partial(cmd_conn.get_text, "fast")),
+                dispatcher.send(GetText("slow")),
+                dispatcher.send(GetText("fast")),
             )
         finally:
             await dispatcher.stop()
@@ -530,7 +536,7 @@ async def test_trace_payloads_not_built_when_tracing_is_off(
     def boom(*_args, **_kwargs):
         raise AssertionError("trace payload built with tracing off")
 
-    monkeypatch.setattr(dispatch, "_describe_call", boom)
+    monkeypatch.setattr(Request, "trace", boom)
     monkeypatch.setattr(dispatch, "_safe_unstructure", boom)
     monkeypatch.setattr(dispatch, "_describe_event", boom)
 
@@ -538,9 +544,9 @@ async def test_trace_payloads_not_built_when_tracing_is_off(
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, [{"type": "keepalive", "ts": 1}]),
     ):
-        dispatcher, cmd_conn = await _start(sock_path, event_sock_path)
+        dispatcher, _cmd_conn = await _start(sock_path, event_sock_path)
         try:
-            await dispatcher.send_command(lambda: cmd_conn.click("IB API"))
+            await dispatcher.send(Click("IB API"))
             await asyncio.sleep(0.05)  # let the keepalive event through
         finally:
             await dispatcher.stop()
