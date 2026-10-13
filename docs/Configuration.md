@@ -213,3 +213,10 @@ built-in entries -- the built-ins fire first, then the extra file's entries
 override them. The built-ins only act when their own config key is set:
 `read_only_api` applies when it's `true`/`false` and is skipped when `None`;
 `auto_restart_time`/`auto_logoff_time` apply only when a value is set.
+
+Other Global Configuration settings go in your own file. `ibkr_settings.toml.example`
+carries worked entries, including commented ones for the API socket port
+(`socket_port`), the master API client ID (`master_api_client_id`) and
+`send_market_data_in_lots_us_stocks`, all on the `API/Settings` panel. The port and
+client ID are text fields found by their label (`type_text_near_label`), so their
+`value` is a string.

@@ -41,6 +41,16 @@ def test_bundled_default_loads_and_structures():
     assert non_brokerage.click == "I understand and accept"
 
 
+def test_api_settings_controls_are_in_the_bundled_file():
+    controls = load_labels().settings.controls
+    assert controls["socket_port"] == "Socket port"
+    assert controls["master_api_client_id"] == "Master API client ID"
+    assert controls["send_market_data_in_lots_us_stocks"] == (
+        "Send market data in lots for US stocks for dual-mode API clients "
+        "(Not recommended)."
+    )
+
+
 def test_generic_dismiss_buttons_load_from_bundled_file():
     assert load_labels().generic.dismiss_buttons == ["OK", "Close", "Dismiss"]
 

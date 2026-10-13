@@ -344,7 +344,9 @@ are applied once, right after login, from two layers combined into one list:
 - **Your own `ibkr_settings.toml`** — anything else: any other Global Configuration
   checkbox or text field, activated by pointing `[settings] file = "..."` (or
   `IBC_SETTINGS_FILE`) at a real file (rename `ibkr_settings.toml.example` to
-  start from the bundled worked examples, e.g. the `api_precautions_*` toggles).
+  start from the bundled worked examples: the `api_precautions_*` toggles, plus commented
+  entries for the API socket port, the master API client ID and "Send market data in lots
+  for US stocks" under `API/Settings`).
 
 An entry looks like this:
 

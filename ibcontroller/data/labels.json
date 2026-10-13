@@ -77,6 +77,9 @@
     "splash_title_marker": "Starting application...",
     "controls": {
       "read_only_api": "Read-Only API",
+      "socket_port": "Socket port",
+      "master_api_client_id": "Master API client ID",
+      "send_market_data_in_lots_us_stocks": "Send market data in lots for US stocks for dual-mode API clients (Not recommended).",
       "api_precautions_bypass_order_precautions": "Bypass Order Precautions for API Orders",
       "api_precautions_bypass_bond_warning": "Bypass Bond warning for API Orders.",
       "api_precautions_bypass_negative_yield_to_worst": "Bypass negative yield to worst confirmation for API Orders.",

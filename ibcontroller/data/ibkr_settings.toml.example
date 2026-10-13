@@ -58,6 +58,36 @@
 # Not supported by any action here yet. Nothing declared below
 # needs one.
 
+# --- API socket (API/Settings) --------------------------------------------------------
+# Commented out: uncomment and edit the value to apply. Ports IBC's OverrideTwsApiPort,
+# OverrideTwsMasterClientID and SendMarketDataInLotsForUSstocks. Both text values are
+# strings. Changing the port or client ID on TWS while "Enable ActiveX and Socket
+# Clients" is checked may open a TWS-only confirmation dialog; check the log after the
+# first run.
+
+# Socket port: uncomment the entry and exactly one value line, the one for your program
+# and trading mode (IBKR's default ports).
+# [[settings]]
+# tree_path = "API/Settings"
+# action = "type_text_near_label"
+# label_ref = "socket_port"
+# value = "7496"    # TWS live
+# value = "7497"    # TWS paper
+# value = "4001"    # Gateway live
+# value = "4002"    # Gateway paper
+
+# [[settings]]
+# tree_path = "API/Settings"
+# action = "type_text_near_label"
+# label_ref = "master_api_client_id"
+# value = "0"
+
+# [[settings]]
+# tree_path = "API/Settings"
+# action = "toggle"
+# label_ref = "send_market_data_in_lots_us_stocks"
+# value = true
+
 # --- API precautions (API/Precautions) ------------------------------------------------
 
 [[settings]]
