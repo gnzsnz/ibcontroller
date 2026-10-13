@@ -582,6 +582,18 @@ async def _sleep_until_scheduled_shutdown(config: Config) -> ShutdownCause:
     )
 
 
+async def _reap(task: asyncio.Task, name: str) -> None:
+    """Cancels `task` and awaits it. A task that already died with an
+    exception is logged, not re-raised, so shutdown always proceeds (#97)."""
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.warning("IBController > %s ended with %r", name, exc)
+
+
 async def _run_one_cycle(  # noqa: PLR0915
     config: Config,
     agent_jar: str | Path,
@@ -728,14 +740,10 @@ async def _run_one_cycle(  # noqa: PLR0915
         )
         raise
     finally:
-        process_done.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await process_done
+        await _reap(process_done, "process wait")
         _log_transition(state, StartupState.SHUTTING_DOWN)
         state = StartupState.SHUTTING_DOWN
-        diagnostics_watcher.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await diagnostics_watcher
+        await _reap(diagnostics_watcher, "diagnostics watcher")
         # The watcher keeps running during shutdown: exiting can raise dialogs.
         try:
             await _run_to_completion(
@@ -748,8 +756,6 @@ async def _run_one_cycle(  # noqa: PLR0915
                 )
             )
         finally:
-            watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watcher
+            await _reap(watcher, "watcher")
     logger.info("IBController > control loop cycle stopped: %s", cause.name)
     return cause, launched.settings_dir

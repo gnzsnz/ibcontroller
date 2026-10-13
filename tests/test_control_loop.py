@@ -24,6 +24,7 @@ from ibcontroller.agent_client import (
     AgentCommandConnection,
     AgentEventConnection,
     ElementNotFoundError,
+    ProtocolError,
     WindowEvent,
     WindowInfo,
 )
@@ -1087,3 +1088,58 @@ async def test_run_one_cycle_cancels_watcher_when_clean_shutdown_raises(
     with pytest.raises(RuntimeError, match="shutdown broke"):
         await control_loop._run_one_cycle(_config(), "agent.jar", LABELS)
     assert watcher_cancelled.is_set()
+
+
+async def test_run_one_cycle_shuts_down_when_diagnostics_watcher_died(
+    monkeypatch, sock_path, event_sock_path, caplog
+):
+    """A background task that died with an exception must not abort the
+    `finally` before `clean_shutdown` runs, or the JVM is left running (#97)."""
+    shutdown_called = asyncio.Event()
+
+    async def forever(*_args, **_kwargs):
+        await asyncio.sleep(3600)
+
+    async def dead_diagnostics(*_args, **_kwargs):
+        raise ProtocolError("socket closed")
+
+    class _Manager:
+        state = None
+        main_window_id = None
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def run(self) -> None:
+            await asyncio.sleep(3600)
+
+        def is_logged_in(self) -> bool:
+            return False
+
+    async def launch(*_args, **_kwargs):
+        return LaunchedInstance(
+            # pyrefly: ignore [bad-argument-type]
+            process=FakeProcess(returncode=0),
+            dispatcher=Dispatcher(
+                AgentCommandConnection(sock_path), AgentEventConnection(event_sock_path)
+            ),
+            command_socket_path=str(sock_path),
+            event_socket_path=str(event_sock_path),
+            settings_dir=f"{gettempdir()}/settings",
+            stdout_drain_task=asyncio.ensure_future(asyncio.sleep(0)),
+        )
+
+    async def shutdown(*_args, **_kwargs):
+        shutdown_called.set()
+
+    monkeypatch.setattr(control_loop, "launch_instance", launch)
+    monkeypatch.setattr(control_loop, "LoginManager", _Manager)
+    monkeypatch.setattr(control_loop, "_build_registry", lambda *_a: None)
+    monkeypatch.setattr(control_loop, "watch_for_unprompted_windows", forever)
+    monkeypatch.setattr(control_loop, "watch_for_diagnostics", dead_diagnostics)
+    monkeypatch.setattr(control_loop, "clean_shutdown", shutdown)
+
+    with caplog.at_level(logging.WARNING):
+        await control_loop._run_one_cycle(_config(), "agent.jar", LABELS)
+    assert shutdown_called.is_set()
+    assert "diagnostics watcher ended with" in caplog.text
