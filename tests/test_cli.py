@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 from ibcontroller import cli as _cli
 from ibcontroller import main as _main
 from ibcontroller.agent_client import AgentClientError
-from ibcontroller.config import ConfigError
+from ibcontroller.config import ConfigError, Program
 from ibcontroller.control_loop import ShutdownCause
 from ibcontroller.labels import LabelsError
 from ibcontroller.launcher import AgentStartupError, LauncherError
@@ -307,3 +307,21 @@ def test_run_labels_error_exits_78_with_labels_hint(tmp_path, monkeypatch):
     assert "expected a list of strings" in result.output
     assert "labels.json" in result.output
     assert "ibcontroller.toml" not in result.output
+
+
+def test_run_program_flag_is_case_insensitive(tmp_path, monkeypatch):
+    monkeypatch.setenv("IBC_APP_DIR", str(tmp_path / "app"))
+    captured = {}
+
+    async def fake_run_async(
+        config_dir, log_dir, *, dotenv_path=None, cli_overrides=None
+    ):
+        captured.update(cli_overrides or {})
+        return ShutdownCause.REQUESTED
+
+    monkeypatch.setattr(_main, "run_async", fake_run_async)
+
+    result = runner.invoke(_cli.app, ["run", "--program=TWS"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {"program": Program.TWS}

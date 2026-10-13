@@ -24,6 +24,7 @@ from ibcontroller.config import (
     Config,
     ConfigError,
     MissingCredentialsError,
+    Program,
     TradingMode,
 )
 from ibcontroller.control_loop import OPERATIONAL_ERRORS as _CYCLE_OPERATIONAL_ERRORS
@@ -189,9 +190,10 @@ def run(  # noqa: PLR0913, PLR0917 -- one typer.Option per Config field, not
         help="Override Config.tws_channel ('stable'/'latest', filters install "
         "auto-detection) for this invocation.",
     ),
-    program: str | None = typer.Option(
+    program: Program | None = typer.Option(  # noqa: B008
         None,
         "--program",
+        case_sensitive=False,
         help="Override Config.program ('gateway'/'tws') for this invocation.",
     ),
     tws_settings_path: Path | None = typer.Option(  # noqa: B008

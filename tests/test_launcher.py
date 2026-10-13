@@ -20,7 +20,7 @@ import attrs
 import pytest
 from typed_settings.types import Secret
 
-from ibcontroller.config import Config, LogSink, TradingMode
+from ibcontroller.config import Config, LogSink, Program, TradingMode
 from ibcontroller.labels import load_labels
 from ibcontroller.launcher import (
     AgentStartupError,
@@ -217,7 +217,7 @@ def test_build_launch_plan_creates_jts_ini(tmp_path, run_dir):
     base = _make_synthetic_install(tmp_path, os_name="macos")
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="paper",
@@ -235,22 +235,22 @@ def test_resolve_tws_path_explicit_override():
 
 
 def test_program_path_macos_gateway(tmp_path):
-    path = _program_path("gateway", "macos", tmp_path, "10.50")
+    path = _program_path(Program.GATEWAY, "macos", tmp_path, "10.50")
     assert path == tmp_path / "IB Gateway 10.50"
 
 
 def test_program_path_macos_tws(tmp_path):
-    path = _program_path("tws", "macos", tmp_path, "10.50")
+    path = _program_path(Program.TWS, "macos", tmp_path, "10.50")
     assert path == tmp_path / "Trader Workstation 10.50"
 
 
 def test_program_path_linux_gateway(tmp_path):
-    path = _program_path("gateway", "linux", tmp_path, "10.50")
+    path = _program_path(Program.GATEWAY, "linux", tmp_path, "10.50")
     assert path == tmp_path / "ibgateway" / "10.50"
 
 
 def test_program_path_linux_tws(tmp_path):
-    path = _program_path("tws", "linux", tmp_path, "10.50")
+    path = _program_path(Program.TWS, "linux", tmp_path, "10.50")
     assert path == tmp_path / "10.50"
 
 
@@ -259,7 +259,7 @@ def test_resolve_program_path_macos_prefers_tws_install(tmp_path):
     install whenever its `jars/` exists -- IBC's own ibcstart.sh priority."""
     _make_version_dir(tmp_path, "Trader Workstation 10.50")
     _make_version_dir(tmp_path, "IB Gateway 10.50")
-    path, resolved = _resolve_program_path("tws", "macos", tmp_path, "10.50")
+    path, resolved = _resolve_program_path(Program.TWS, "macos", tmp_path, "10.50")
     assert path == tmp_path / "Trader Workstation 10.50"
     assert resolved == "tws"
 
@@ -271,14 +271,14 @@ def test_resolve_program_path_macos_falls_back_to_gateway_install(tmp_path):
     existence check as IBC's `if [[ ! -e .../jars ]]`."""
     (tmp_path / "Trader Workstation 10.50").mkdir()  # exists, but no jars/
     _make_version_dir(tmp_path, "IB Gateway 10.50")
-    path, resolved = _resolve_program_path("tws", "macos", tmp_path, "10.50")
+    path, resolved = _resolve_program_path(Program.TWS, "macos", tmp_path, "10.50")
     assert path == tmp_path / "IB Gateway 10.50"
     assert resolved == "gateway"
 
 
 def test_resolve_program_path_linux_tws_falls_back_to_ibgateway(tmp_path):
     _make_version_dir(tmp_path / "ibgateway", "10.50")
-    path, resolved = _resolve_program_path("tws", "linux", tmp_path, "10.50")
+    path, resolved = _resolve_program_path(Program.TWS, "linux", tmp_path, "10.50")
     assert path == tmp_path / "ibgateway" / "10.50"
     assert resolved == "gateway"
 
@@ -287,7 +287,7 @@ def test_resolve_program_path_gateway_never_falls_back_to_tws(tmp_path):
     """Scope decision (2026-09-13, gitea #25): only TWS->Gateway exists. A Gateway
     request returns the Gateway path even when a TWS install is present instead."""
     _make_version_dir(tmp_path, "Trader Workstation 10.50")
-    path, resolved = _resolve_program_path("gateway", "macos", tmp_path, "10.50")
+    path, resolved = _resolve_program_path(Program.GATEWAY, "macos", tmp_path, "10.50")
     assert path == tmp_path / "IB Gateway 10.50"
     assert resolved == "gateway"
 
@@ -606,14 +606,14 @@ def test_version_sort_key_orders_numerically_not_lexically():
 def test_list_version_candidates_macos_gateway(tmp_path):
     _make_version_dir(tmp_path, "IB Gateway 10.45", channel="stable")
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
-    candidates = _list_version_candidates(tmp_path, "macos", "gateway")
+    candidates = _list_version_candidates(tmp_path, "macos", Program.GATEWAY)
     assert sorted(version for version, _ in candidates) == ["10.45", "10.50"]
 
 
 def test_list_version_candidates_ignores_dirs_without_jars(tmp_path):
     (tmp_path / "IB Gateway 10.45").mkdir()  # no jars/ subdirectory
     _make_version_dir(tmp_path, "IB Gateway 10.50")
-    candidates = _list_version_candidates(tmp_path, "macos", "gateway")
+    candidates = _list_version_candidates(tmp_path, "macos", Program.GATEWAY)
     assert [version for version, _ in candidates] == ["10.50"]
 
 
@@ -621,14 +621,14 @@ def test_list_version_candidates_linux_gateway(tmp_path):
     gw_dir = tmp_path / "ibgateway"
     _make_version_dir(gw_dir, "10.45", channel="stable")
     _make_version_dir(gw_dir, "10.50", channel="latest")
-    candidates = _list_version_candidates(tmp_path, "linux", "gateway")
+    candidates = _list_version_candidates(tmp_path, "linux", Program.GATEWAY)
     assert sorted(version for version, _ in candidates) == ["10.45", "10.50"]
 
 
 def test_list_version_candidates_linux_tws_excludes_ibgateway_dir(tmp_path):
     _make_version_dir(tmp_path, "10.45")
     _make_version_dir(tmp_path / "ibgateway", "10.50")  # a gateway install alongside
-    candidates = _list_version_candidates(tmp_path, "linux", "tws")
+    candidates = _list_version_candidates(tmp_path, "linux", Program.TWS)
     assert [version for version, _ in candidates] == ["10.45"]
 
 
@@ -637,7 +637,7 @@ def test_list_version_candidates_macos_tws_prefers_tws_installs(tmp_path):
     install present alongside a Gateway one must win (IBC's priority, gitea #25)."""
     _make_version_dir(tmp_path, "Trader Workstation 10.45")
     _make_version_dir(tmp_path, "IB Gateway 10.50")
-    candidates = _list_version_candidates(tmp_path, "macos", "tws")
+    candidates = _list_version_candidates(tmp_path, "macos", Program.TWS)
     assert [version for version, _ in candidates] == ["10.45"]
 
 
@@ -647,19 +647,19 @@ def test_list_version_candidates_macos_tws_falls_back_to_gateway_installs(tmp_pa
     filter, applied later in `_detect_tws_version`, still gates them uniformly)."""
     _make_version_dir(tmp_path, "IB Gateway 10.45", channel="stable")
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
-    candidates = _list_version_candidates(tmp_path, "macos", "tws")
+    candidates = _list_version_candidates(tmp_path, "macos", Program.TWS)
     assert sorted(version for version, _ in candidates) == ["10.45", "10.50"]
 
 
 def test_list_version_candidates_linux_tws_falls_back_to_ibgateway(tmp_path):
     _make_version_dir(tmp_path / "ibgateway", "10.50")
-    candidates = _list_version_candidates(tmp_path, "linux", "tws")
+    candidates = _list_version_candidates(tmp_path, "linux", Program.TWS)
     assert [version for version, _ in candidates] == ["10.50"]
 
 
 def test_detect_tws_version_single_candidate(tmp_path):
     _make_version_dir(tmp_path, "IB Gateway 10.45", channel="stable")
-    assert _detect_tws_version(tmp_path, "macos", "gateway", None) == "10.45"
+    assert _detect_tws_version(tmp_path, "macos", Program.GATEWAY, None) == "10.45"
 
 
 def test_detect_tws_version_multiple_candidates_picks_greatest(tmp_path):
@@ -668,7 +668,7 @@ def test_detect_tws_version_multiple_candidates_picks_greatest(tmp_path):
     given."""
     _make_version_dir(tmp_path, "IB Gateway 10.45", channel="stable")
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
-    assert _detect_tws_version(tmp_path, "macos", "gateway", None) == "10.50"
+    assert _detect_tws_version(tmp_path, "macos", Program.GATEWAY, None) == "10.50"
 
 
 def test_detect_tws_version_channel_filter_picks_the_greatest_within_it(tmp_path):
@@ -677,25 +677,25 @@ def test_detect_tws_version_channel_filter_picks_the_greatest_within_it(tmp_path
     against real installs (IB Gateway 10.45 -> stable, IB Gateway 10.50 -> latest)."""
     _make_version_dir(tmp_path, "IB Gateway 10.45", channel="stable")
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
-    assert _detect_tws_version(tmp_path, "macos", "gateway", "stable") == "10.45"
+    assert _detect_tws_version(tmp_path, "macos", Program.GATEWAY, "stable") == "10.45"
 
 
 def test_detect_tws_version_zero_candidates_raises(tmp_path):
     with pytest.raises(LauncherError, match="no gateway installation found"):
-        _detect_tws_version(tmp_path, "macos", "gateway", None)
+        _detect_tws_version(tmp_path, "macos", Program.GATEWAY, None)
 
 
 def test_detect_tws_version_channel_filter_matches_nothing_raises(tmp_path):
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
     with pytest.raises(LauncherError, match="channel='stable'"):
-        _detect_tws_version(tmp_path, "macos", "gateway", "stable")
+        _detect_tws_version(tmp_path, "macos", Program.GATEWAY, "stable")
 
 
 def test_detect_tws_version_tws_falls_back_to_gateway_tree(tmp_path):
     """A TWS request with no TWS install auto-detects against the Gateway
     installs (gitea #25) -- channel-aware like the primary tree."""
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="stable")
-    assert _detect_tws_version(tmp_path, "macos", "tws", "stable") == "10.50"
+    assert _detect_tws_version(tmp_path, "macos", Program.TWS, "stable") == "10.50"
 
 
 def test_detect_tws_version_tws_falls_back_when_tws_on_wrong_channel(tmp_path):
@@ -708,7 +708,7 @@ def test_detect_tws_version_tws_falls_back_when_tws_on_wrong_channel(tmp_path):
     consult the Gateway pool, not to error."""
     _make_version_dir(tmp_path, "Trader Workstation 10.45", channel="stable")
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
-    assert _detect_tws_version(tmp_path, "macos", "tws", "latest") == "10.50"
+    assert _detect_tws_version(tmp_path, "macos", Program.TWS, "latest") == "10.50"
 
 
 def test_detect_tws_version_tws_channel_filter_picks_tws_when_it_matches(tmp_path):
@@ -716,7 +716,7 @@ def test_detect_tws_version_tws_channel_filter_picks_tws_when_it_matches(tmp_pat
     channel -- the fallback only engages when the TWS pool filters empty."""
     _make_version_dir(tmp_path, "Trader Workstation 10.45", channel="stable")
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="stable")
-    assert _detect_tws_version(tmp_path, "macos", "tws", "stable") == "10.45"
+    assert _detect_tws_version(tmp_path, "macos", Program.TWS, "stable") == "10.45"
 
 
 def test_detect_tws_version_tws_channel_filter_still_strict_on_fallback_tree(tmp_path):
@@ -725,14 +725,14 @@ def test_detect_tws_version_tws_channel_filter_still_strict_on_fallback_tree(tmp
     `latest` Gateway exists is a config error, surfaced, not silently satisfied."""
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
     with pytest.raises(LauncherError, match="channel='stable'"):
-        _detect_tws_version(tmp_path, "macos", "tws", "stable")
+        _detect_tws_version(tmp_path, "macos", Program.TWS, "stable")
 
 
 def test_build_launch_plan_macos_gateway(tmp_path, run_dir):
     base = _make_synthetic_install(tmp_path, os_name="macos")
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="paper",
@@ -786,7 +786,7 @@ def test_build_launch_plan_macos_keeps_real_dprops_from_i4jparams(tmp_path, run_
     )
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="paper",
@@ -804,7 +804,7 @@ def test_build_launch_plan_java_heap_size_overrides_vmoptions_file(tmp_path, run
     base = _make_synthetic_install(tmp_path, os_name="macos")
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="paper",
@@ -827,7 +827,7 @@ def test_build_launch_plan_auto_detects_tws_version_when_unset(tmp_path, run_dir
         '<variable name="channel" value="stable" />\n'
     )
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -850,7 +850,7 @@ def test_build_launch_plan_reads_channel_dynamically(tmp_path, run_dir):
         '<variable name="channel" value="stable" />\n'
     )
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -870,7 +870,7 @@ def test_build_launch_plan_channel_falls_back_to_config_when_not_found(
     and warns about it (tea #58)."""
     base = _make_synthetic_install(tmp_path, os_name="macos")  # no i4jparams.conf
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -894,7 +894,7 @@ def test_build_launch_plan_channel_from_install_does_not_warn(
         '<variable name="channel" value="latest" />\n'
     )
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -915,7 +915,7 @@ def test_build_launch_plan_sets_install_dir_with_trailing_slash(tmp_path, run_di
     `locales.jar` (tea #58)."""
     base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -929,7 +929,7 @@ def test_build_launch_plan_sets_install_dir_with_trailing_slash(tmp_path, run_di
 def test_build_launch_plan_omits_restart_flag_when_hash_not_given(tmp_path, run_dir):
     base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -948,7 +948,7 @@ def test_build_launch_plan_adds_agent_logging_flags(tmp_path, run_dir):
     level is passed as the string name matching AgentMain.parseLevel."""
     base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -981,7 +981,7 @@ def test_build_launch_plan_adds_restart_flag_when_hash_given(tmp_path, run_dir):
     file's mere presence is not sufficient by itself."""
     base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -1007,7 +1007,7 @@ def test_build_launch_plan_macos_gateway_survives_relaunch_after_rename(
     base = _make_synthetic_install(tmp_path, os_name="macos")
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="paper",
@@ -1025,10 +1025,10 @@ def test_build_launch_plan_macos_gateway_survives_relaunch_after_rename(
 
 
 def test_build_launch_plan_linux_tws(tmp_path, run_dir):
-    base = _make_synthetic_install(tmp_path, os_name="linux", program="tws")
+    base = _make_synthetic_install(tmp_path, os_name="linux", program=Program.TWS)
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="tws",
+        program=Program.TWS,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="live",
@@ -1060,7 +1060,7 @@ def test_build_launch_plan_linux_reads_add_opens_from_i4jparams(tmp_path, run_di
     `InaccessibleObjectException` because `tws.vmoptions` never carries
     `--add-opens`/`--add-exports` -- only install4j's own `javaOptions`
     variable in `i4jparams.conf` does (confirmed live, 2026-09-14)."""
-    base = _make_synthetic_install(tmp_path, os_name="linux", program="tws")
+    base = _make_synthetic_install(tmp_path, os_name="linux", program=Program.TWS)
     program_path = base / "10.50"
     (program_path / ".install4j" / "i4jparams.conf").write_text(
         '<variable name="javaOptions" value="--add-opens=java.desktop/'
@@ -1068,7 +1068,7 @@ def test_build_launch_plan_linux_reads_add_opens_from_i4jparams(tmp_path, run_di
     )
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="tws",
+        program=Program.TWS,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="live",
@@ -1084,14 +1084,14 @@ def test_build_launch_plan_linux_jxbrowser_key_appears_once(tmp_path, run_dir):
     """gitea #55: `-DjxBrowserKey` comes solely from `i4jparams.conf`'s
     `javaOptions` blob (via `_read_i4j_vmoptions`) -- `build_launch_plan`
     must not add a second, explicit copy on top of it."""
-    base = _make_synthetic_install(tmp_path, os_name="linux", program="tws")
+    base = _make_synthetic_install(tmp_path, os_name="linux", program=Program.TWS)
     program_path = base / "10.50"
     (program_path / ".install4j" / "i4jparams.conf").write_text(
         '<variable name="javaOptions" value="-DjxBrowserKey=ABC123" />\n'
     )
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="tws",
+        program=Program.TWS,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="live",
@@ -1113,10 +1113,10 @@ def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(
     `[IBGateway] ApiOnly` into jts.ini -- the app genuinely runs as a TWS
     front-end. Native-restart prevention renames the resolved Gateway bundle,
     and the fallback is logged (IBC switches silently; this project never does)."""
-    base = _make_synthetic_install(tmp_path, os_name="macos", program="gateway")
+    base = _make_synthetic_install(tmp_path, os_name="macos", program=Program.GATEWAY)
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="tws",
+        program=Program.TWS,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="paper",
@@ -1152,11 +1152,11 @@ def test_build_launch_plan_macos_tws_prefers_tws_install_when_present(
 ):
     """No fallback when a TWS install exists -- the TWS dir wins, no warning
     logged (IBC's own priority; gitea #25)."""
-    base = _make_synthetic_install(tmp_path, os_name="macos", program="tws")
+    base = _make_synthetic_install(tmp_path, os_name="macos", program=Program.TWS)
     _make_version_dir(tmp_path / "Applications", "IB Gateway 10.50")
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="tws",
+        program=Program.TWS,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="paper",
@@ -1180,12 +1180,12 @@ def test_build_launch_plan_macos_tws_auto_detects_version_in_gateway_tree(
     """`tws_version` unset + no TWS install at all: version detection itself
     runs against the Gateway tree (channel-aware), then the plan resolves the
     Gateway install -- the whole TWS-from-Gateway path end to end."""
-    base = _make_synthetic_install(tmp_path, os_name="macos", program="gateway")
+    base = _make_synthetic_install(tmp_path, os_name="macos", program=Program.GATEWAY)
     (base / "IB Gateway 10.50" / ".install4j" / "i4jparams.conf").write_text(
         '<variable name="channel" value="stable" />\n'
     )
     config = _config(
-        program="tws",
+        program=Program.TWS,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -1199,10 +1199,10 @@ def test_build_launch_plan_macos_tws_auto_detects_version_in_gateway_tree(
 
 
 def test_build_launch_plan_linux_tws_falls_back_to_ibgateway(tmp_path, run_dir):
-    base = _make_synthetic_install(tmp_path, os_name="linux", program="gateway")
+    base = _make_synthetic_install(tmp_path, os_name="linux", program=Program.GATEWAY)
     settings_dir = tmp_path / "settings"
     config = _config(
-        program="tws",
+        program=Program.TWS,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="paper",
@@ -1223,7 +1223,7 @@ def test_build_launch_plan_default_runtime_dir_uses_platformdirs(
     monkeypatch.setenv("IBC_APP_DIR", str(run_dir))
     base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -1248,7 +1248,7 @@ async def test_build_launch_plan_via_anyio_to_thread_does_not_block_event_loop(
     advancing while the wrapped call is still in flight."""
     base = _make_synthetic_install(tmp_path, os_name="linux")
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -1458,7 +1458,7 @@ def test_build_launch_plan_rejects_too_long_socket_path_before_touching_install(
     renamed and no settings dir is created."""
     base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="x" * 120,
@@ -1479,7 +1479,7 @@ def test_build_launch_plan_creates_log_dir(tmp_path, run_dir):
     nothing else creates it for log_sink=std with tracing off (L1 F11, #78)."""
     base = _make_synthetic_install(tmp_path, os_name="linux")
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -1500,7 +1500,7 @@ def test_build_launch_plan_changes_nothing_on_disk(tmp_path, run_dir, os_name):
     """Planning only reads; `prepare_installation` makes the changes (L1 F7)."""
     base = _make_synthetic_install(tmp_path, os_name=os_name)
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -1532,7 +1532,7 @@ def test_prepare_installation_read_only_install_raises_launcher_error(
     the directory and why, not a raw `OSError` traceback (L1 F6)."""
     base = _make_synthetic_install(tmp_path, os_name=os_name)
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(tmp_path / "settings"),
         instance="paper",
@@ -1555,7 +1555,7 @@ def test_prepare_installation_read_only_settings_raises_launcher_error(
     settings_dir = tmp_path / "settings"
     settings_dir.mkdir()
     config = _config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_path=str(base),
         tws_settings_path=str(settings_dir),
         instance="paper",
@@ -1715,7 +1715,7 @@ def fake_spawn(monkeypatch, tmp_path, sock_path, event_sock_path):
         settings_dir=str(tmp_path / "settings"),
         program_path=tmp_path,
         os_name="linux",
-        resolved_program="gateway",
+        resolved_program=Program.GATEWAY,
     )
     monkeypatch.setattr(
         "ibcontroller.launcher.build_launch_plan", lambda *_a, **_k: plan

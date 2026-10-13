@@ -31,7 +31,7 @@ from ibcontroller.agent_client import (
     WindowEvent,
     WindowInfo,
 )
-from ibcontroller.config import Config, ExistingSessionAction, TradingMode
+from ibcontroller.config import Config, ExistingSessionAction, Program, TradingMode
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
 from ibcontroller.login import (
@@ -62,7 +62,7 @@ _NON_BROKERAGE_RULE = next(
 
 def _config(**overrides) -> Config:
     base = Config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_version="10.50",
         trading_mode=TradingMode.PAPER,
         userid=Secret("u"),
@@ -618,7 +618,7 @@ async def test_tws_mfa_watchdog_raises_when_main_window_never_appears(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         config = _config(
-            program="tws",
+            program=Program.TWS,
             relogin_after_mfa_timeout=True,
             mfa_timeout=5.0,
             mfa_exit_interval=0.05,
@@ -911,7 +911,7 @@ async def test_too_many_failed_attempts_dialog_triggers_retry_via_watcher(
 #
 # `_wait_for_outcome_tws` is today's original logic, completely untouched by the
 # Gateway fix above -- but until now it was only ever exercised implicitly,
-# since every test in this file defaulted to `program="gateway"`. Still not
+# since every test in this file defaulted to `program=Program.GATEWAY`. Still not
 # validated against a real TWS install (CLAUDE.md's own disclosed gap), but at
 # least the code path itself is now covered: main-window-open (same title as
 # the login frame, different class) is the terminal signal, exactly as before.
@@ -933,7 +933,7 @@ async def test_tws_happy_path_fills_credentials_and_reaches_logged_in(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, restart_expected=False
+            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(
@@ -991,7 +991,7 @@ async def test_tws_skips_intermediate_window_then_matches_main_window_by_menu_it
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, restart_expected=False
+            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(
@@ -1038,7 +1038,7 @@ async def test_tws_2fa_is_handled_inline_then_reaches_logged_in(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, restart_expected=False
+            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(
@@ -1093,7 +1093,7 @@ async def test_tws_outcome_wait_is_bounded_by_outcome_timeout(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, restart_expected=False
+            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(
@@ -1127,7 +1127,7 @@ async def test_gateway_outcome_wait_is_bounded_by_outcome_timeout(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="gateway"), LABELS, dispatcher, restart_expected=False
+            _config(program=Program.GATEWAY), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(
@@ -1167,7 +1167,7 @@ async def test_gateway_2fa_close_wait_uses_remaining_deadline_not_full_budget(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="gateway"), LABELS, dispatcher, restart_expected=False
+            _config(program=Program.GATEWAY), LABELS, dispatcher, restart_expected=False
         )
         start = time.monotonic()
         try:
@@ -1216,7 +1216,7 @@ async def test_tws_2fa_close_wait_uses_remaining_deadline_not_full_budget(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, restart_expected=False
+            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=False
         )
         start = time.monotonic()
         try:
@@ -1271,7 +1271,7 @@ async def test_tws_window_opening_during_menu_check_is_not_lost(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, restart_expected=False
+            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=False
         )
         try:
             task = asyncio.ensure_future(manager._wait_for_outcome_tws(5.0))
@@ -1311,7 +1311,7 @@ async def test_tws_outcome_finds_a_window_already_open_when_it_starts(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, restart_expected=False
+            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=False
         )
         try:
             await _registry_seeded(dispatcher, "w-main")
@@ -1338,7 +1338,7 @@ async def test_login_frame_opened_before_run_is_found(sock_path, event_sock_path
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         manager = LoginManager(
-            _config(program="tws"), LABELS, dispatcher, restart_expected=True
+            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=True
         )
         try:
             await _registry_seeded(dispatcher, "w-login")

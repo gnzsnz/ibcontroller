@@ -15,6 +15,7 @@ import pytest
 from ibcontroller.config import (
     ConfigError,
     MissingCredentialsError,
+    Program,
     TradingMode,
     _default_time_zone,
     load_config,
@@ -366,3 +367,19 @@ def test_env_dump_masks_sensitive_ibc_vars(monkeypatch, tmp_path, capsys):
     assert "env IBC_PASSWORD_PAPER=******" in out
     assert f"env IBC_PASSWORD_FILE={secret}" in out
     assert "env IBC_LOG_LEVEL=debug" in out
+
+
+def test_program_defaults_to_gateway_and_accepts_any_case(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.program is Program.GATEWAY
+    monkeypatch.setenv("IBC_PROGRAM", "TWS")
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path)
+    assert config.program is Program.TWS
+
+
+def test_invalid_program_is_a_config_error_naming_the_field(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("IBC_PROGRAM", "ibgateway")
+    with pytest.raises(ConfigError, match="program"):
+        load_config(config_dir=tmp_path, log_dir=tmp_path)

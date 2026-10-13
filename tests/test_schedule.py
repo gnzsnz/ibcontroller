@@ -9,7 +9,7 @@ import attrs
 import pytest
 from typed_settings.types import Secret
 
-from ibcontroller.config import Config, TradingMode
+from ibcontroller.config import Config, Program, TradingMode
 from ibcontroller.schedule import (
     ScheduledAction,
     ScheduleError,
@@ -22,7 +22,7 @@ from ibcontroller.schedule import (
 
 def _config(**overrides) -> Config:
     base = Config(
-        program="tws",
+        program=Program.TWS,
         tws_version="10.50",
         trading_mode=TradingMode.PAPER,
         userid=Secret("u"),
@@ -121,7 +121,9 @@ def test_next_scheduled_shutdown_none_when_neither_set():
 
 
 def test_next_scheduled_shutdown_gateway_applies_both():
-    config = _config(program="gateway", cold_restart_time="07:05", closedown_at="08:00")
+    config = _config(
+        program=Program.GATEWAY, cold_restart_time="07:05", closedown_at="08:00"
+    )
     now = datetime(2026, 9, 12, 6, 0)  # Saturday
     result = next_scheduled_shutdown(config, now)
     assert result is not None

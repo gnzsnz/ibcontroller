@@ -28,7 +28,7 @@ from ibcontroller.agent_client import (
     WindowEvent,
     WindowInfo,
 )
-from ibcontroller.config import Config, MfaTimeoutAction, TradingMode
+from ibcontroller.config import Config, MfaTimeoutAction, Program, TradingMode
 from ibcontroller.control_loop import (
     ShutdownCause,
     StartupState,
@@ -95,7 +95,7 @@ def test_log_transition_names_both_states(caplog):
 
 def _config(**overrides) -> Config:
     base = Config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_version="10.50",
         trading_mode=TradingMode.PAPER,
         userid=Secret("u"),
@@ -190,13 +190,13 @@ async def test_sleep_until_scheduled_shutdown_fires_the_matching_cause(monkeypat
     monkeypatch.setattr(
         control_loop, "next_scheduled_shutdown", lambda config, now: soon
     )
-    config = _config(program="tws", closedown_at="22:00")
+    config = _config(program=Program.TWS, closedown_at="22:00")
     cause = await asyncio.wait_for(_sleep_until_scheduled_shutdown(config), timeout=5.0)
     assert cause is ShutdownCause.TIDY_CLOSEDOWN
 
 
 async def test_sleep_until_scheduled_shutdown_sleeps_forever_when_unconfigured():
-    config = _config(program="tws")
+    config = _config(program=Program.TWS)
     task = asyncio.ensure_future(_sleep_until_scheduled_shutdown(config))
     await asyncio.sleep(0.05)
     assert not task.done()

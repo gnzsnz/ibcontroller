@@ -18,7 +18,7 @@ from ibcontroller.agent_client import (
     WindowEvent,
     WindowInfo,
 )
-from ibcontroller.config import Config, TradingMode
+from ibcontroller.config import Config, Program, TradingMode
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
 from ibcontroller.logging_setup import configure_logging, stop_logging
@@ -43,7 +43,7 @@ LABELS = load_labels()
 
 def _config(**overrides) -> Config:
     base = Config(
-        program="gateway",
+        program=Program.GATEWAY,
         tws_version="10.50",
         trading_mode=TradingMode.PAPER,
         userid=Secret("u"),
@@ -1013,7 +1013,7 @@ async def test_open_settings_dialog_uses_tws_mosaic_menu_path(
 ):
     """Real, live-caught bug (2026-09-09): TWS has no `Configure` menu at all --
     `navigate_menu("Configure/Settings")` (Gateway's own path) fails with
-    `not_found` on a real TWS install. `program="tws"` must select
+    `not_found` on a real TWS install. `program=Program.TWS` must select
     `labels.settings.tws_menu_path` (`"File/Global Configuration..."`)
     instead -- live-confirmed 2026-09-16 as the real Mosaic path, after
     `tws_menu_path_classic` (`"Edit/Global Configuration..."`) produced a
@@ -1031,7 +1031,7 @@ async def test_open_settings_dialog_uses_tws_mosaic_menu_path(
                 open_settings_dialog(
                     dispatcher,
                     LABELS.settings,
-                    program="tws",
+                    program=Program.TWS,
                     timeout=5.0,
                 )
             )
@@ -1142,7 +1142,7 @@ async def test_open_settings_dialog_cleans_up_armed_wait_on_navigate_failure(
                 await open_settings_dialog(
                     dispatcher,
                     LABELS.settings,
-                    program="tws",
+                    program=Program.TWS,
                     timeout=0.6,
                 )
         finally:

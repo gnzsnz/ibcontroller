@@ -12,6 +12,7 @@ import pytest
 
 from ibcontroller import launcher
 from ibcontroller.agent_client import AgentCommandConnection, AgentEventConnection
+from ibcontroller.config import Program
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
 from ibcontroller.launcher import LaunchedInstance
@@ -69,7 +70,7 @@ async def test_clean_shutdown_terminates_directly_when_process_already_exited(
         process = FakeProcess(returncode=0)
         launched = _launched(process, dispatcher, sock_path, event_sock_path)
         await clean_shutdown(
-            launched, program="gateway", logged_in=True, labels=LABELS.shutdown
+            launched, program=Program.GATEWAY, logged_in=True, labels=LABELS.shutdown
         )
 
     assert not process.terminated  # never called -- would have raised otherwise
@@ -96,7 +97,7 @@ async def test_clean_shutdown_terminates_when_never_logged_in_and_still_running(
         process = FakeProcess(returncode=None)
         launched = _launched(process, dispatcher, sock_path, event_sock_path)
         await clean_shutdown(
-            launched, program="gateway", logged_in=False, labels=LABELS.shutdown
+            launched, program=Program.GATEWAY, logged_in=False, labels=LABELS.shutdown
         )
 
     assert process.terminated
@@ -124,7 +125,7 @@ async def test_clean_shutdown_uses_graceful_navigate_menu_when_process_alive(
         # fires -- exercised deliberately, not the point of this test.
         await clean_shutdown(
             launched,
-            program="gateway",
+            program=Program.GATEWAY,
             logged_in=True,
             labels=LABELS.shutdown,
             timeout=0.1,
@@ -153,7 +154,7 @@ async def test_clean_shutdown_terminates_when_the_agent_dies_mid_navigate_menu(
         launched = _launched(process, dispatcher, sock_path, event_sock_path)
         await clean_shutdown(
             launched,
-            program="gateway",
+            program=Program.GATEWAY,
             logged_in=True,
             labels=LABELS.shutdown,
             timeout=0.1,
@@ -186,7 +187,7 @@ async def test_clean_shutdown_terminates_when_the_agent_never_answers(
             await asyncio.wait_for(
                 clean_shutdown(
                     launched,
-                    program="gateway",
+                    program=Program.GATEWAY,
                     logged_in=True,
                     labels=LABELS.shutdown,
                     timeout=0.1,
@@ -206,7 +207,7 @@ async def test_clean_shutdown_uses_tws_menu_path_for_tws(sock_path, event_sock_p
     to be a hardcoded `"File/Close"`/`"File/Exit"` ternary directly in
     `clean_shutdown`, not sourced from `labels.json` like every other
     user-facing string this project matches or clicks against. Confirms
-    `program="tws"` selects `labels.shutdown.tws_menu_path`, not Gateway's."""
+    `program=Program.TWS` selects `labels.shutdown.tws_menu_path`, not Gateway's."""
     calls: list[dict] = []
 
     def responder(request):
@@ -222,7 +223,7 @@ async def test_clean_shutdown_uses_tws_menu_path_for_tws(sock_path, event_sock_p
         launched = _launched(process, dispatcher, sock_path, event_sock_path)
         await clean_shutdown(
             launched,
-            program="tws",
+            program=Program.TWS,
             logged_in=True,
             labels=LABELS.shutdown,
             timeout=0.1,
@@ -253,7 +254,7 @@ async def test_clean_shutdown_scopes_navigate_menu_to_main_window(
         launched = _launched(process, dispatcher, sock_path, event_sock_path)
         await clean_shutdown(
             launched,
-            program="tws",
+            program=Program.TWS,
             logged_in=True,
             labels=LABELS.shutdown,
             main_window_id="w2",

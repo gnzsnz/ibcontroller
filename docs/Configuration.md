@@ -35,7 +35,7 @@ Settings that drive the behaviour of `ibcontroller` itself.
 | TOML key | Env var | Description | Default |
 | --- | --- | --- | --- |
 | `instance` | `IBC_INSTANCE` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) |
-| `program` | `IBC_PROGRAM` | `"gateway"` or `"tws"` | `"gateway"` |
+| `program` | `IBC_PROGRAM` | `"gateway"` or `"tws"` (any letter case); anything else is a config error | `"gateway"` |
 | `tws_version` | `IBC_TWS_VERSION` | Installed TWS/Gateway version, e.g. `"10.50"`. Omit to auto-detect from the real install (greatest version wins, narrowed by `tws_channel`) | `None` (auto-detected) |
 | `tws_channel` | `IBC_TWS_CHANNEL` | `"stable"`/`"latest"`; narrows auto-detection to installs carrying this update channel. Ignored when `tws_version` is set explicitly | `"stable"` |
 | `tws_path` | `IBC_TWS_PATH` | Override the install-path inference | `None` |

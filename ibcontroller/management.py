@@ -12,6 +12,7 @@ import logging
 
 from ibcontroller.actions import navigate_menu
 from ibcontroller.agent_client import AgentClientError
+from ibcontroller.config import Program
 from ibcontroller.labels import ShutdownLabels
 from ibcontroller.launcher import LaunchedInstance, terminate_and_wait
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 async def clean_shutdown(
     launched: LaunchedInstance,
     *,
-    program: str,
+    program: Program,
     logged_in: bool,
     labels: ShutdownLabels,
     main_window_id: str | None = None,
@@ -84,9 +85,7 @@ async def clean_shutdown(
         return
 
     target = (
-        labels.gateway_menu_path
-        if program.lower() == "gateway"
-        else labels.tws_menu_path
+        labels.gateway_menu_path if program == Program.GATEWAY else labels.tws_menu_path
     )
     try:
         await navigate_menu(

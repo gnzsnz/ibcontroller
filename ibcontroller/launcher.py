@@ -36,7 +36,7 @@ from ibcontroller.agent_client import (
     derive_event_socket_path,
 )
 from ibcontroller.app_dirs import resolve_runtime_dir
-from ibcontroller.config import Config, LogSink, _default_time_zone
+from ibcontroller.config import Config, LogSink, Program, _default_time_zone
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.logging_setup import (
     configure_gateway_stdout,
@@ -52,13 +52,13 @@ _INSTALL4J_DPROPS_STATIC = [
     "-Dinstall4jType=standalone",
 ]
 _ENTRY_CLASSES = {
-    "gateway": "ibgateway.GWClient",
-    "tws": "jclient.LoginFrame",
+    Program.GATEWAY: "ibgateway.GWClient",
+    Program.TWS: "jclient.LoginFrame",
 }
 
 _MACOS_PROGRAM_NAMES = {
-    "gateway": "IB Gateway",
-    "tws": "Trader Workstation",
+    Program.GATEWAY: "IB Gateway",
+    Program.TWS: "Trader Workstation",
 }
 
 # Longest AF_UNIX path in bytes (measured: bind fails at 104 on macOS, 108 on Linux).
@@ -108,7 +108,7 @@ class LaunchPlan:
     settings_dir: str
     program_path: Path
     os_name: str
-    resolved_program: str
+    resolved_program: Program
 
 
 @dataclass(frozen=True)
@@ -269,17 +269,18 @@ def _ensure_jts_ini(
         path.write_text("\n".join(lines) + "\n")
 
 
-def _program_path(program: str, os_name: str, tws_path: Path, tws_version: str) -> Path:
+def _program_path(
+    program: Program, os_name: str, tws_path: Path, tws_version: str
+) -> Path:
     """Resolves `program`'s install directory for `tws_version` under
     `tws_path`. `program` and `tws_version` are plain parameters, not read
     from `config`, so `_resolve_program_path`'s fallback can derive the
     *other* program's path without building a second `Config` -- keeps this
     function pure and testable against plain strings."""
-    program = program.lower()
     if os_name == "macos":
         name = _MACOS_PROGRAM_NAMES[program]
         return tws_path / f"{name} {tws_version}"
-    if program == "gateway":
+    if program == Program.GATEWAY:
         return tws_path / "ibgateway" / tws_version
     return tws_path / tws_version
 
@@ -308,8 +309,8 @@ async def is_restart(settings_dir: str | Path) -> bool:
 
 
 def _resolve_program_path(
-    program: str, os_name: str, tws_path: Path, tws_version: str
-) -> tuple[Path, str]:
+    program: Program, os_name: str, tws_path: Path, tws_version: str
+) -> tuple[Path, Program]:
     """Resolves `program`'s install directory. A TWS request whose install
     has no `jars/` directory falls back to the same-version Gateway install
     instead, with the TWS entry class (`jclient.LoginFrame`) unchanged -- the
@@ -321,15 +322,15 @@ def _resolve_program_path(
     *actual* program of the resolved install (`"gateway"` when a TWS request
     fell back), which the caller uses to pick the right `.vmoptions` file
     (`ibgateway.vmoptions`, not `tws.vmoptions`, in a Gateway dir)."""
-    requested_program = program.lower()
-    program_path = _program_path(requested_program, os_name, tws_path, tws_version)
-    if requested_program == "tws" and not (program_path / "jars").is_dir():
-        return _program_path("gateway", os_name, tws_path, tws_version), "gateway"
-    return program_path, requested_program
+    program_path = _program_path(program, os_name, tws_path, tws_version)
+    if program == Program.TWS and not (program_path / "jars").is_dir():
+        gateway_path = _program_path(Program.GATEWAY, os_name, tws_path, tws_version)
+        return gateway_path, Program.GATEWAY
+    return program_path, program
 
 
 def _scan_install_dirs(
-    tws_path: Path, os_name: str, program: str
+    tws_path: Path, os_name: str, program: Program
 ) -> list[tuple[str, Path]]:
     """Every installed version of `program` found under `tws_path`, verified
     by a `jars/` subdirectory. Layout differs by OS and program: TWS lives at
@@ -345,7 +346,7 @@ def _scan_install_dirs(
         for entry in sorted(tws_path.glob(f"{name} *")):
             if entry.is_dir() and (entry / "jars").is_dir():
                 candidates.append((entry.name.removeprefix(f"{name} "), entry))
-    elif program == "gateway":
+    elif program == Program.GATEWAY:
         gw_dir = tws_path / "ibgateway"
         if gw_dir.is_dir():
             for entry in sorted(gw_dir.iterdir()):
@@ -363,7 +364,7 @@ def _scan_install_dirs(
 
 
 def _list_version_candidates(
-    tws_path: Path, os_name: str, program: str
+    tws_path: Path, os_name: str, program: Program
 ) -> list[tuple[str, Path]]:
     """Every installed version found under `tws_path`, verified by a `jars/`
     subdirectory -- the same check `_build_classpath` itself makes, so a
@@ -381,8 +382,8 @@ def _list_version_candidates(
     candidates = _scan_install_dirs(tws_path, os_name, program)
     if candidates:
         return candidates
-    if program == "tws":
-        return _scan_install_dirs(tws_path, os_name, "gateway")
+    if program == Program.TWS:
+        return _scan_install_dirs(tws_path, os_name, Program.GATEWAY)
     return candidates
 
 
@@ -408,7 +409,7 @@ def _read_i4j_variable(install4j_dir: Path, name: str) -> str | None:
 
 
 def _candidates_for_channel(
-    tws_path: Path, os_name: str, program: str, channel: str | None
+    tws_path: Path, os_name: str, program: Program, channel: str | None
 ) -> list[tuple[str, Path]]:
     """`_list_version_candidates`'s output, filtered by `channel` -- separated
     so `_detect_tws_version` can retry a TWS request against the Gateway pool
@@ -425,7 +426,7 @@ def _candidates_for_channel(
 
 
 def _detect_tws_version(
-    tws_path: Path, os_name: str, program: str, channel: str | None
+    tws_path: Path, os_name: str, program: Program, channel: str | None
 ) -> str:
     """Auto-detects the installed version of `program` under `tws_path`,
     optionally filtered by `channel` -- a real desktop install can carry
@@ -443,8 +444,10 @@ def _detect_tws_version(
 
     Raises `LauncherError` when no candidate remains."""
     candidates = _candidates_for_channel(tws_path, os_name, program, channel)
-    if not candidates and program == "tws":
-        candidates = _candidates_for_channel(tws_path, os_name, "gateway", channel)
+    if not candidates and program == Program.TWS:
+        candidates = _candidates_for_channel(
+            tws_path, os_name, Program.GATEWAY, channel
+        )
 
     if not candidates:
         where = f"channel={channel!r} under {tws_path}" if channel else str(tws_path)
@@ -646,12 +649,12 @@ def build_launch_plan(
     tws_path = _resolve_tws_path(config, os_name)
     settings_dir = resolve_tws_settings_path(config)
     tws_version = config.tws_version or _detect_tws_version(
-        tws_path, os_name, config.program.lower(), config.tws_channel
+        tws_path, os_name, config.program, config.tws_channel
     )
     program_path, resolved_program = _resolve_program_path(
-        config.program.lower(), os_name, tws_path, tws_version
+        config.program, os_name, tws_path, tws_version
     )
-    if resolved_program != config.program.lower():
+    if resolved_program != config.program:
         logger.warning(
             "IBController > no %s installation found (tws_version=%s, tws_path=%s) -- "
             "falling back to the %s installation %s and running it as %s ",
@@ -666,9 +669,11 @@ def build_launch_plan(
     classpath = _build_classpath(program_path, install4j_dir, Path(agent_jar))
     java_bin = _find_java_bin(os_name, install4j_dir, program_path)
 
-    program = config.program.lower()
+    program = config.program
     vmoptions_file = program_path / (
-        "ibgateway.vmoptions" if resolved_program == "gateway" else "tws.vmoptions"
+        "ibgateway.vmoptions"
+        if resolved_program == Program.GATEWAY
+        else "tws.vmoptions"
     )
     vm_options = _read_vmoptions_file(vmoptions_file)
     vm_options.extend(_INSTALL4J_DPROPS_STATIC)
@@ -751,7 +756,7 @@ def prepare_installation(config: Config, plan: LaunchPlan) -> None:
     with _os_error_as_launcher_error(f"cannot write {settings_dir / 'jts.ini'}"):
         _ensure_jts_ini(
             settings_dir,
-            is_gateway=config.program.lower() == "gateway",
+            is_gateway=config.program == Program.GATEWAY,
             time_zone=config.time_zone,
         )
     with _os_error_as_launcher_error(
@@ -762,7 +767,9 @@ def prepare_installation(config: Config, plan: LaunchPlan) -> None:
         if plan.os_name == "macos":
             _prevent_native_restart(plan.program_path)
         else:
-            script_name = "ibgateway" if plan.resolved_program == "gateway" else "tws"
+            script_name = (
+                "ibgateway" if plan.resolved_program == Program.GATEWAY else "tws"
+            )
             _prevent_native_restart_linux(plan.program_path, script_name)
 
 

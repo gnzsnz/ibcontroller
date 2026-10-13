@@ -103,7 +103,7 @@ And the `ibcontroller run` parameters:
 │ --trading-mode             <live|paper>  Override Config.trading_mode ('live'/'paper') for this invocation.                                                                     │
 │ --tws-path                 <path>        Override Config.tws_path (the TWS/Gateway install-path inference) for this invocation.                                                 │
 │ --tws-channel              <str>         Override Config.tws_channel ('stable'/'latest', filters install auto-detection) for this invocation.                                   │
-│ --program                  <str>         Override Config.program ('gateway'/'tws') for this invocation.                                                                         │
+│ --program                  <gateway|tws> Override Config.program ('gateway'/'tws') for this invocation.                                                                         │
 │ --tws-settings-path        <path>        Override Config.tws_settings_path (where TWS/Gateway stores its own settings) for this invocation.                                     │
 │ --instance                 <str>         Override Config.instance (per-instance log/trace/socket names) for this invocation. Defaults to '{program}-{trading_mode}', so         │
 │                                          --trading-mode alone is usually enough to keep paper/live instances apart.                                                             │
@@ -208,7 +208,7 @@ allowing `None`. `Config`'s schema is closed — an unknown key in
 | TOML key | Env var or CLI flag | Description | Default |
 | --- | --- | --- | --- |
 | `instance` | `IBC_INSTANCE`, `--instance` | Instance name; separate log/trace files per instance | `"{program}-{trading_mode}"` (e.g. `"gateway-paper"`) |
-| `program` | `IBC_PROGRAM`, `--program` | `"gateway"` or `"tws"` | `"gateway"` |
+| `program` | `IBC_PROGRAM`, `--program` | `"gateway"` or `"tws"` (any letter case); anything else is a config error | `"gateway"` |
 | `tws_version` | `IBC_TWS_VERSION` | Installed TWS/Gateway version, e.g. `"10.50"` | `None` — auto-detected (see below) |
 | `tws_channel` | `IBC_TWS_CHANNEL`, `--tws-channel` | `"stable"`/`"latest"`; narrows auto-detection to one update channel | `"stable"` |
 | `tws_path` | `IBC_TWS_PATH`, `--tws-path` | Override TWS/gateway install-path inference | `None` |

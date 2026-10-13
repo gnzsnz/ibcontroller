@@ -66,7 +66,7 @@ from ibcontroller.actions import (
     type_text,
     wait_for_window,
 )
-from ibcontroller.config import Config, TradingMode
+from ibcontroller.config import Config, Program, TradingMode
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import Labels
 
@@ -147,7 +147,7 @@ class LoginManager:
     def _gateway_or_tws_titles(self) -> list[str]:
         return (
             self._labels.login.gateway_titles
-            if self._config.program.lower() == "gateway"
+            if self._config.program == Program.GATEWAY
             else self._labels.login.tws_titles
         )
 
@@ -208,7 +208,7 @@ class LoginManager:
         IB API -- TWS has no such control, so that click is skipped there."""
         labels = self._labels.login
         window_id = self._login_frame_window_id
-        if self._config.program.lower() == "gateway":
+        if self._config.program == Program.GATEWAY:
             await click(
                 self._dispatcher,
                 labels.api_type_ib_api,
@@ -282,7 +282,7 @@ class LoginManager:
         matching every other timeout in this module and keeping
         `cli.py`'s clean operational-error reporting intact."""
         try:
-            if self._config.program.lower() == "gateway":
+            if self._config.program == Program.GATEWAY:
                 await self._wait_for_outcome_gateway(outcome_timeout)
             else:
                 await self._wait_for_outcome_tws(outcome_timeout)

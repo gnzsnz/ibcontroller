@@ -19,7 +19,7 @@ import tomllib
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import attrs
 import typed_settings as ts
@@ -191,6 +191,19 @@ def _default_time_zone() -> str | None:
     return "/".join(parts[parts.index("zoneinfo") + 1 :]) or None
 
 
+class Program(StrEnum):
+    """Which IBKR application to run. Accepts any letter case."""
+
+    GATEWAY = "gateway"
+    TWS = "tws"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Self | None:
+        if isinstance(value, str):
+            return next((m for m in cls if m.value == value.lower()), None)
+        return None
+
+
 class TradingMode(StrEnum):
     LIVE = "live"
     PAPER = "paper"
@@ -284,7 +297,7 @@ class Config:
     )
     # instance default: f"{program}-{trading_mode.value}".
     instance: str = "{program}-{trading_mode}"
-    program: str = "gateway"  # "gateway" or "tws"
+    program: Program = Program.GATEWAY
     # None -> auto-detected from the real install directory (launcher.
     # _detect_tws_version), channel-aware via tws_channel below.
     tws_version: str | None = None

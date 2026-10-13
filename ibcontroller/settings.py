@@ -71,7 +71,7 @@ from ibcontroller.actions import (
     wait_for_window,
 )
 from ibcontroller.agent_client import ElementNotFoundError
-from ibcontroller.config import Config
+from ibcontroller.config import Config, Program
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import Labels, SettingsLabels
 
@@ -294,7 +294,7 @@ async def open_settings_dialog(
     dispatcher: Dispatcher,
     labels: SettingsLabels,
     *,
-    program: str = "gateway",
+    program: Program = Program.GATEWAY,
     timeout: float = 180.0,
     main_window_id: str | None = None,
 ) -> str | None:
@@ -343,9 +343,7 @@ async def open_settings_dialog(
     `window_opened` cannot be missed."""
     await _await_menu_ready(dispatcher, labels, timeout=timeout)
     menu_path = (
-        labels.gateway_menu_path
-        if program.lower() == "gateway"
-        else labels.tws_menu_path
+        labels.gateway_menu_path if program == Program.GATEWAY else labels.tws_menu_path
     )
     with dispatcher.subscribe() as sub:
         await navigate_menu(
