@@ -222,6 +222,7 @@ allowing `None`. `Config`'s schema is closed — an unknown key in
 | `log_backup_count` | `IBC_LOG_BACKUP_COUNT` | Number of rotated backups to keep. Only respected when `log_sink="file"` | `5` |
 | `diagnostic_scope` | `IBC_DIAGNOSTIC_SCOPE` | `"known"`/`"unknown"`/`"all"` — which windows get a structure dump logged (see `docs/Configuration.md`'s "Diagnostics") | `"known"` |
 | `diagnostic_when` | `IBC_DIAGNOSTIC_WHEN` | `"open"`/`"openclose"`/`"never"` — when to log a structure dump | `"never"` |
+| `diagnostic_settings_sweep` | `IBC_DIAGNOSTIC_SETTINGS_SWEEP` | Log a dump of each Global Configuration tree node in `labels.settings.sweep_paths` (see `docs/Configuration.md`'s "Diagnostics") | `false` |
 | (env only) | `IBC_APP_DIR`, `--app-dir` | Override file locations (config/log/run) for container mode; `--app-dir`/`init`/`run` set the env var for the invocation, same effect |
 
 TWS/ibgateway settings

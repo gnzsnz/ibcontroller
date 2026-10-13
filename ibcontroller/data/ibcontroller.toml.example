@@ -113,6 +113,11 @@
 # (off) (env: IBC_DIAGNOSTIC_WHEN)
 # Default "never"
 # diagnostic_when = "open"
+# diagnostic_settings_sweep: while the Global Configuration dialog is open, log a dump
+# of each tree node in labels.json settings.sweep_paths (read-only; env:
+# IBC_DIAGNOSTIC_SETTINGS_SWEEP)
+# Default false
+# diagnostic_settings_sweep = true
 
 # IBC: ReadOnlyLogin -- TWS only (IBC disables it on Gateway); NOT YET WIRED to any real
 # behavior in ibcontroller (loaded, but nothing acts on it yet -- see TODO.md).

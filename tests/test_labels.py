@@ -205,3 +205,8 @@ def test_unknown_keys_are_logged_and_ignored(tmp_path, caplog):
     assert "'bogus'" in logged
     assert "dismiss_rules[0].extra" in logged
     assert labels.login.gateway_titles[0] == "IBKR Gateway"  # typo had no effect
+
+
+def test_settings_sweep_paths_are_in_the_bundled_file():
+    paths = load_labels().settings.sweep_paths
+    assert {"API/Settings", "Lock and Exit", "Orders/Smart Routing"} <= set(paths)

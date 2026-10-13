@@ -61,7 +61,7 @@ from typing import Any, Protocol
 
 from ibcontroller.agent_client import AgentClientError
 from ibcontroller.config import Config, MfaTimeoutAction
-from ibcontroller.diagnostics import watch_for_diagnostics
+from ibcontroller.diagnostics import sweep_settings_tree, watch_for_diagnostics
 from ibcontroller.labels import Labels
 from ibcontroller.launcher import (
     LaunchedInstance,
@@ -275,6 +275,10 @@ async def _apply_declarative_settings(
             SettingsFile(settings=merged),
             window_id=window_id,
         )
+        if config.diagnostic_settings_sweep:
+            await sweep_settings_tree(
+                launched.dispatcher, window_id, labels.settings.sweep_paths
+            )
     finally:
         await close_settings_dialog(
             launched.dispatcher, labels.settings, window_id=window_id

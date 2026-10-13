@@ -395,6 +395,8 @@ class Config:
     # window event, the replacement for socket-poking the agent by hand.
     diagnostic_scope: DiagnosticScope = DiagnosticScope.KNOWN
     diagnostic_when: DiagnosticWhen = DiagnosticWhen.NEVER
+    # Dumps every labels.settings.sweep_paths panel while the settings dialog is open.
+    diagnostic_settings_sweep: bool = False
 
 
 def _format_config(config: Config) -> list[str]:

@@ -240,7 +240,10 @@ class SettingsLabels:
     the dialog -- `"OK"` has Swing's standard apply-and-close semantics,
     unlike `"Apply"`, which commits without closing. `apply_button`/
     `cancel_button` are kept for callers that need those semantics
-    explicitly."""
+    explicitly.
+
+    `sweep_paths` are the tree nodes `diagnostics.sweep_settings_tree` probes;
+    a node absent from the running build is reported, not an error."""
 
     gateway_menu_path: str
     tws_menu_path: str
@@ -251,6 +254,7 @@ class SettingsLabels:
     ok_button: str
     splash_title_marker: str
     controls: dict[str, str]
+    sweep_paths: list[str]
 
 
 @attrs.define(frozen=True)

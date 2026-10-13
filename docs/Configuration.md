@@ -50,6 +50,7 @@ Settings that drive the behaviour of `ibcontroller` itself.
 | `java_heap_size` | `IBC_JAVA_HEAP_SIZE` | JVM heap for TWS/Gateway at launch, e.g. `"1024m"`/`"4g"`. Overrides the `-Xmx` line in the installed `.vmoptions` file; bare size, no `-Xmx` prefix | `None` (unchanged) |
 | `diagnostic_scope` | `IBC_DIAGNOSTIC_SCOPE` | Which windows get a structure dump logged: `"known"` (recognised by a built-in/declarative recogniser), `"unknown"`, or `"all"` -- see "Diagnostics" below | `"known"` |
 | `diagnostic_when` | `IBC_DIAGNOSTIC_WHEN` | When to log a structure dump: `"open"`, `"openclose"`, or `"never"` (off) -- see "Diagnostics" below | `"never"` |
+| `diagnostic_settings_sweep` | `IBC_DIAGNOSTIC_SETTINGS_SWEEP` | Log a dump of every Global Configuration tree node in `labels.settings.sweep_paths` -- see "Diagnostics" below | `false` |
 
 ## TWS/ibgateway specific settings
 
@@ -202,6 +203,15 @@ a built-in replacement for poking the agent socket directly with
 `"unknown"` (not recognised by any), or `"all"`. `diagnostic_when` picks
 which events trigger a dump: `"open"`, `"openclose"`, or `"never"`.
 Dumps land in `ibcontroller-{instance}.log` at `INFO` level.
+
+`diagnostic_settings_sweep` (default `false`) is independent of those two:
+while the Global Configuration dialog is open for declarative settings, it
+selects each tree node listed in `labels.json` `settings.sweep_paths` and logs
+that panel's component dump (`settings sweep:` lines, same log). Read-only.
+A node the running TWS/Gateway build lacks is logged as `not found`. The tree
+cannot be enumerated, so extend `sweep_paths` to probe more nodes. Use it to
+learn a panel's layout before writing a declarative entry, and after a
+TWS/Gateway upgrade.
 
 ## Declarative settings
 

@@ -15,7 +15,11 @@ from ibcontroller.agent_client import (
     WindowInfo,
 )
 from ibcontroller.config import DiagnosticScope, DiagnosticWhen
-from ibcontroller.diagnostics import format_dump, watch_for_diagnostics
+from ibcontroller.diagnostics import (
+    format_dump,
+    sweep_settings_tree,
+    watch_for_diagnostics,
+)
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import DismissRule
 from ibcontroller.recognisers import DeclarativeDismissRecognizer, RecognizerRegistry
@@ -203,3 +207,46 @@ async def test_watch_for_diagnostics_falls_back_on_a_vanished_window(
 
     assert len(calls) == 1
     assert "window already gone" in calls[0][1]
+
+
+async def test_sweep_settings_tree_dumps_each_path_and_reports_missing_ones(
+    sock_path, event_sock_path
+):
+    requests = []
+
+    def responder(request):
+        requests.append(request)
+        if request.get("cmd") == "expand_tree" and request["path"] == "Nope":
+            return {"ok": False, "error": "not_found", "detail": "no such node"}
+        if request.get("cmd") == "dump":
+            return {
+                "ok": True,
+                "components": [{"class": "javax.swing.JLabel", "text": "panel"}],
+            }
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            out: list[str] = []
+            await sweep_settings_tree(
+                dispatcher, "w1", ["API", "Nope", "Orders"], out.append
+            )
+        finally:
+            await dispatcher.stop()
+
+    assert [r["cmd"] for r in requests] == [
+        "expand_tree",
+        "dump",
+        "expand_tree",
+        "expand_tree",
+        "dump",
+    ]
+    assert len(out) == 3
+    assert "'API' window_id=w1" in out[0]
+    assert "text='panel'" in out[0]
+    assert out[1] == "'Nope' not found"
+    assert "'Orders'" in out[2]

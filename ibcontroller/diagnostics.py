@@ -18,8 +18,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from ibcontroller.actions import dump
-from ibcontroller.agent_client import Component, WindowEvent, WindowGoneError
+from ibcontroller.actions import dump, expand_tree
+from ibcontroller.agent_client import (
+    Component,
+    ElementNotFoundError,
+    WindowEvent,
+    WindowGoneError,
+)
 from ibcontroller.config import DiagnosticScope, DiagnosticWhen
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.recognisers import RecognizerRegistry
@@ -40,10 +45,15 @@ def format_dump(event: WindowEvent, components: list[Component]) -> str:
     """One line per component: class, name/accessible_name/text (when
     present -- `dump` already omits `text` for credential fields, nothing
     extra to redact here), enabled/visible."""
-    lines = [
+    header = (
         f"{event.kind} {event.window.class_} {event.window.title!r} "
         f"window_id={event.window.window_id}"
-    ]
+    )
+    return "\n".join([header, *_component_lines(components)])
+
+
+def _component_lines(components: list[Component]) -> list[str]:
+    lines = []
     for component in components:
         parts = [component.class_]
         if component.name:
@@ -55,7 +65,7 @@ def format_dump(event: WindowEvent, components: list[Component]) -> str:
         parts.append(f"enabled={component.enabled}")
         parts.append(f"visible={component.visible}")
         lines.append("  " + " ".join(parts))
-    return "\n".join(lines)
+    return lines
 
 
 async def watch_for_diagnostics(
@@ -108,3 +118,31 @@ async def watch_for_diagnostics(
                 if (scope is DiagnosticScope.KNOWN) != known:
                     continue
             sink(event, format_dump(event, components))
+
+
+def sweep_sink(text: str) -> None:
+    logger.info("settings sweep:\n%s", text)
+
+
+async def sweep_settings_tree(
+    dispatcher: Dispatcher,
+    window_id: str | None,
+    paths: list[str],
+    sink: Callable[[str], None] = sweep_sink,
+) -> None:
+    """Selects each tree node in `paths` of the open Global Configuration
+    dialog and hands its panel dump to `sink`. Read-only. A path the running
+    build lacks (`ElementNotFoundError`) is reported and skipped; the tree
+    cannot be enumerated, so `paths` is a probe list."""
+    for path in paths:
+        try:
+            await expand_tree(dispatcher, path, window_id=window_id)
+        except ElementNotFoundError:
+            sink(f"{path!r} not found")
+            continue
+        components = await dump(dispatcher, window_id=window_id)
+        sink(
+            "\n".join(
+                [f"{path!r} window_id={window_id}", *_component_lines(components)]
+            )
+        )
