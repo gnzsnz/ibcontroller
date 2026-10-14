@@ -324,10 +324,10 @@ match); `click` is the button's label.
 }
 ```
 
-`dismiss_rules` is a list, not a map — an override *replaces the whole list*, so if you
-want to keep the bundled entries (the non-brokerage-account warning, the auto-restart
-confirmation notice) alongside your own, copy them into your override file too rather
-than starting from an empty list. Good for any pop-up that's always handled the same
+`dismiss_rules` entries are merged by `name`: an entry with a bundled rule's name replaces
+that rule, an entry with a new name is added, and bundled rules (the non-brokerage-account
+warning, the auto-restart confirmation notice) you don't name are kept. Removing a bundled
+rule is not supported. Good for any pop-up that's always handled the same
 simple way; a dialog needing real logic (parsing a value out of its text, retrying,
 raising an error) isn't expressible this way and needs actual code.
 

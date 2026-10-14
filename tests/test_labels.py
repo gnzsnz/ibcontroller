@@ -66,9 +66,11 @@ def test_dismiss_rule_needs_at_least_one_match_field():
         DismissRule(name="bad", click="OK")
 
 
-def test_dismiss_rules_override_replaces_the_whole_list(tmp_path):
-    """A list, not a nested object -- `_deep_merge` replaces it wholesale, it
-    doesn't merge entry-by-entry (labels.py's own module docstring)."""
+def _bundled_rule_names():
+    return [r.name for r in load_labels(config_dir=None).dismiss_rules]
+
+
+def test_dismiss_rules_override_appends_new_name(tmp_path):
     (tmp_path / "labels.json").write_text(
         json.dumps(
             {
@@ -79,7 +81,31 @@ def test_dismiss_rules_override_replaces_the_whole_list(tmp_path):
         )
     )
     labels = load_labels(config_dir=tmp_path)
-    assert [r.name for r in labels.dismiss_rules] == ["custom"]
+    assert [r.name for r in labels.dismiss_rules] == [*_bundled_rule_names(), "custom"]
+
+
+def test_dismiss_rules_override_replaces_same_name(tmp_path):
+    bundled = _bundled_rule_names()
+    (tmp_path / "labels.json").write_text(
+        json.dumps(
+            {
+                "dismiss_rules": [
+                    {"name": bundled[0], "click": "Nope", "match_title": "Other"}
+                ]
+            }
+        )
+    )
+    labels = load_labels(config_dir=tmp_path)
+    assert [r.name for r in labels.dismiss_rules] == bundled
+    assert labels.dismiss_rules[0].click == "Nope"
+
+
+def test_dismiss_rules_bundled_kept_without_override(tmp_path):
+    (tmp_path / "labels.json").write_text(
+        json.dumps({"login": {"login_buttons": ["X"]}})
+    )
+    labels = load_labels(config_dir=tmp_path)
+    assert [r.name for r in labels.dismiss_rules] == _bundled_rule_names()
 
 
 def test_no_config_dir_uses_bundled_default_only():

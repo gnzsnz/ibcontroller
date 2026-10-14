@@ -13,9 +13,9 @@
     "  - login.gateway_titles: shows how to add a title variant IBKR renamed/localized",
     "    (the override REPLACES the whole list, so include every title you still want,",
     "    not just the new one).",
-    "  - dismiss_rules: this one is a list, not a nested object, so an override replaces",
-    "    the whole list rather than merging entry by entry -- copy the bundled entries",
-    "    here (as done below) before adding your own, or you'll lose the built-in ones.",
+    "  - dismiss_rules: a list merged by rule name -- an entry named like a bundled rule",
+    "    replaces it, a new name is appended, bundled rules you don't name are kept.",
+    "    Removing a bundled rule is not supported.",
     "",
     "Remove this _readme key before using the file for real -- it is not a real Labels",
     "field; an unknown key is logged as a warning and ignored, but it's not meant to ship.",
@@ -35,13 +35,8 @@
   },
   "dismiss_rules": [
     {
-      "name": "non_brokerage_account",
-      "match_text": "This is not a brokerage account",
-      "click": "I understand and accept"
-    },
-    {
-      "name": "auto_restart_confirmation",
-      "match_text": "trading platform restart automatically",
+      "name": "my_custom_popup",
+      "match_title": "Some Notice",
       "click": "OK"
     }
   ]

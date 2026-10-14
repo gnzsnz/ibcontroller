@@ -8,10 +8,10 @@ ibcontroller works out of the box) is layered under an optional
 `labels.json` in `app_dirs.resolve_app_dirs()`'s `config_dir` -- merged one
 field at a time (`{"login": {"gateway_titles": [...]}}` overrides just that
 one field, leaving every other label and domain untouched), not a full
-replacement. `dismiss_rules` (below) is a list, not a nested object, so an
-override replaces the whole list, not one entry within it -- a user
-extending it copies the bundled entries into their own override file rather
-than appending.
+replacement. `dismiss_rules` (below) is a list, merged by rule `name`: an
+override entry with a bundled rule's name replaces that rule, an entry with a
+new name is appended, and bundled rules the override doesn't name are kept.
+Removing a bundled rule is not supported.
 
 `dismiss_rules` is a real exception to "this file is just labels, not config
 rules": each entry is a full declarative `Recognizer` (see `DismissRule`'s
@@ -304,6 +304,19 @@ def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[st
     return merged
 
 
+def _merge_dismiss_rules(base: Any, override: Any) -> Any:
+    """Merges `dismiss_rules` lists by rule `name`; a same-name override entry replaces
+    the bundled one in place, new names are appended. Malformed input is returned as
+    the override for the structuring step to reject."""
+    if not (isinstance(base, list) and isinstance(override, list)):
+        return override
+    if not all(isinstance(rule, Mapping) and "name" in rule for rule in override):
+        return override
+    by_name = {rule["name"]: rule for rule in base}
+    by_name.update((rule["name"], rule) for rule in override)
+    return list(by_name.values())
+
+
 def _load_bundled_default() -> dict[str, Any]:
     raw = (
         resources.files("ibcontroller")
@@ -366,7 +379,12 @@ def load_labels(config_dir: str | Path | None = None) -> Labels:
             if not isinstance(override_data, dict):
                 raise LabelsError(f"{source}: expected a JSON object at the top level")
             _warn_unknown_keys(override_data, Labels, "")
-            data = _deep_merge(data, override_data)
+            merged = _deep_merge(data, override_data)
+            if "dismiss_rules" in override_data:
+                merged["dismiss_rules"] = _merge_dismiss_rules(
+                    data.get("dismiss_rules"), override_data["dismiss_rules"]
+                )
+            data = merged
     try:
         return converter.structure(data, Labels)
     except cattrs.ClassValidationError as exc:
