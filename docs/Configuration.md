@@ -187,10 +187,10 @@ TWS/Gateway itself.
 | TOML key | Env var | Description | Default |
 | --- | --- | --- | --- |
 | `login_dialog_display_timeout` | `IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog to appear | `60.0` |
-| `mfa_timeout` | `IBC_MFA_TIMEOUT` | The real 2FA budget in seconds, mirroring IBKR's own external limit | `180.0` |
-| `relogin_after_mfa_timeout` | `IBC_RELOGIN_AFTER_MFA_TIMEOUT` | Restart the login attempt if 2FA times out (instead of giving up) | `false` |
-| `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | Bounds the wait after a timed-out 2FA when relogin is enabled | `60.0` |
-| `mfa_timeout_action` | `IBC_MFA_TIMEOUT_ACTION` | What to do when the 2FA push goes unanswered until `mfa_timeout` or `mfa_exit_interval` expires: `exit` (exit 75) or `restart` (relaunch with a fresh login) | `exit` |
+| `mfa_timeout` | `IBC_MFA_TIMEOUT` | IB's own limit in seconds for an unanswered 2FA push (IB closed an unanswered dialog after 200 s and 352 s on Gateway 10.51). A 2FA dialog closing at or after it counts as timed out | `180.0` |
+| `relogin_after_mfa_timeout` | `IBC_RELOGIN_AFTER_MFA_TIMEOUT` | `true`: log in again 5 s after a timed-out push, and enforce `mfa_exit_interval` after an approved one. `false`: keep waiting for the push | `false` |
+| `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | With relogin on: seconds to wait for login to complete after the push is approved, then `mfa_timeout_action` applies | `60.0` |
+| `mfa_timeout_action` | `IBC_MFA_TIMEOUT_ACTION` | What to do when `mfa_exit_interval` expires after an approved push: `exit` (exit 75) or `restart` (relaunch with a fresh login) | `exit` |
 
 ## Diagnostics
 

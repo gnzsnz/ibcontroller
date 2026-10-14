@@ -235,10 +235,10 @@ TWS/ibgateway settings
 | `accept_incoming_connections` | `IBC_ACCEPT_INCOMING_CONNECTIONS` | `manual`/`accept`/`reject` | `"manual"` |
 | `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | `manual`/`primary`/`primaryoverride`/`secondary` | `"manual"` |
 | `login_dialog_display_timeout` | `IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog | `60.0` |
-| `mfa_timeout` | `IBC_MFA_TIMEOUT` | IB's 2FA timeout in seconds | `180.0` |
-| `relogin_after_mfa_timeout` | `IBC_RELOGIN_AFTER_MFA_TIMEOUT` | Restart login if 2FA times out | `false` |
-| `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | Bounds the post-2FA wait when relogin enabled | `60.0` |
-| `mfa_timeout_action` | `IBC_MFA_TIMEOUT_ACTION` | `exit` (exit 75, see "Exit codes" above) or `restart` (relaunch with a fresh login) when the 2FA push goes unanswered until `mfa_timeout` or `mfa_exit_interval` fires | `"exit"` |
+| `mfa_timeout` | `IBC_MFA_TIMEOUT` | IB's 2FA limit in seconds; a dialog closing at or after it counts as timed out | `180.0` |
+| `relogin_after_mfa_timeout` | `IBC_RELOGIN_AFTER_MFA_TIMEOUT` | Log in again after a timed-out push, and enforce `mfa_exit_interval` after an approved one | `false` |
+| `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | Post-approval wait for login to complete when relogin is on | `60.0` |
+| `mfa_timeout_action` | `IBC_MFA_TIMEOUT_ACTION` | `exit` (exit 75, see "Exit codes" above) or `restart` (relaunch with a fresh login) when `mfa_exit_interval` expires after an approved push | `"exit"` |
 | `auto_restart_time` | `IBC_AUTO_RESTART_TIME` | `"hh:mm AM/PM"` daily auto-restart time. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` |
 | `auto_logoff_time` | `IBC_AUTO_LOGOFF_TIME` | `"hh:mm AM/PM"` daily auto-logoff time; same "Lock and Exit" radio-button pair as `auto_restart_time` -- if both are set, `auto_restart_time` wins | `None` |
 | `time_zone` | `IBC_TIME_ZONE` | IANA zone name, e.g. `"Europe/Zurich"`, written to `jts.ini`'s `TimeZone`. Auto-detected from `TZ`, then `/etc/localtime` -- no setup needed in the common case; never overwrites an existing `TimeZone` line | auto-detected |
@@ -514,7 +514,7 @@ code, grouped by what a supervisor (a container's `restart:` policy, systemd's
 | `2` | CLI usage error | Fix the command |
 | `78` (`EX_CONFIG`) | Deployment error (bad config, install not found) | Do not retry |
 | `77` (`EX_NOPERM`) | Credentials rejected | Do not retry (lockout risk) |
-| `75` (`EX_TEMPFAIL`) | 2FA not approved in time, `mfa_timeout_action=exit` | Retry per policy |
+| `75` (`EX_TEMPFAIL`) | Login did not complete after 2FA, `mfa_timeout_action=exit` | Retry per policy |
 | `69` (`EX_UNAVAILABLE`) | Transient runtime failure (process crashed or killed, connection lost, JVM exited before becoming ready, login timed out with no 2FA dialog) | Retry |
 
 `77`/`78` work with systemd's `RestartPreventExitStatus=`.

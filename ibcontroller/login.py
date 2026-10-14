@@ -22,15 +22,14 @@ background task, so a real dialog occurrence is never handled twice at once.
 
 **Two distinct timeout/retry mechanisms, not one:**
 
-1. An MFA-timeout watchdog, internal to this module (`_after_mfa_closed_*`):
-   measures elapsed time since login started against
-   `mfa_timeout` (IB's own budget for completing
-   2FA). If 2FA closed within that budget and `relogin_after_mfa_timeout` is
-   enabled, arms a second, shorter watchdog
-   (`mfa_exit_interval`) and raises `LoginError` if
-   login still hasn't completed by then -- there's no restart primitive at
-   this layer yet. If 2FA's own timeout expired while its dialog was still
-   open, retries the whole login after a fixed `_IBC_RELOGIN_DELAY_SECONDS`.
+1. The 2FA close handling, internal to this module (`_after_mfa_closed_*`).
+   The wait for the 2FA dialog to close has no cap (IB closes an unanswered
+   dialog by itself, after 200 s to 352 s observed on Gateway 10.51); elapsed time since
+   login started is then compared with `mfa_timeout` (IB's own limit). Closed
+   before it, with `relogin_after_mfa_timeout` enabled: arms the shorter
+   `mfa_exit_interval` watchdog and raises `MfaTimeoutError` if login still
+   hasn't completed. Closed at or after it (IB timed out on an unanswered push):
+   retries the whole login after a fixed `_IBC_RELOGIN_DELAY_SECONDS`.
 2. `recognisers.TooManyFailedLoginAttemptsRecognizer`, a real server-side
    rate-limit dialog, unrelated to the MFA timing above. Its `handle()`
    calls `LoginManager.schedule_retry`, which re-fills credentials, resubmits,
@@ -47,10 +46,9 @@ the splash/"Authenticating..." window's own `WINDOW_CLOSED` event instead,
 the one signal that's correct in both trading modes without needing to know
 which one it is.
 
-**Not live-validated against real IBKR servers, unlike everything else in
-this file.** Triggering IB's real 180-second 2FA timeout, or "too many
-failed login attempts", both carry real account-level risk for no safe
-benefit -- built and unit-tested against synthetic timing/dialogs instead.
+**Not live-validated against real IBKR servers:** "too many failed login
+attempts" carries real account-level risk for no safe benefit -- built and
+unit-tested against synthetic timing/dialogs instead.
 """
 
 from __future__ import annotations
@@ -396,10 +394,11 @@ class LoginManager:
                     logger.info(
                         "IBController > second factor authentication in progress"
                     )
+                    # No cap: IB closes the dialog itself, and when decides the branch
                     await sub.wait(
                         "window_closed",
                         lambda e: e.window.title == mfa_title,
-                        timeout=remaining(),
+                        timeout=None,
                     )
                     await self._after_mfa_closed_tws()
                     return
@@ -435,18 +434,16 @@ class LoginManager:
 
     async def _after_mfa_closed_tws(self) -> None:
         """Measures elapsed time since login started against
-        `mfa_timeout` (IB's own real limit for
-        completing 2FA, default 180s).
+        `mfa_timeout` (IB's own limit for an unanswered 2FA push, default 180s).
 
         If 2FA closed within that budget: waits for the outcome again, bounded
         by that same `mfa_timeout` budget (an
         unconditional wait if `relogin_after_mfa_timeout` is off), or arms a
         shorter `mfa_exit_interval` watchdog and
-        raises `LoginError` if login still hasn't completed by then -- there
-        is no restart primitive at this layer yet.
+        raises `MfaTimeoutError` if login still hasn't completed by then.
 
-        If 2FA's own timeout already expired while its dialog was still
-        open: retries the whole login after `_IBC_RELOGIN_DELAY_SECONDS`, or
+        If 2FA closed at or after `mfa_timeout` (IB timed out an unanswered
+        push): retries the whole login after `_IBC_RELOGIN_DELAY_SECONDS`, or
         keeps waiting for the outcome (same bounded budget) if retry is
         disabled."""
         elapsed = time.monotonic() - (self._login_start_time or time.monotonic())
@@ -535,14 +532,19 @@ class LoginManager:
                     logger.info(
                         "IBController > second factor authentication in progress"
                     )
+                    # No cap: IB closes the dialog itself, and when decides the branch
                     await sub.wait(
                         "window_closed",
                         lambda e: e.window.title == mfa_title,
-                        timeout=max(0.0, deadline - time.monotonic()),
+                        timeout=None,
                     )
                     interval = await self._after_mfa_closed_gateway(outcome_timeout)
+                    if self.state is LoginState.LOGGED_IN:
+                        return  # the relogin inside already waited for the outcome
                     if interval is not None:
                         watchdog = time.monotonic() + interval
+                    if time.monotonic() >= deadline:  # late close: budget starts over
+                        deadline = time.monotonic() + outcome_timeout
 
         self.state = LoginState.LOGGED_IN
         logger.info("IBController > login completed")

@@ -145,16 +145,22 @@
 # accept_incoming_connections = "manual"
 
 # --- Login/2FA timeout and retry settings -- ibcontroller's own policy, not written to
-# --- Gateway/TWS itself (though mfa_timeout mirrors IBKR's
-# --- real external 2FA window).
+# --- Gateway/TWS itself (though mfa_timeout mirrors IBKR's real 2FA limit).
 # IBC: LoginDialogDisplayTimeout, default 60
 # login_dialog_display_timeout = 60.0
-# IBC: SecondFactorAuthenticationTimeout, default 180
+# IBC: SecondFactorAuthenticationTimeout, default 180. IB's own limit for an unanswered
+# 2FA push: a 2FA dialog closing at or after it counts as timed out
 # mfa_timeout = 180.0
-# IBC: ReloginAfterSecondFactorAuthenticationTimeout, default false
+# IBC: ReloginAfterSecondFactorAuthenticationTimeout, default false. true: log in again
+# 5 s after a timed-out push, and enforce mfa_exit_interval after an approved one;
+# false: keep waiting for the push
 # relogin_after_mfa_timeout = false
-# IBC: SecondFactorAuthenticationExitInterval, default 60
+# IBC: SecondFactorAuthenticationExitInterval, default 60. With relogin on: seconds to
+# wait for login to complete after the push is approved, then mfa_timeout_action applies
 # mfa_exit_interval = 60.0
+# IBC: --on2fatimeout, default "exit". What to do when mfa_exit_interval expires:
+# "exit" (exit code 75) or "restart" (relaunch with a fresh login)
+# mfa_timeout_action = "exit"
 
 # IBC: AutoRestartTime -- same name, same "hh:mm AM/PM" format (e.g. "08:00 AM"), a
 # single space between the two parts. Drives settings.py's "auto_restart_time" action

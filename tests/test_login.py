@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import time
 from tempfile import gettempdir
 
 import attrs
@@ -919,6 +918,8 @@ async def test_too_many_failed_attempts_dialog_triggers_retry_via_watcher(
 _TWS_LOGIN_CLASS = "twslaunch.tws.LoginFrame"
 _TWS_MAIN_CLASS = "twslaunch.tws.MainFrame"
 _TWS_TITLE = "Login"
+_MFA_CLASS = "twslaunch.jauthentication.bh"
+_MFA_TITLE = "Second Factor Authentication"
 
 
 async def test_tws_happy_path_fills_credentials_and_reaches_logged_in(
@@ -1149,102 +1150,133 @@ async def test_gateway_outcome_wait_is_bounded_by_outcome_timeout(
             await dispatcher.stop()
 
 
-async def test_gateway_2fa_close_wait_uses_remaining_deadline_not_full_budget(
-    sock_path, event_sock_path, tmp_path
+async def test_gateway_unanswered_2fa_closing_after_the_deadline_relogs_in(
+    sock_path, event_sock_path, monkeypatch
 ):
-    """The 2FA-closed wait inside `_wait_for_outcome_gateway`'s loop used to
-    pass the full `outcome_timeout` again instead of what's left of the
-    original deadline -- 2FA opening late in the budget granted a second full
-    budget's worth of extra waiting, past what `LoginError`'s own message
-    claims. 2FA opens ~0.3s into a 0.4s `outcome_timeout` and never closes --
-    `run()` must raise close to the original ~0.4s deadline, not ~0.4s plus
-    another full 0.4s on top. An unanswered push is `MfaTimeoutError` (exit
-    75), not the plain `LoginError` (gitea #60)."""
-    responder = _tracking_responder([])
+    """#61: IB closes an unanswered 2FA dialog after the login deadline. The close
+    wait is uncapped, so the late branch runs through the real wait and, with
+    relogin on, re-submits the credentials and reaches `LOGGED_IN`."""
+    monkeypatch.setattr("ibcontroller.login._IBC_RELOGIN_DELAY_SECONDS", 0.01)
+    calls: list[dict] = []
     async with (
-        FakeCommandServer(sock_path, responder),
+        FakeCommandServer(sock_path, _tracking_responder(calls)),
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(
-            _config(program=Program.GATEWAY), LABELS, dispatcher, restart_expected=False
-        )
-        start = time.monotonic()
+        config = _config(relogin_after_mfa_timeout=True, mfa_timeout=0.2)
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
         try:
             task = asyncio.ensure_future(
-                manager.run(login_timeout=5.0, outcome_timeout=0.4)
+                manager.run(login_timeout=5.0, outcome_timeout=0.2)
             )
             await _feed(
                 dispatcher,
-                [_window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway")],
+                [
+                    _window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway"),
+                    _window_event(2, "window_opened", _MFA_CLASS, _MFA_TITLE),
+                ],
             )
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.4)  # past outcome_timeout and mfa_timeout
+            assert not task.done()
             dispatcher._window_events.emit(
-                _window_event(
-                    2,
-                    "window_opened",
-                    "twslaunch.jauthentication.bh",
-                    "Second Factor Authentication",
-                )
+                _window_event(3, "window_closed", _MFA_CLASS, _MFA_TITLE)
             )
-            with pytest.raises(MfaTimeoutError):
-                # A generous outer bound -- if the bug were still present,
-                # this would need ~0.8s (two full budgets); 0.6s only leaves
-                # room for the original ~0.4s deadline plus scheduling slack.
-                await asyncio.wait_for(task, timeout=0.6)
+            await asyncio.sleep(0.1)  # relogin delay, then credentials again
+            dispatcher._window_events.emit(_splash_closed_event(4))
+            await asyncio.wait_for(task, timeout=2.0)
         finally:
             await dispatcher.stop()
-        assert time.monotonic() - start < 0.6
+    assert manager.state is LoginState.LOGGED_IN
+    sent_targets = [c.get("target") for c in calls if "target" in c]
+    assert sent_targets.count("Username") == 2
 
 
-async def test_tws_2fa_close_wait_uses_remaining_deadline_not_full_budget(
-    sock_path, event_sock_path, tmp_path
+async def test_tws_unanswered_2fa_closing_after_the_deadline_relogs_in(
+    sock_path, event_sock_path, monkeypatch
 ):
-    """Same bug class as Gateway's, confirmed against IBC's own
-    `LoginManager.secondFactorAuthenticationDialogClosed` (elapsed measured
-    from one fixed login-start anchor, never re-armed per stage): the
-    2FA-closed wait inside `_wait_for_outcome_tws`'s loop used to pass the
-    full `mfa_timeout` again instead of what's left
-    of `outcome_timeout`'s own deadline. 2FA opens ~0.3s into a 0.4s
-    `outcome_timeout` and never closes -- `run()` must raise
-    `MfaTimeoutError` close to the original ~0.4s deadline, not ~0.4s plus
-    another full `mfa_timeout` on top."""
-    responder = _tracking_responder([])
+    """TWS mirror of the Gateway test above."""
+    monkeypatch.setattr("ibcontroller.login._IBC_RELOGIN_DELAY_SECONDS", 0.01)
+    calls: list[dict] = []
     async with (
-        FakeCommandServer(sock_path, responder),
+        FakeCommandServer(sock_path, _tracking_responder(calls)),
         FakeEventServer(event_sock_path, []),
     ):
         dispatcher = await _start(sock_path, event_sock_path)
-        manager = LoginManager(
-            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=False
+        config = _config(
+            program=Program.TWS, relogin_after_mfa_timeout=True, mfa_timeout=0.2
         )
-        start = time.monotonic()
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
         try:
             task = asyncio.ensure_future(
-                manager.run(login_timeout=5.0, outcome_timeout=0.4)
+                manager.run(login_timeout=5.0, outcome_timeout=0.2)
             )
             await _feed(
                 dispatcher,
-                [_window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE)],
+                [
+                    _window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE),
+                    _window_event(2, "window_opened", _MFA_CLASS, _MFA_TITLE),
+                ],
             )
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.4)  # past outcome_timeout and mfa_timeout
+            assert not task.done()
+            dispatcher._window_events.emit(
+                _window_event(3, "window_closed", _MFA_CLASS, _MFA_TITLE)
+            )
+            await asyncio.sleep(0.1)  # relogin delay, then credentials again
             dispatcher._window_events.emit(
                 _window_event(
-                    2,
+                    4,
                     "window_opened",
-                    "twslaunch.jauthentication.bh",
-                    "Second Factor Authentication",
+                    _TWS_MAIN_CLASS,
+                    _TWS_TITLE,
+                    window_id="w-main",
                 )
             )
-            with pytest.raises(MfaTimeoutError):
-                # Same generous-but-bounded outer window as Gateway's mirror
-                # test above -- would need ~0.4s plus a full
-                # mfa_timeout if the bug regressed.
-                await asyncio.wait_for(task, timeout=0.6)
+            await asyncio.wait_for(task, timeout=2.0)
         finally:
             await dispatcher.stop()
-        assert time.monotonic() - start < 0.6
-        assert time.monotonic() - start < 0.6
+    assert manager.state is LoginState.LOGGED_IN
+    sent_targets = [c.get("target") for c in calls if "target" in c]
+    assert sent_targets.count("Username") == 2
+
+
+async def test_gateway_late_2fa_close_without_relogin_keeps_waiting(
+    sock_path, event_sock_path
+):
+    """Relogin off (IBC: keep waiting): a late close does not end `run()` and
+    does not resubmit; the splash closing completes the login."""
+    calls: list[dict] = []
+    async with (
+        FakeCommandServer(sock_path, _tracking_responder(calls)),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        config = _config(relogin_after_mfa_timeout=False, mfa_timeout=0.2)
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
+        try:
+            task = asyncio.ensure_future(
+                manager.run(login_timeout=5.0, outcome_timeout=0.2)
+            )
+            await _feed(
+                dispatcher,
+                [
+                    _window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway"),
+                    _window_event(2, "window_opened", _MFA_CLASS, _MFA_TITLE),
+                ],
+            )
+            await asyncio.sleep(0.4)
+            dispatcher._window_events.emit(
+                _window_event(3, "window_closed", _MFA_CLASS, _MFA_TITLE)
+            )
+            await asyncio.sleep(0.1)
+            assert not task.done()
+            dispatcher._window_events.emit(_splash_closed_event(4))
+            await asyncio.wait_for(task, timeout=2.0)
+        finally:
+            await dispatcher.stop()
+    assert manager.state is LoginState.LOGGED_IN
+    sent_targets = [c.get("target") for c in calls if "target" in c]
+    assert sent_targets.count("Username") == 1
 
 
 async def _registry_seeded(dispatcher: Dispatcher, window_id: str) -> None:

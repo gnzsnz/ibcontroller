@@ -264,10 +264,10 @@ class DiagnosticWhen(StrEnum):
 
 class MfaTimeoutAction(StrEnum):
     """What to do when login does not complete after the 2FA dialog appeared
-    (`login.MfaTimeoutError`): the push went unanswered until `mfa_timeout`,
-    or login still hadn't completed `mfa_exit_interval` seconds after 2FA
-    closed. IBC: --on2fatimeout. EXIT propagates the error (sysexits 75,
-    EX_TEMPFAIL); RESTART relaunches the instance with a full fresh login."""
+    (`login.MfaTimeoutError`): login still hadn't completed `mfa_exit_interval`
+    seconds after 2FA closed. IBC: --on2fatimeout. EXIT propagates the error
+    (sysexits 75, EX_TEMPFAIL); RESTART relaunches the instance with a full fresh
+    login."""
 
     EXIT = "exit"
     RESTART = "restart"
@@ -335,7 +335,9 @@ class Config:
     # Login/MFA timeout and retry settings
     # IBC: LoginDialogDisplayTimeout
     login_dialog_display_timeout: float = 60.0
-    # IBC: SecondFactorAuthenticationTimeout
+    # IBC: SecondFactorAuthenticationTimeout. IB's own limit for an unanswered 2FA
+    # dialog (it closed it after 200 s and 352 s on Gateway 10.51); only classifies
+    # the dialog's close.
     mfa_timeout: float = 180.0
     # IBC: ReloginAfterSecondFactorAuthenticationTimeout
     relogin_after_mfa_timeout: bool = False
