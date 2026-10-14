@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import types
+from tempfile import gettempdir
 
 import pytest
+from typed_settings.types import Secret
 
 from ibcontroller.agent_client import (
     AgentCommandConnection,
@@ -15,7 +18,13 @@ from ibcontroller.agent_client import (
     WindowEvent,
     WindowInfo,
 )
-from ibcontroller.config import AcceptIncomingConnections, ExistingSessionAction
+from ibcontroller.config import (
+    AcceptIncomingConnections,
+    Config,
+    ExistingSessionAction,
+    Program,
+    TradingMode,
+)
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import DismissRule, LabelsError, load_labels
 from ibcontroller.logging_setup import configure_logging, stop_logging
@@ -32,6 +41,7 @@ from ibcontroller.recognisers import (
     UnrecognizedCredentialsRecognizer,
     _parse_wait_seconds,
     _strip_html,
+    build_default_registry,
     handle_window_opened,
     is_credential_entry,
     watch_for_unprompted_windows,
@@ -1026,3 +1036,76 @@ async def test_too_many_failed_login_attempts_enabled_dismisses_and_schedules(
     dismiss_calls = [c for c in calls if c.get("target") == "OK"]
     assert dismiss_calls
     assert scheduled == [4 * 60 + 47 + 3]
+
+
+def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
+    config = Config(
+        program=Program.GATEWAY,
+        tws_version="10.50",
+        trading_mode=TradingMode.PAPER,
+        userid=Secret("u"),
+        password=Secret("p"),
+        log_dir=f"{gettempdir()}/log",
+    )
+    # A plain stub is enough: the registry only reads `SessionState`
+    session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
+
+    registry = build_default_registry(
+        config,
+        LABELS,
+        session,  # type: ignore[arg-type]
+        lambda _wait: None,
+    )
+    declarative = [
+        r for r in registry._registry if isinstance(r, DeclarativeDismissRecognizer)
+    ]
+    hand_written_types = {
+        type(r)
+        for r in registry._registry
+        if not isinstance(r, DeclarativeDismissRecognizer)
+    }
+    # Declarative rules come first, matching the documented priority order.
+    assert registry._registry[: len(declarative)] == declarative
+    assert {r.rule.name for r in declarative} == {
+        rule.name for rule in LABELS.dismiss_rules
+    }
+    assert hand_written_types == {
+        ExistingSessionRecognizer,
+        AcceptIncomingConnectionsRecognizer,
+        LoginFailedRecognizer,
+        LoginErrorRecognizer,
+        UnrecognizedCredentialsRecognizer,
+        GatewayConnectionFailedRecognizer,
+        TooManyFailedLoginAttemptsRecognizer,
+    }
+
+
+def test_build_registry_binds_session_and_schedule_retry():
+    """`is_logged_in` is read from the session at match time; the retry hook
+    is the callable passed in."""
+    retries: list[float] = []
+    session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: True)
+    config = Config(
+        program=Program.GATEWAY,
+        tws_version="10.50",
+        trading_mode=TradingMode.PAPER,
+        userid=Secret("u"),
+        password=Secret("p"),
+        log_dir=f"{gettempdir()}/log",
+    )
+    registry = build_default_registry(
+        config,
+        LABELS,
+        session,  # type: ignore[arg-type]
+        retries.append,
+    )
+    existing = next(
+        r for r in registry._registry if isinstance(r, ExistingSessionRecognizer)
+    )
+    retry = next(
+        r
+        for r in registry._registry
+        if isinstance(r, TooManyFailedLoginAttemptsRecognizer)
+    )
+    assert existing._is_logged_in is session.is_logged_in
+    assert retry._schedule_retry == retries.append

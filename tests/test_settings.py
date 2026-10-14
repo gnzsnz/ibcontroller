@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import types
 from tempfile import gettempdir
 
 import attrs
 import pytest
 from typed_settings.types import Secret
 
+from ibcontroller import settings
 from ibcontroller.agent_client import (
     AgentCommandConnection,
     AgentEventConnection,
@@ -27,6 +29,7 @@ from ibcontroller.settings import (
     SettingsError,
     SettingsFile,
     _parse_time_ampm,
+    apply_declarative_settings,
     apply_settings_from_file,
     close_settings_dialog,
     load_builtin_settings_file,
@@ -303,7 +306,7 @@ async def test_apply_settings_logs_each_entry_applied_and_skipped(
 async def test_apply_settings_scopes_every_action_to_the_given_window_id(
     sock_path, event_sock_path
 ):
-    """`window_id` (2026-09-06) -- `_apply_declarative_settings` (control_loop.py)
+    """`window_id` (2026-09-06) -- `apply_declarative_settings`
     always passes `open_settings_dialog`'s own return value here, scoping every
     `expand_tree`/`toggle` call to the one Configuration dialog that opened,
     instead of an unscoped, whole-JVM search."""
@@ -1378,3 +1381,261 @@ def test_merge_settings_files_preserves_builtin_then_user_order():
     merged = merge_settings_files(builtin, user)
 
     assert merged == [override_a, builtin_b, user_extra]
+
+
+def _tracking_responder(calls: list[dict]):
+    def responder(request):
+        calls.append(request)
+        if request.get("cmd") == "dump":
+            return {"ok": True, "components": []}
+        if request.get("cmd") == "navigate_menu":
+            return {"ok": True, "clicked": True}
+        return {"ok": True}
+
+    return responder
+
+
+async def test_apply_declarative_settings_applies_builtin_with_no_settings_file(
+    sock_path, event_sock_path
+):
+    """The real gap this fix closes: `read_only_api` set in `ibcontroller.toml`
+    alone, with `Config.settings_file` left at its `None` default, used to be a
+    silent no-op -- nothing ever opened the Configuration dialog. Now the
+    built-in entry applies from `Config` alone."""
+    calls: list[dict] = []
+    responder = _tracking_responder(calls)
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = Dispatcher(
+            AgentCommandConnection(sock_path), AgentEventConnection(event_sock_path)
+        )
+        await dispatcher.start()
+        session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
+        config = _config(settings_file=None, read_only_api=False)
+        try:
+            task = asyncio.ensure_future(
+                apply_declarative_settings(
+                    dispatcher,
+                    LABELS,
+                    config,
+                    session,  # type: ignore[arg-type]
+                )
+            )
+            await asyncio.sleep(0.02)
+            dispatcher._window_events.emit(
+                WindowEvent(
+                    seq=1,
+                    kind="window_opened",
+                    window=WindowInfo(
+                        class_="feature.configure.ai",
+                        title="DU123 Trader Workstation Configuration "
+                        "(Simulated Trading)",
+                        window_id="w9",
+                    ),
+                )
+            )
+            await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert {
+        "cmd": "set_checkbox",
+        "target": "Read-Only API",
+        "checked": False,
+        "window_id": "w9",
+    } in calls
+
+
+async def test_apply_declarative_settings_applies_builtin_when_user_file_missing(
+    sock_path, event_sock_path, caplog
+):
+    """Issues #27/#30: a `Config.settings_file` that fails to load (missing
+    here) used to abort the whole function before `open_settings_dialog` ever
+    ran, silently skipping the built-in `read_only_api` entry too. Now the
+    load failure is isolated and the built-in entry still applies."""
+    calls: list[dict] = []
+    responder = _tracking_responder(calls)
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = Dispatcher(
+            AgentCommandConnection(sock_path), AgentEventConnection(event_sock_path)
+        )
+        await dispatcher.start()
+        session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
+        config = _config(
+            settings_file="/nonexistent/ibkr_settings.toml", read_only_api=False
+        )
+        try:
+            with caplog.at_level(logging.ERROR, logger="ibcontroller.settings"):
+                task = asyncio.ensure_future(
+                    apply_declarative_settings(
+                        dispatcher,
+                        LABELS,
+                        config,
+                        session,  # type: ignore[arg-type]
+                    )
+                )
+                await asyncio.sleep(0.02)
+                dispatcher._window_events.emit(
+                    WindowEvent(
+                        seq=1,
+                        kind="window_opened",
+                        window=WindowInfo(
+                            class_="feature.configure.ai",
+                            title="DU123 Trader Workstation Configuration "
+                            "(Simulated Trading)",
+                            window_id="w9",
+                        ),
+                    )
+                )
+                await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert {
+        "cmd": "set_checkbox",
+        "target": "Read-Only API",
+        "checked": False,
+        "window_id": "w9",
+    } in calls
+    assert any(
+        "could not load" in message and "nonexistent" in message
+        for message in caplog.messages
+    )
+
+
+async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
+    sock_path, event_sock_path, monkeypatch
+):
+    """Real, live-caught bug's fix (2026-09-12, issue #1): a `finally` around
+    `apply_settings_from_file` now guarantees `close_settings_dialog` runs even
+    when applying entries fails outright -- before this fix, the Configuration
+    dialog was left open on the live Gateway for good. Forces an exception past
+    `apply_settings_from_file`'s own per-entry isolation (which only catches
+    `SettingsError`/`ElementNotFoundError`) to exercise the guaranteed-close
+    path specifically, not the per-entry-skip path already covered in
+    `test_settings.py`."""
+    calls: list[dict] = []
+    responder = _tracking_responder(calls)
+
+    async def _raise(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(settings, "apply_settings_from_file", _raise)
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = Dispatcher(
+            AgentCommandConnection(sock_path), AgentEventConnection(event_sock_path)
+        )
+        await dispatcher.start()
+        session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
+        config = _config(settings_file=None, read_only_api=False)
+        try:
+            task = asyncio.ensure_future(
+                apply_declarative_settings(
+                    dispatcher,
+                    LABELS,
+                    config,
+                    session,  # type: ignore[arg-type]
+                )
+            )
+            await asyncio.sleep(0.02)
+            dispatcher._window_events.emit(
+                WindowEvent(
+                    seq=1,
+                    kind="window_opened",
+                    window=WindowInfo(
+                        class_="feature.configure.ai",
+                        title="DU123 Trader Workstation Configuration "
+                        "(Simulated Trading)",
+                        window_id="w9",
+                    ),
+                )
+            )
+            with pytest.raises(RuntimeError, match="boom"):
+                await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert {"cmd": "click", "target": "OK", "window_id": "w9"} in calls
+
+
+async def test_apply_declarative_settings_passes_second_factor_timeout(
+    monkeypatch,
+):
+    """#37 follow-up: `open_settings_dialog`'s own `timeout` default (180.0)
+    must not be relied on silently -- it needs to track
+    `Config.mfa_timeout` (the same field
+    `login.py` already reads), so a deployment that changes one also
+    changes the other.
+
+    Also covers #40: `main_window_id` (`LoginManager.main_window_id`) must
+    reach `open_settings_dialog` unchanged, so `navigate_menu` scopes to the
+    already-validated main window instead of a global search."""
+    captured: dict[str, object] = {}
+
+    async def _fake_open_settings_dialog(*_args, **kwargs):
+        captured.update(kwargs)
+        return "w9"
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(settings, "open_settings_dialog", _fake_open_settings_dialog)
+    monkeypatch.setattr(settings, "apply_settings_from_file", _noop)
+    monkeypatch.setattr(settings, "close_settings_dialog", _noop)
+
+    session = types.SimpleNamespace(main_window_id="w5", is_logged_in=lambda: False)
+    config = _config(
+        settings_file=None,
+        read_only_api=False,
+        mfa_timeout=42.0,
+    )
+    await apply_declarative_settings(
+        None,  # type: ignore[arg-type]
+        LABELS,
+        config,
+        session,  # type: ignore[arg-type]
+    )
+
+    assert captured["timeout"] == 42.0
+    assert captured["main_window_id"] == "w5"
+
+
+async def test_apply_declarative_settings_runs_after_apply_before_close(monkeypatch):
+    """`after_apply` gets the dialog's `window_id` while the dialog is open."""
+    order: list[str] = []
+
+    async def _open(*_args, **_kwargs):
+        return "w9"
+
+    async def _apply(*_args, **_kwargs):
+        order.append("apply")
+
+    async def _close(*_args, **_kwargs):
+        order.append("close")
+
+    async def _after(window_id):
+        order.append(f"after:{window_id}")
+
+    monkeypatch.setattr(settings, "open_settings_dialog", _open)
+    monkeypatch.setattr(settings, "apply_settings_from_file", _apply)
+    monkeypatch.setattr(settings, "close_settings_dialog", _close)
+
+    session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
+    await apply_declarative_settings(
+        None,  # type: ignore[arg-type]
+        LABELS,
+        _config(settings_file=None, read_only_api=False),
+        session,  # type: ignore[arg-type]
+        after_apply=_after,
+    )
+
+    assert order == ["apply", "after:w9", "close"]

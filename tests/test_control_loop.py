@@ -1,5 +1,5 @@
 """Unit tests for control_loop.py's pure, no-live-Gateway-needed half --
-`StartupState`/`_log_transition`, `_build_registry`, and
+`StartupState`/`_log_transition`, `build_default_registry` wiring, and
 `run_control_loop`'s cancellation handling (`ShutdownCause.REQUESTED`).
 `run_control_loop`'s real launch/login/settings sequence needs a real install
 to mean anything (same as `launcher.launch_instance`'s own precedent) and
@@ -25,16 +25,12 @@ from ibcontroller.agent_client import (
     AgentEventConnection,
     ElementNotFoundError,
     ProtocolError,
-    WindowEvent,
-    WindowInfo,
 )
 from ibcontroller.config import Config, MfaTimeoutAction, Program, TradingMode
 from ibcontroller.control_loop import (
     ShutdownCause,
     StartupState,
-    _apply_declarative_settings,
     _apply_declarative_settings_or_log,
-    _build_registry,
     _log_transition,
     _PhaseAborted,
     _run_phase_watching_process,
@@ -48,22 +44,11 @@ from ibcontroller.launcher import LaunchedInstance
 from ibcontroller.login import (
     CredentialsRejectedError,
     LoginFrameTimeoutError,
-    LoginManager,
     MfaTimeoutError,
     TransientLoginError,
 )
-from ibcontroller.recognisers import (
-    AcceptIncomingConnectionsRecognizer,
-    DeclarativeDismissRecognizer,
-    ExistingSessionRecognizer,
-    GatewayConnectionFailedRecognizer,
-    LoginErrorRecognizer,
-    LoginFailedRecognizer,
-    TooManyFailedLoginAttemptsRecognizer,
-    UnrecognizedCredentialsRecognizer,
-)
 from ibcontroller.schedule import ScheduledAction, ScheduledShutdown
-from tests.fakes import FakeCommandServer, FakeEventServer, FakeProcess
+from tests.fakes import FakeProcess
 
 pytestmark = pytest.mark.asyncio
 
@@ -103,43 +88,6 @@ def _config(**overrides) -> Config:
         log_dir=f"{gettempdir()}/log",
     )
     return attrs.evolve(base, **overrides)
-
-
-def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
-    config = _config()
-
-    class _FakeDispatcher:
-        pass
-
-    manager = LoginManager(
-        config,
-        LABELS,
-        _FakeDispatcher(),  # type: ignore[arg-type]
-        restart_expected=False,
-    )
-    registry = _build_registry(config, LABELS, manager)
-    declarative = [
-        r for r in registry._registry if isinstance(r, DeclarativeDismissRecognizer)
-    ]
-    hand_written_types = {
-        type(r)
-        for r in registry._registry
-        if not isinstance(r, DeclarativeDismissRecognizer)
-    }
-    # Declarative rules come first, matching the documented priority order.
-    assert registry._registry[: len(declarative)] == declarative
-    assert {r.rule.name for r in declarative} == {
-        rule.name for rule in LABELS.dismiss_rules
-    }
-    assert hand_written_types == {
-        ExistingSessionRecognizer,
-        AcceptIncomingConnectionsRecognizer,
-        LoginFailedRecognizer,
-        LoginErrorRecognizer,
-        UnrecognizedCredentialsRecognizer,
-        GatewayConnectionFailedRecognizer,
-        TooManyFailedLoginAttemptsRecognizer,
-    }
 
 
 async def test_run_control_loop_returns_requested_when_task_is_cancelled(
@@ -744,234 +692,6 @@ async def test_run_control_loop_mfa_timeout_propagates_when_action_is_exit(
     assert calls == [None]
 
 
-def _tracking_responder(calls: list[dict]):
-    def responder(request):
-        calls.append(request)
-        if request.get("cmd") == "dump":
-            return {"ok": True, "components": []}
-        if request.get("cmd") == "navigate_menu":
-            return {"ok": True, "clicked": True}
-        return {"ok": True}
-
-    return responder
-
-
-async def test_apply_declarative_settings_applies_builtin_with_no_settings_file(
-    sock_path, event_sock_path
-):
-    """The real gap this fix closes: `read_only_api` set in `ibcontroller.toml`
-    alone, with `Config.settings_file` left at its `None` default, used to be a
-    silent no-op -- nothing ever opened the Configuration dialog. Now the
-    built-in entry applies from `Config` alone."""
-    calls: list[dict] = []
-    responder = _tracking_responder(calls)
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = Dispatcher(
-            AgentCommandConnection(sock_path), AgentEventConnection(event_sock_path)
-        )
-        await dispatcher.start()
-        launched = types.SimpleNamespace(dispatcher=dispatcher)
-        config = _config(settings_file=None, read_only_api=False)
-        try:
-            task = asyncio.ensure_future(
-                _apply_declarative_settings(
-                    launched,  # type: ignore[arg-type]
-                    LABELS,
-                    config,
-                    None,
-                )
-            )
-            await asyncio.sleep(0.02)
-            dispatcher._window_events.emit(
-                WindowEvent(
-                    seq=1,
-                    kind="window_opened",
-                    window=WindowInfo(
-                        class_="feature.configure.ai",
-                        title="DU123 Trader Workstation Configuration "
-                        "(Simulated Trading)",
-                        window_id="w9",
-                    ),
-                )
-            )
-            await asyncio.wait_for(task, timeout=5.0)
-        finally:
-            await dispatcher.stop()
-
-    assert {
-        "cmd": "set_checkbox",
-        "target": "Read-Only API",
-        "checked": False,
-        "window_id": "w9",
-    } in calls
-
-
-async def test_apply_declarative_settings_applies_builtin_when_user_file_missing(
-    sock_path, event_sock_path, caplog
-):
-    """Issues #27/#30: a `Config.settings_file` that fails to load (missing
-    here) used to abort the whole function before `open_settings_dialog` ever
-    ran, silently skipping the built-in `read_only_api` entry too. Now the
-    load failure is isolated and the built-in entry still applies."""
-    calls: list[dict] = []
-    responder = _tracking_responder(calls)
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = Dispatcher(
-            AgentCommandConnection(sock_path), AgentEventConnection(event_sock_path)
-        )
-        await dispatcher.start()
-        launched = types.SimpleNamespace(dispatcher=dispatcher)
-        config = _config(
-            settings_file="/nonexistent/ibkr_settings.toml", read_only_api=False
-        )
-        try:
-            with caplog.at_level(logging.ERROR, logger="ibcontroller.control_loop"):
-                task = asyncio.ensure_future(
-                    _apply_declarative_settings(
-                        launched,  # type: ignore[arg-type]
-                        LABELS,
-                        config,
-                        None,
-                    )
-                )
-                await asyncio.sleep(0.02)
-                dispatcher._window_events.emit(
-                    WindowEvent(
-                        seq=1,
-                        kind="window_opened",
-                        window=WindowInfo(
-                            class_="feature.configure.ai",
-                            title="DU123 Trader Workstation Configuration "
-                            "(Simulated Trading)",
-                            window_id="w9",
-                        ),
-                    )
-                )
-                await asyncio.wait_for(task, timeout=5.0)
-        finally:
-            await dispatcher.stop()
-
-    assert {
-        "cmd": "set_checkbox",
-        "target": "Read-Only API",
-        "checked": False,
-        "window_id": "w9",
-    } in calls
-    assert any(
-        "could not load" in message and "nonexistent" in message
-        for message in caplog.messages
-    )
-
-
-async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
-    sock_path, event_sock_path, monkeypatch
-):
-    """Real, live-caught bug's fix (2026-09-12, issue #1): a `finally` around
-    `apply_settings_from_file` now guarantees `close_settings_dialog` runs even
-    when applying entries fails outright -- before this fix, the Configuration
-    dialog was left open on the live Gateway for good. Forces an exception past
-    `apply_settings_from_file`'s own per-entry isolation (which only catches
-    `SettingsError`/`ElementNotFoundError`) to exercise the guaranteed-close
-    path specifically, not the per-entry-skip path already covered in
-    `test_settings.py`."""
-    calls: list[dict] = []
-    responder = _tracking_responder(calls)
-
-    async def _raise(*_args, **_kwargs):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(control_loop, "apply_settings_from_file", _raise)
-
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = Dispatcher(
-            AgentCommandConnection(sock_path), AgentEventConnection(event_sock_path)
-        )
-        await dispatcher.start()
-        launched = types.SimpleNamespace(dispatcher=dispatcher)
-        config = _config(settings_file=None, read_only_api=False)
-        try:
-            task = asyncio.ensure_future(
-                _apply_declarative_settings(
-                    launched,  # type: ignore[arg-type]
-                    LABELS,
-                    config,
-                    None,
-                )
-            )
-            await asyncio.sleep(0.02)
-            dispatcher._window_events.emit(
-                WindowEvent(
-                    seq=1,
-                    kind="window_opened",
-                    window=WindowInfo(
-                        class_="feature.configure.ai",
-                        title="DU123 Trader Workstation Configuration "
-                        "(Simulated Trading)",
-                        window_id="w9",
-                    ),
-                )
-            )
-            with pytest.raises(RuntimeError, match="boom"):
-                await asyncio.wait_for(task, timeout=5.0)
-        finally:
-            await dispatcher.stop()
-
-    assert {"cmd": "click", "target": "OK", "window_id": "w9"} in calls
-
-
-async def test_apply_declarative_settings_passes_second_factor_timeout(
-    monkeypatch,
-):
-    """#37 follow-up: `open_settings_dialog`'s own `timeout` default (180.0)
-    must not be relied on silently -- it needs to track
-    `Config.mfa_timeout` (the same field
-    `login.py` already reads), so a deployment that changes one also
-    changes the other.
-
-    Also covers #40: `main_window_id` (`LoginManager.main_window_id`) must
-    reach `open_settings_dialog` unchanged, so `navigate_menu` scopes to the
-    already-validated main window instead of a global search."""
-    captured: dict[str, object] = {}
-
-    async def _fake_open_settings_dialog(*_args, **kwargs):
-        captured.update(kwargs)
-        return "w9"
-
-    async def _noop(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(
-        control_loop, "open_settings_dialog", _fake_open_settings_dialog
-    )
-    monkeypatch.setattr(control_loop, "apply_settings_from_file", _noop)
-    monkeypatch.setattr(control_loop, "close_settings_dialog", _noop)
-
-    launched = types.SimpleNamespace(dispatcher=None)
-    config = _config(
-        settings_file=None,
-        read_only_api=False,
-        mfa_timeout=42.0,
-    )
-    await _apply_declarative_settings(
-        launched,  # type: ignore[arg-type]
-        LABELS,
-        config,
-        "w5",
-    )
-
-    assert captured["timeout"] == 42.0
-    assert captured["main_window_id"] == "w5"
-
-
 @pytest.mark.parametrize(
     ("error", "has_traceback"),
     [
@@ -986,14 +706,14 @@ async def test_apply_declarative_settings_or_log_traceback_only_for_unexpected(
     async def _raise(*_args, **_kwargs):
         raise error
 
-    monkeypatch.setattr(control_loop, "_apply_declarative_settings", _raise)
+    monkeypatch.setattr(control_loop, "apply_declarative_settings", _raise)
 
     with caplog.at_level(logging.ERROR, logger="ibcontroller.control_loop"):
         await _apply_declarative_settings_or_log(
-            None,  # type: ignore[arg-type]
+            types.SimpleNamespace(dispatcher=None),  # type: ignore[arg-type]
             LABELS,
             _config(),
-            None,
+            types.SimpleNamespace(main_window_id=None),  # type: ignore[arg-type]
         )
 
     (record,) = caplog.records
@@ -1062,6 +782,9 @@ async def test_run_one_cycle_cancels_watcher_when_clean_shutdown_raises(
         def is_logged_in(self) -> bool:
             return False
 
+        def schedule_retry(self, _wait_seconds: float) -> None:
+            pass
+
     async def launch(*_args, **_kwargs):
         return LaunchedInstance(
             # pyrefly: ignore [bad-argument-type]
@@ -1080,7 +803,7 @@ async def test_run_one_cycle_cancels_watcher_when_clean_shutdown_raises(
 
     monkeypatch.setattr(control_loop, "launch_instance", launch)
     monkeypatch.setattr(control_loop, "LoginManager", _Manager)
-    monkeypatch.setattr(control_loop, "_build_registry", lambda *_a: None)
+    monkeypatch.setattr(control_loop, "build_default_registry", lambda *_a: None)
     monkeypatch.setattr(control_loop, "watch_for_unprompted_windows", watcher)
     monkeypatch.setattr(control_loop, "watch_for_diagnostics", forever)
     monkeypatch.setattr(control_loop, "clean_shutdown", failing_shutdown)
@@ -1116,6 +839,9 @@ async def test_run_one_cycle_shuts_down_when_diagnostics_watcher_died(
         def is_logged_in(self) -> bool:
             return False
 
+        def schedule_retry(self, _wait_seconds: float) -> None:
+            pass
+
     async def launch(*_args, **_kwargs):
         return LaunchedInstance(
             # pyrefly: ignore [bad-argument-type]
@@ -1134,7 +860,7 @@ async def test_run_one_cycle_shuts_down_when_diagnostics_watcher_died(
 
     monkeypatch.setattr(control_loop, "launch_instance", launch)
     monkeypatch.setattr(control_loop, "LoginManager", _Manager)
-    monkeypatch.setattr(control_loop, "_build_registry", lambda *_a: None)
+    monkeypatch.setattr(control_loop, "build_default_registry", lambda *_a: None)
     monkeypatch.setattr(control_loop, "watch_for_unprompted_windows", forever)
     monkeypatch.setattr(control_loop, "watch_for_diagnostics", dead_diagnostics)
     monkeypatch.setattr(control_loop, "clean_shutdown", shutdown)

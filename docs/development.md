@@ -247,13 +247,17 @@ Any contribution must follow this separation of concerns.
     base class carrying its `exit_code`: `ConfigError` 78, `CredentialsRejectedError` 77,
     `MfaTimeoutError` 75, `TransientError` 69. A new exception picks its group by base class.
     The login-outcome exceptions live in `login.py`, wherever the detecting recogniser lives.
-  - Domains do not call each other; L6 wires them together.
+  - Domains do not call each other; L6 wires them together. L6 builds the registry
+    (`build_default_registry`) and runs the settings sequence (`apply_declarative_settings`), one
+    call per domain. A step that belongs to another domain (the diagnostic settings sweep) is
+    passed in by L6 as a hook (`after_apply`).
+  - A domain reads the login session only through the read-only `SessionState` protocol
+    (`login.py`: `is_logged_in()`, `main_window_id`), never `LoginManager` itself.
   - A recogniser acts only on the window it matched (`window_id`). The dialogs registry never acts
     on a window with a visible credential field.
 - **Known deviations:**
   - `recognisers.py` and `diagnostics.py` iterate `Dispatcher.subscribe()` directly instead of going
     through L5-1.
-  - The registry construction and the settings sequence live in `control_loop.py`.
   - Scheduled shutdown timing lives in L6 (`schedule.py` maths, `control_loop.py` trigger); the
     shutdown itself is Management's `clean_shutdown`.
 

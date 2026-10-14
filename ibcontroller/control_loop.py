@@ -53,7 +53,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Awaitable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
@@ -62,6 +62,7 @@ from typing import Any, Protocol
 from ibcontroller.agent_client import AgentClientError
 from ibcontroller.config import Config, MfaTimeoutAction
 from ibcontroller.diagnostics import sweep_settings_tree, watch_for_diagnostics
+from ibcontroller.dispatch import Dispatcher
 from ibcontroller.errors import IBControllerError
 from ibcontroller.labels import Labels
 from ibcontroller.launcher import (
@@ -75,32 +76,16 @@ from ibcontroller.login import (
     LoginFrameTimeoutError,
     LoginManager,
     MfaTimeoutError,
+    SessionState,
     TransientLoginError,
 )
 from ibcontroller.management import clean_shutdown
 from ibcontroller.recognisers import (
-    AcceptIncomingConnectionsRecognizer,
-    DeclarativeDismissRecognizer,
-    ExistingSessionRecognizer,
-    GatewayConnectionFailedRecognizer,
-    LoginErrorRecognizer,
-    LoginFailedRecognizer,
-    RecognizerRegistry,
-    TooManyFailedLoginAttemptsRecognizer,
-    UnrecognizedCredentialsRecognizer,
+    build_default_registry,
     watch_for_unprompted_windows,
 )
 from ibcontroller.schedule import ScheduledAction, next_scheduled_shutdown
-from ibcontroller.settings import (
-    SettingsError,
-    SettingsFile,
-    apply_settings_from_file,
-    close_settings_dialog,
-    load_builtin_settings_file,
-    load_settings_file,
-    merge_settings_files,
-    open_settings_dialog,
-)
+from ibcontroller.settings import apply_declarative_settings
 
 logger = logging.getLogger(__name__)
 
@@ -168,126 +153,39 @@ async def _run_to_completion(aw: Awaitable[None]) -> None:
         raise asyncio.CancelledError
 
 
-def _build_registry(
-    config: Config, labels: Labels, manager: LoginManager
-) -> RecognizerRegistry:
-    # Declarative rules first, hand-written built-ins as the fallback --
-    # matching RecognizerRegistry's own stated priority order (config
-    # rules/plugins checked first, built-ins checked last).
-    declarative: list[DeclarativeDismissRecognizer] = [
-        DeclarativeDismissRecognizer(rule) for rule in labels.dismiss_rules
-    ]
-    return RecognizerRegistry(
-        [
-            *declarative,
-            ExistingSessionRecognizer(
-                labels.existing_session,
-                config.existing_session_action,
-                manager.is_logged_in,
-            ),
-            AcceptIncomingConnectionsRecognizer(
-                labels.accept_incoming_connection,
-                config.accept_incoming_connections,
-            ),
-            LoginFailedRecognizer(labels.login_failed),
-            LoginErrorRecognizer(labels.login_error),
-            UnrecognizedCredentialsRecognizer(labels.unrecognized_credentials),
-            GatewayConnectionFailedRecognizer(labels.gateway_connection_failed),
-            TooManyFailedLoginAttemptsRecognizer(
-                labels.too_many_failed_login_attempts,
-                config.relogin_after_mfa_timeout,
-                manager.schedule_retry,
-            ),
-        ]
+def _settings_sweep(
+    dispatcher: Dispatcher, labels: Labels, config: Config
+) -> Callable[[str | None], Awaitable[None]] | None:
+    """The `diagnostic_settings_sweep` step for `apply_declarative_settings`'s
+    `after_apply` hook, or `None` when the option is off. Wired here so
+    Settings does not depend on Diagnostic."""
+    if not config.diagnostic_settings_sweep:
+        return None
+    return lambda window_id: sweep_settings_tree(
+        dispatcher, window_id, labels.settings.sweep_paths
     )
-
-
-async def _apply_declarative_settings(
-    launched: LaunchedInstance,
-    labels: Labels,
-    config: Config,
-    main_window_id: str | None,
-) -> None:
-    """Applies the bundled built-in entries (`read_only_api`/
-    `auto_restart_time`, from `Config` alone -- see `settings.py`'s own "Two
-    tiers, not one" section), merged with a user's own `Config.settings_file`
-    when set.
-
-    `main_window_id` (`LoginManager.main_window_id`, from `_run_one_cycle`'s
-    own `manager`) scopes `open_settings_dialog`'s menu navigation to the
-    already-validated main window instead of a global guess -- #40.
-
-    `window_id` (from `open_settings_dialog`'s return value) scopes every
-    subsequent action to the exact dialog that opened, and `close_settings_dialog`
-    always runs in `finally` -- both entries applying cleanly and one raising
-    still leave the dialog closed.
-
-    A `config.settings_file` that fails to load (missing, invalid TOML, bad
-    structure -- `settings.SettingsError`) is logged and treated as absent
-    rather than aborting this whole function -- otherwise a typo'd path or a
-    bad edit would silently take the load-bearing built-in entries
-    (`read_only_api`, `auto_restart_time`) down with it, since this runs
-    before `open_settings_dialog`."""
-    builtin_settings = await load_builtin_settings_file()
-    user_settings = None
-    if config.settings_file is not None:
-        try:
-            user_settings = await load_settings_file(config.settings_file)
-        except SettingsError as exc:
-            logger.error(
-                "IBController > settings: could not load %s -- continuing "
-                "with built-in settings only: %s",
-                config.settings_file,
-                exc,
-            )
-    merged = merge_settings_files(builtin_settings, user_settings)
-    # open_settings_dialog -> apply_settings_from_file -> close_settings_dialog
-    window_id = await open_settings_dialog(
-        launched.dispatcher,
-        labels.settings,
-        program=config.program,
-        timeout=config.mfa_timeout,
-        main_window_id=main_window_id,
-    )
-    try:
-        await apply_settings_from_file(
-            launched.dispatcher,
-            labels,
-            config,
-            SettingsFile(settings=merged),
-            window_id=window_id,
-        )
-        if config.diagnostic_settings_sweep:
-            await sweep_settings_tree(
-                launched.dispatcher, window_id, labels.settings.sweep_paths
-            )
-    finally:
-        await close_settings_dialog(
-            launched.dispatcher, labels.settings, window_id=window_id
-        )
-    if user_settings is not None:
-        logger.info(
-            "IBController > declarative settings applied (built-in + %s)",
-            config.settings_file,
-        )
-    else:
-        logger.info("IBController > declarative settings applied (built-in only)")
 
 
 async def _apply_declarative_settings_or_log(
     launched: LaunchedInstance,
     labels: Labels,
     config: Config,
-    main_window_id: str | None,
+    session: SessionState,
 ) -> None:
-    """`_apply_declarative_settings`, with a local error boundary -- a
+    """`apply_declarative_settings`, with a local error boundary -- a
     Settings-application failure must not tear down an otherwise-healthy,
     already-logged-in session. Matches IBC's own `ConfigurationTask.java`,
     which recovers from exactly this step (`catch (Exception e) {
     Utils.logException(e); }`) while every other step stays fatal on an
     unhandled exception."""
     try:
-        await _apply_declarative_settings(launched, labels, config, main_window_id)
+        await apply_declarative_settings(
+            launched.dispatcher,
+            labels,
+            config,
+            session,
+            after_apply=_settings_sweep(launched.dispatcher, labels, config),
+        )
     except (AgentClientError, TimeoutError) as exc:  # expected: bad path, no dialog
         logger.error(
             "IBController > declarative settings application failed: %s -- "
@@ -608,7 +506,7 @@ async def _run_one_cycle(  # noqa: PLR0915
         launched.dispatcher,
         restart_expected=restart_hash is not None,
     )
-    registry = _build_registry(config, labels, manager)
+    registry = build_default_registry(config, labels, manager, manager.schedule_retry)
     watcher = asyncio.ensure_future(
         watch_for_unprompted_windows(registry, launched.dispatcher)
     )
@@ -640,9 +538,7 @@ async def _run_one_cycle(  # noqa: PLR0915
             _log_transition(state, StartupState.APPLYING_SETTINGS)
             state = StartupState.APPLYING_SETTINGS
             await _run_phase_watching_process(
-                _apply_declarative_settings_or_log(
-                    launched, labels, config, manager.main_window_id
-                ),
+                _apply_declarative_settings_or_log(launched, labels, config, manager),
                 process_done=process_done,
                 dispatcher_tasks=launched.dispatcher.tasks,
                 process=launched.process,

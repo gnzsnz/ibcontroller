@@ -52,9 +52,11 @@ from __future__ import annotations
 
 import logging
 import tomllib
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import attrs
 import cattrs
@@ -75,6 +77,9 @@ from ibcontroller.config import Config, Program
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.errors import IBControllerError
 from ibcontroller.labels import Labels, SettingsLabels
+
+if TYPE_CHECKING:
+    from ibcontroller.login import SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +145,7 @@ async def load_settings_file(path: str | Path) -> SettingsFile:
     be skipped at apply time.
 
     Read via `anyio.Path`, off the event loop -- called once per launch/
-    restart from `control_loop._apply_declarative_settings`, concurrently
+    restart from `apply_declarative_settings`, concurrently
     with the Dispatcher's own event/command tasks while the Configuration
     dialog is open on the live Gateway.
 
@@ -515,3 +520,68 @@ async def apply_settings_from_file(  # noqa: PLR0912 -- per-entry try/except (be
                 exc,
             )
             continue
+
+
+async def apply_declarative_settings(
+    dispatcher: Dispatcher,
+    labels: Labels,
+    config: Config,
+    session: SessionState,
+    *,
+    after_apply: Callable[[str | None], Awaitable[None]] | None = None,
+) -> None:
+    """Applies the bundled built-in entries (`read_only_api`/
+    `auto_restart_time`, from `Config` alone -- see "Two tiers, not one"
+    above), merged with a user's own `Config.settings_file` when set.
+
+    `session.main_window_id` scopes `open_settings_dialog`'s menu navigation
+    to the already-validated main window instead of a global guess -- #40.
+
+    `window_id` (from `open_settings_dialog`) scopes every subsequent action
+    to the dialog that opened, and `close_settings_dialog` always runs in
+    `finally`. `after_apply`, if given, is awaited with that `window_id`
+    while the dialog is still open, after the entries are applied.
+
+    A `config.settings_file` that fails to load (`SettingsError`) is logged
+    and treated as absent, so a typo'd path cannot take the load-bearing
+    built-in entries down with it."""
+    builtin_settings = await load_builtin_settings_file()
+    user_settings = None
+    if config.settings_file is not None:
+        try:
+            user_settings = await load_settings_file(config.settings_file)
+        except SettingsError as exc:
+            logger.error(
+                "IBController > settings: could not load %s -- continuing "
+                "with built-in settings only: %s",
+                config.settings_file,
+                exc,
+            )
+    merged = merge_settings_files(builtin_settings, user_settings)
+    # open_settings_dialog -> apply_settings_from_file -> close_settings_dialog
+    window_id = await open_settings_dialog(
+        dispatcher,
+        labels.settings,
+        program=config.program,
+        timeout=config.mfa_timeout,
+        main_window_id=session.main_window_id,
+    )
+    try:
+        await apply_settings_from_file(
+            dispatcher,
+            labels,
+            config,
+            SettingsFile(settings=merged),
+            window_id=window_id,
+        )
+        if after_apply is not None:
+            await after_apply(window_id)
+    finally:
+        await close_settings_dialog(dispatcher, labels.settings, window_id=window_id)
+    if user_settings is not None:
+        logger.info(
+            "IBController > declarative settings applied (built-in + %s)",
+            config.settings_file,
+        )
+    else:
+        logger.info("IBController > declarative settings applied (built-in only)")

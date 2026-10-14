@@ -59,7 +59,7 @@ import asyncio
 import logging
 import time
 from enum import Enum, auto
-from typing import ClassVar
+from typing import ClassVar, Protocol
 
 from ibcontroller.actions import (
     click,
@@ -128,6 +128,15 @@ class MfaTimeoutError(LoginError):
     does with it: `exit` propagates as-is, `restart` relaunches instead."""
 
     exit_code: ClassVar[int] = 75  # EX_TEMPFAIL
+
+
+class SessionState(Protocol):
+    """Read-only view of the login session for the other L5 domains.
+    `LoginManager` owns the state and satisfies this structurally."""
+
+    main_window_id: str | None
+
+    def is_logged_in(self) -> bool: ...
 
 
 class LoginManager:

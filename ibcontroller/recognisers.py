@@ -6,7 +6,7 @@ waits for directly via `actions.wait_for_window`.
 `RecognizerRegistry` holds an ordered list of `Recognizer`s, checked in
 order against each unprompted window; the first one whose `recognises()`
 returns `True` has its `handle()` awaited. `DeclarativeDismissRecognizer` is
-built from `labels.DismissRule` entries (`control_loop._build_registry`) for
+built from `labels.DismissRule` entries (`build_default_registry`) for
 the common "match text/title, click one button" case; the remaining classes
 below handle cases with real conditional logic that isn't expressible as
 data. Every recogniser acts through `actions.py`'s primitives, the same as
@@ -32,19 +32,28 @@ from ibcontroller.agent_client import (
     WindowEvent,
     WindowGoneError,
 )
-from ibcontroller.config import AcceptIncomingConnections, ExistingSessionAction
+from ibcontroller.config import (
+    AcceptIncomingConnections,
+    Config,
+    ExistingSessionAction,
+)
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import (
     AcceptIncomingConnectionLabels,
     DismissRule,
     ExistingSessionLabels,
     GatewayConnectionFailedLabels,
+    Labels,
     LoginErrorLabels,
     LoginFailedLabels,
     TooManyFailedLoginAttemptsLabels,
     UnrecognizedCredentialsLabels,
 )
-from ibcontroller.login import CredentialsRejectedError, TransientLoginError
+from ibcontroller.login import (
+    CredentialsRejectedError,
+    SessionState,
+    TransientLoginError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -538,6 +547,43 @@ async def handle_window_opened(
     if is_credential_entry(components):
         return False
     return await registry.dispatch(event, components, dispatcher)
+
+
+def build_default_registry(
+    config: Config,
+    labels: Labels,
+    session: SessionState,
+    schedule_retry: Callable[[float], None],
+) -> RecognizerRegistry:
+    """Declarative rules first, hand-written built-ins as the fallback --
+    the registry's documented priority order. `session` is read-only;
+    `schedule_retry` is `TooManyFailedLoginAttemptsRecognizer`'s retry hook."""
+    declarative: list[Recognizer] = [
+        DeclarativeDismissRecognizer(rule) for rule in labels.dismiss_rules
+    ]
+    return RecognizerRegistry(
+        [
+            *declarative,
+            ExistingSessionRecognizer(
+                labels.existing_session,
+                config.existing_session_action,
+                session.is_logged_in,
+            ),
+            AcceptIncomingConnectionsRecognizer(
+                labels.accept_incoming_connection,
+                config.accept_incoming_connections,
+            ),
+            LoginFailedRecognizer(labels.login_failed),
+            LoginErrorRecognizer(labels.login_error),
+            UnrecognizedCredentialsRecognizer(labels.unrecognized_credentials),
+            GatewayConnectionFailedRecognizer(labels.gateway_connection_failed),
+            TooManyFailedLoginAttemptsRecognizer(
+                labels.too_many_failed_login_attempts,
+                config.relogin_after_mfa_timeout,
+                schedule_retry,
+            ),
+        ]
+    )
 
 
 async def watch_for_unprompted_windows(
