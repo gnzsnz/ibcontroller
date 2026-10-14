@@ -36,8 +36,15 @@ from ibcontroller.agent_client import (
     derive_event_socket_path,
 )
 from ibcontroller.app_dirs import resolve_runtime_dir
-from ibcontroller.config import Config, LogSink, Program, _default_time_zone
+from ibcontroller.config import (
+    Config,
+    ConfigError,
+    LogSink,
+    Program,
+    _default_time_zone,
+)
 from ibcontroller.dispatch import Dispatcher
+from ibcontroller.errors import TransientError
 from ibcontroller.logging_setup import (
     configure_gateway_stdout,
     configure_logging,
@@ -70,15 +77,15 @@ _PING_ATTEMPT_TIMEOUT = 2.0
 _STDOUT_LINE_LIMIT = 1024 * 1024
 
 
-class LauncherError(Exception):
+class LauncherError(ConfigError):
     """Anything about assembling or launching the agent process -- a missing
     install, no JRE found, or the agent never becoming ready."""
 
 
-class AgentStartupError(LauncherError):
+class AgentStartupError(TransientError):
     """The agent JVM exited before answering its first `ping` -- e.g. the
     previous instance still held the command socket. Transient, unlike the
-    install/JRE problems `LauncherError` otherwise covers."""
+    install/JRE problems `LauncherError` covers."""
 
 
 class _ChildProcess(Protocol):

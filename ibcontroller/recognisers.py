@@ -44,6 +44,7 @@ from ibcontroller.labels import (
     TooManyFailedLoginAttemptsLabels,
     UnrecognizedCredentialsLabels,
 )
+from ibcontroller.login import CredentialsRejectedError, TransientLoginError
 
 logger = logging.getLogger(__name__)
 
@@ -68,25 +69,6 @@ def _strip_html(text: str) -> str:
     """Strips HTML tags from an IB `JTextPane` message (always HTML, e.g.
     `<html>...<br><br>...</html>`), collapsing the whitespace left behind."""
     return re.sub(r"\s+", " ", _HTML_TAG_PATTERN.sub(" ", text)).strip()
-
-
-class LoginFailedError(Exception):
-    """Raised for a real credential/account rejection (wrong password,
-    wrong username for the trading mode, a known non-brokerage reason) --
-    signals exit 77 (no retry, account-lockout risk -- gitea #60/#62). Not
-    raised for a bug in a recogniser, which propagates as whatever exception
-    it actually is."""
-
-
-class TransientLoginError(Exception):
-    """Raised for a login-blocking dialog that is a server-side condition,
-    not a credential rejection (a "Login failed"/"Login Error" dialog, or a
-    Gateway "Connection to server failed" reason not in `known_reasons` --
-    e.g. a stale restart token). `run_control_loop` catches this and
-    relaunches unbounded with a full fresh login, the same shape as a
-    scheduled `ShutdownCause.COLD_RESTART` -- matches IBC's own unconditional
-    cold-restart for these dialogs (gitea #62). Never reaches `cli.py`'s
-    exit-code table under normal operation."""
 
 
 class Recognizer(Protocol):
@@ -161,7 +143,7 @@ class TooManyFailedLoginAttemptsRecognizer:
     When `relogin_enabled` is `True`, dismisses the dialog and calls
     `schedule_retry` with the wait time (in seconds) parsed from the
     message. When `False`, this state won't resolve itself -- the dialog is
-    left on screen (IBC parity) and `LoginFailedError` is raised (exit 77,
+    left on screen (IBC parity) and `CredentialsRejectedError` is raised (exit 77,
     not a retry -- gitea #62). `schedule_retry` is a plain, synchronous
     callable -- it's expected to schedule the actual retry as a background
     task, since `handle()` returns immediately without waiting out the
@@ -199,7 +181,9 @@ class TooManyFailedLoginAttemptsRecognizer:
             logger.warning(
                 "too many failed login attempts -- relogin disabled, stopping"
             )
-            raise LoginFailedError("too many failed login attempts, relogin disabled")
+            raise CredentialsRejectedError(
+                "too many failed login attempts, relogin disabled"
+            )
         message = self._matched_text(components) or ""
         wait_seconds = _parse_wait_seconds(message)
         logger.warning(
@@ -280,7 +264,7 @@ class UnrecognizedCredentialsRecognizer:
     title -- a real rejected login, distinct from `LoginFailedRecognizer`'s
     dialog despite the similar name. No IBC equivalent (IBC never handles
     this one, leaves it on screen -- gitea #62). Dismisses it and raises
-    `LoginFailedError`."""
+    `CredentialsRejectedError`."""
 
     def __init__(self, labels: UnrecognizedCredentialsLabels) -> None:
         self._labels = labels
@@ -302,7 +286,7 @@ class UnrecognizedCredentialsRecognizer:
         logger.warning(
             "IBController > unrecognized username or password -- login rejected"
         )
-        raise LoginFailedError("unrecognized username or password")
+        raise CredentialsRejectedError("unrecognized username or password")
 
 
 class GatewayConnectionFailedRecognizer:
@@ -313,7 +297,7 @@ class GatewayConnectionFailedRecognizer:
 
     Always dismisses and logs the text, like IBC. A reason listed in
     `labels.known_reasons` (e.g. "multiple Paper Trading users") is a
-    credential/account problem -- raises `LoginFailedError` (exit 77, no
+    credential/account problem -- raises `CredentialsRejectedError` (exit 77, no
     retry). Any other reason (e.g. a stale restart token, IBC's own known
     cause for this dialog) is transient -- raises `TransientLoginError`
     (gitea #62)."""
@@ -350,7 +334,7 @@ class GatewayConnectionFailedRecognizer:
             window_id=event.window.window_id,
         )
         if any(reason in text for reason in self._labels.known_reasons):
-            raise LoginFailedError(f"gateway connection failed: {text}")
+            raise CredentialsRejectedError(f"gateway connection failed: {text}")
         raise TransientLoginError(f"gateway connection failed: {text}")
 
 

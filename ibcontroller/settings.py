@@ -73,6 +73,7 @@ from ibcontroller.actions import (
 from ibcontroller.agent_client import ElementNotFoundError
 from ibcontroller.config import Config, Program
 from ibcontroller.dispatch import Dispatcher
+from ibcontroller.errors import IBControllerError
 from ibcontroller.labels import Labels, SettingsLabels
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,7 @@ _SETTINGS_ELIGIBLE_FIELDS = frozenset(
 converter.register_structure_hook(bool | str | None, lambda v, _: v)
 
 
-class SettingsError(Exception):
+class SettingsError(IBControllerError):
     """Raised for conditions specific to this module's own sequencing and
     entry resolution: the Global Configuration dialog never appeared, a
     wanted section/setting couldn't be found, or a `SettingEntry` is

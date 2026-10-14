@@ -28,6 +28,7 @@ from datetime import datetime, time, timedelta
 from enum import Enum, auto
 
 from ibcontroller.config import Config
+from ibcontroller.errors import IBControllerError
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ _WEEKDAY_INDEX = {name: i for i, name in enumerate(_WEEKDAY_NAMES)}
 _COLD_RESTART_WEEKDAY = _WEEKDAY_INDEX["Sunday"]
 
 
-class ScheduleError(Exception):
+class ScheduleError(IBControllerError):
     """A malformed `cold_restart_time`/`closedown_at` value."""
 
 

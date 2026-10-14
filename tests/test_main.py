@@ -16,6 +16,7 @@ from ibcontroller import main as _main
 from ibcontroller.config import Config, ConfigError
 from ibcontroller.control_loop import ShutdownCause
 from ibcontroller.labels import Labels
+from ibcontroller.launcher import LauncherError
 
 pytestmark = pytest.mark.asyncio
 
@@ -42,7 +43,7 @@ async def test_load_jar_path_raises_clearly_when_jar_missing(monkeypatch, tmp_pa
     monkeypatch.setattr(
         _main.resources, "files", lambda _pkg: _FakeTraversable(tmp_path)
     )
-    with pytest.raises(RuntimeError, match=r"ibcontroller-agent\.jar not found"):
+    with pytest.raises(LauncherError, match=r"ibcontroller-agent\.jar not found"):
         _main._load_jar_path()
 
 

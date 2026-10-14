@@ -17,8 +17,12 @@ from ibcontroller.config import ConfigError, Program
 from ibcontroller.control_loop import ShutdownCause
 from ibcontroller.labels import LabelsError
 from ibcontroller.launcher import AgentStartupError, LauncherError
-from ibcontroller.login import LoginError, MfaTimeoutError
-from ibcontroller.recognisers import LoginFailedError
+from ibcontroller.login import (
+    CredentialsRejectedError,
+    LoginError,
+    MfaTimeoutError,
+    TransientLoginError,
+)
 
 runner = CliRunner()
 
@@ -150,8 +154,8 @@ def test_run_exit_code_matches_shutdown_cause_contract(
     [
         (LauncherError("no install found"), 78),  # EX_CONFIG
         (AgentStartupError("agent process exited before ping"), 69),  # EX_UNAVAILABLE
-        (RuntimeError("agent jar not found"), 78),  # EX_CONFIG
-        (LoginFailedError("bad credentials"), 77),  # EX_NOPERM
+        (TransientLoginError("server disconnected"), 69),  # EX_UNAVAILABLE
+        (CredentialsRejectedError("bad credentials"), 77),  # EX_NOPERM
         (MfaTimeoutError("mfa_exit_interval watchdog fired"), 75),  # EX_TEMPFAIL
         (AgentClientError("socket closed"), 69),  # EX_UNAVAILABLE
         (LoginError("login stalled"), 69),  # EX_UNAVAILABLE, gitea #60 gap 3
@@ -177,7 +181,7 @@ def test_run_exit_code_matches_exception_contract(
 
 
 def test_run_exit_code_is_1_for_an_unhandled_exception(tmp_path, monkeypatch):
-    """Not in `cli._OPERATIONAL_ERRORS` -- a genuine bug, shown as a
+    """Not an `IBControllerError` -- a genuine bug, shown as a
     traceback rather than a clean one-line message (see `run`'s own
     docstring/comments), and reported as exit 1."""
     app_dir = tmp_path / "app"

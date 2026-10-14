@@ -19,17 +19,16 @@ from ibcontroller.config import AcceptIncomingConnections, ExistingSessionAction
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import DismissRule, LabelsError, load_labels
 from ibcontroller.logging_setup import configure_logging, stop_logging
+from ibcontroller.login import CredentialsRejectedError, TransientLoginError
 from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
     DeclarativeDismissRecognizer,
     ExistingSessionRecognizer,
     GatewayConnectionFailedRecognizer,
     LoginErrorRecognizer,
-    LoginFailedError,
     LoginFailedRecognizer,
     RecognizerRegistry,
     TooManyFailedLoginAttemptsRecognizer,
-    TransientLoginError,
     UnrecognizedCredentialsRecognizer,
     _parse_wait_seconds,
     _strip_html,
@@ -252,7 +251,7 @@ async def test_login_failed_recognises_by_title():
 async def test_login_failed_handle_dismisses_then_raises(sock_path, event_sock_path):
     """Gitea #62: "Login failed" is IB's own wording for a server disconnect,
     not rejected credentials -- so it's `TransientLoginError` (unbounded
-    in-process relaunch), not `LoginFailedError`."""
+    in-process relaunch), not `CredentialsRejectedError`."""
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -327,7 +326,7 @@ async def test_unrecognized_credentials_handle_dismisses_then_raises(
             recognizer = UnrecognizedCredentialsRecognizer(
                 LABELS.unrecognized_credentials
             )
-            with pytest.raises(LoginFailedError):
+            with pytest.raises(CredentialsRejectedError):
                 await recognizer.handle(
                     _event("Unrecognized Username or Password"), [], dispatcher
                 )
@@ -374,7 +373,7 @@ async def test_gateway_connection_failed_known_reason_raises_login_failed(
                     ),
                 )
             ]
-            with pytest.raises(LoginFailedError):
+            with pytest.raises(CredentialsRejectedError):
                 await recognizer.handle(_event("Gateway"), components, dispatcher)
         finally:
             await dispatcher.stop()
@@ -982,7 +981,7 @@ async def test_too_many_failed_login_attempts_disabled_raises_login_failed(
                     text="Too many failed login attempts. Please wait 5 seconds."
                 )
             ]
-            with pytest.raises(LoginFailedError):
+            with pytest.raises(CredentialsRejectedError):
                 await recognizer.handle(_event("Warning"), components, dispatcher)
         finally:
             await dispatcher.stop()

@@ -31,7 +31,7 @@ return_when=FIRST_COMPLETED)`), all converging on one exit path:
 - **CONNECTION_LOST**: `Dispatcher.tasks` ends while the process is still
   alive -- a distinct failure mode from process-exit, also raced across every
   phase.
-- **LOGIN_FAILED**: not currently produced -- `recognisers.LoginFailedError`/
+- **LOGIN_FAILED**: not currently produced -- `login.CredentialsRejectedError`/
   `TransientLoginError` (from `watch_for_unprompted_windows`) and
   `login.LoginError` (the MFA-timeout watchdog) always propagate as
   exceptions instead, the same way regardless of which phase raised them,
@@ -62,20 +62,20 @@ from typing import Any, Protocol
 from ibcontroller.agent_client import AgentClientError
 from ibcontroller.config import Config, MfaTimeoutAction
 from ibcontroller.diagnostics import sweep_settings_tree, watch_for_diagnostics
+from ibcontroller.errors import IBControllerError
 from ibcontroller.labels import Labels
 from ibcontroller.launcher import (
     LaunchedInstance,
-    LauncherError,
     find_autorestart_hash,
     is_restart,
     launch_instance,
 )
 from ibcontroller.logging_setup import stop_logging
 from ibcontroller.login import (
-    LoginError,
     LoginFrameTimeoutError,
     LoginManager,
     MfaTimeoutError,
+    TransientLoginError,
 )
 from ibcontroller.management import clean_shutdown
 from ibcontroller.recognisers import (
@@ -84,11 +84,9 @@ from ibcontroller.recognisers import (
     ExistingSessionRecognizer,
     GatewayConnectionFailedRecognizer,
     LoginErrorRecognizer,
-    LoginFailedError,
     LoginFailedRecognizer,
     RecognizerRegistry,
     TooManyFailedLoginAttemptsRecognizer,
-    TransientLoginError,
     UnrecognizedCredentialsRecognizer,
     watch_for_unprompted_windows,
 )
@@ -105,22 +103,6 @@ from ibcontroller.settings import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Known "operational" failure modes reachable from within a cycle (a real
-# login/launch failure) -- `cli.py` extends this with the config-load
-# failures that happen before a cycle even starts (`ConfigError`/`RuntimeError`)
-# and reports the whole set as a clean one-line message, not a traceback.
-# Shared here so `_run_one_cycle`'s own logging can tell an anticipated
-# failure apart from a genuine bug too. `SettingsError` is deliberately not
-# here -- a failed `_apply_declarative_settings` is always caught and logged
-# locally (`_apply_declarative_settings_or_log`), it never reaches this level.
-OPERATIONAL_ERRORS = (
-    LoginError,  # covers LoginFrameTimeoutError/MfaTimeoutError too
-    LoginFailedError,
-    TransientLoginError,  # relaunched by run_control_loop, never reaches cli.py
-    LauncherError,
-    AgentClientError,
-)
 
 
 class ShutdownCause(Enum):
@@ -520,7 +502,7 @@ async def _run_phase_watching_process(
     If `phase` finishes first, awaits it to completion, propagating its
     result or exception unchanged -- a login/settings failure that isn't
     caused by the process dying is not a `ShutdownCause`. Same for
-    `watcher` finishing first: its exception (`recognisers.LoginFailedError`/
+    `watcher` finishing first: its exception (`login.CredentialsRejectedError`/
     `TransientLoginError`) propagates unchanged too. If the process or a
     dispatcher task finishes first instead, cancels `phase` and raises
     `_PhaseAborted` with the matching cause."""
@@ -609,7 +591,7 @@ async def _run_one_cycle(  # noqa: PLR0915
     configured) -> wait until something ends -> clean shutdown. Returns
     `(cause, settings_dir)` so `run_control_loop` can check `is_restart`
     against the same directory this lap actually used. Propagates any
-    exception from login itself (`LoginError`/`LoginFailedError`/
+    exception from login itself (`LoginError`/`CredentialsRejectedError`/
     `TimeoutError`) unchanged -- a failed login is not a `ShutdownCause`.
 
     `restart_hash`, when set, is passed to `launch_instance` (see
@@ -727,7 +709,7 @@ async def _run_one_cycle(  # noqa: PLR0915
                 cause.name,
                 state.name,
             )
-    except OPERATIONAL_ERRORS as exc:
+    except IBControllerError as exc:
         # An anticipated failure (bad credentials, a settings/launch problem)
         # that `cli.py` will already report as a clean one-line message --
         # log it plainly here too, no traceback, so it doesn't read as a bug.

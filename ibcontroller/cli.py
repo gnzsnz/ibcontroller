@@ -18,7 +18,6 @@ import attrs
 import typer
 
 from ibcontroller import main as _main
-from ibcontroller.agent_client import AgentClientError
 from ibcontroller.app_dirs import resolve_app_dirs
 from ibcontroller.config import (
     Config,
@@ -27,33 +26,10 @@ from ibcontroller.config import (
     Program,
     TradingMode,
 )
-from ibcontroller.control_loop import OPERATIONAL_ERRORS as _CYCLE_OPERATIONAL_ERRORS
 from ibcontroller.control_loop import ShutdownCause
+from ibcontroller.errors import IBControllerError, TransientError
 from ibcontroller.labels import LabelsError
-from ibcontroller.launcher import AgentStartupError, LauncherError
-from ibcontroller.login import LoginError, MfaTimeoutError
-from ibcontroller.recognisers import LoginFailedError
-
-# Known "operational" failure modes (config mistakes, an install that isn't where
-# configured, a real login/settings failure) -- reported as a clean one-line message
-# and exit 1, not a traceback. Anything not in this tuple is unexpected and should show
-# its full traceback (a real bug report, not a deployment mistake to fix and retry).
-# `ConfigError`/`RuntimeError` happen before a cycle even starts (config load); the
-# rest is `control_loop.py`'s own set, reused rather than duplicated here.
-_OPERATIONAL_ERRORS = (
-    ConfigError,
-    RuntimeError,
-    *_CYCLE_OPERATIONAL_ERRORS,
-)
-
-# BSD sysexits, the exit-code contract agreed in gitea #60 -- grouped by what a
-# supervisor (Docker restart policy, systemd) should do, not by which module raised
-# the error. The specific cause always stays in the logs and in the `stopped: <CAUSE>`
-# line; these are only what gets handed back to the process's exit status.
-_EX_CONFIG = 78  # EX_CONFIG -- deployment error, do not retry
-_EX_NOPERM = 77  # EX_NOPERM -- credentials rejected, do not retry (lockout risk)
-_EX_TEMPFAIL = 75  # EX_TEMPFAIL -- 2FA not approved in time, retry per policy
-_EX_UNAVAILABLE = 69  # EX_UNAVAILABLE -- transient runtime failure, retry
+from ibcontroller.login import CredentialsRejectedError
 
 # A `ShutdownCause` returned by `run_control_loop` without an exception -- checked
 # only for causes that can actually reach `run()` (`COLD_RESTART` always loops
@@ -62,37 +38,15 @@ _CAUSE_EXIT_CODES: dict[ShutdownCause, int] = {
     ShutdownCause.REQUESTED: 0,
     ShutdownCause.TIDY_CLOSEDOWN: 0,
     ShutdownCause.PROCESS_CLOSED: 0,  # Gateway/TWS exited by choice (File>Close)
-    ShutdownCause.PROCESS_EXITED: _EX_UNAVAILABLE,
-    ShutdownCause.CONNECTION_LOST: _EX_UNAVAILABLE,
-    ShutdownCause.LOGIN_FAILED: _EX_NOPERM,
+    ShutdownCause.PROCESS_EXITED: TransientError.exit_code,
+    ShutdownCause.CONNECTION_LOST: TransientError.exit_code,
+    ShutdownCause.LOGIN_FAILED: CredentialsRejectedError.exit_code,
 }
-
-# Checked in order, most specific first -- `MfaTimeoutError`/`LoginFailedError` are
-# both `LoginError` subclasses (well, `LoginFailedError` isn't, but shares the same
-# "check narrower type before the generic fallback" reasoning), so the generic
-# `LoginError` entry must stay last. `RuntimeError` here is only
-# `main._load_jar_path`'s "agent jar not built/installed" -- a deployment error, same
-# bucket as `ConfigError`/`LauncherError`. `LoginFrameTimeoutError` (also a `LoginError`
-# subclass) is deliberately absent -- `run_control_loop` always relaunches on it
-# instead of ever letting it reach here (gitea #60 gap 2); the generic `LoginError`
-# entry is only a safety net if that ever changes.
-_EXCEPTION_EXIT_CODES: list[tuple[type[Exception], int]] = [
-    (ConfigError, _EX_CONFIG),
-    (AgentStartupError, _EX_UNAVAILABLE),  # JVM died before ready -- transient
-    (LauncherError, _EX_CONFIG),
-    (RuntimeError, _EX_CONFIG),
-    (LoginFailedError, _EX_NOPERM),
-    (MfaTimeoutError, _EX_TEMPFAIL),
-    (AgentClientError, _EX_UNAVAILABLE),
-    (LoginError, _EX_UNAVAILABLE),
-]
 
 
 def _exit_code_for_exception(exc: Exception) -> int:
-    for exc_type, code in _EXCEPTION_EXIT_CODES:
-        if isinstance(exc, exc_type):
-            return code
-    return 1
+    """Exit status for `exc`: the `exit_code` of its group, 1 for anything unlisted."""
+    return exc.exit_code if isinstance(exc, IBControllerError) else 1
 
 
 app = typer.Typer(
@@ -260,7 +214,7 @@ def run(  # noqa: PLR0913, PLR0917 -- one typer.Option per Config field, not
                 err=True,
             )
         raise typer.Exit(_exit_code_for_exception(exc)) from exc
-    except _OPERATIONAL_ERRORS as exc:
+    except IBControllerError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(_exit_code_for_exception(exc)) from exc
 

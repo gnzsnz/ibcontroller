@@ -19,7 +19,7 @@ import tomllib
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 import attrs
 import typed_settings as ts
@@ -39,6 +39,7 @@ from typed_settings.processors import FormatProcessor
 from typed_settings.types import Secret
 
 from ibcontroller.app_dirs import resolve_app_dirs
+from ibcontroller.errors import IBControllerError
 
 ENV_PREFIX = "IBC_"
 ENV_SENSITIVE: list[str] = ["IBC_USERID", "IBC_PASSWORD"]
@@ -67,11 +68,13 @@ _LOG_LEVELS = {
 }
 
 
-class ConfigError(Exception):
+class ConfigError(IBControllerError):
     """Bad or unsafe configuration -- an invalid value, a missing required setting.
     The one exception type `load_config` raises; wraps typed-settings' own errors
     (`TsError` subclasses) as well as the hand-written checks below (e.g. missing
     credentials) so callers (`cli.py`) only ever need to catch one type."""
+
+    exit_code: ClassVar[int] = 78  # EX_CONFIG
 
 
 class MissingCredentialsError(ConfigError):

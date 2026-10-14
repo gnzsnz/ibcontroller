@@ -243,6 +243,10 @@ Any contribution must follow this separation of concerns.
   - Act on the UI only through L5-1.
   - Report outcomes to L6 as return values or typed exceptions. L6 decides relaunch, exit or
     continue.
+  - Outcome exceptions derive from `IBControllerError` (`errors.py`). Each exit-code group is a
+    base class carrying its `exit_code`: `ConfigError` 78, `CredentialsRejectedError` 77,
+    `MfaTimeoutError` 75, `TransientError` 69. A new exception picks its group by base class.
+    The login-outcome exceptions live in `login.py`, wherever the detecting recogniser lives.
   - Domains do not call each other; L6 wires them together.
   - A recogniser acts only on the window it matched (`window_id`). The dialogs registry never acts
     on a window with a visible credential field.
@@ -260,7 +264,7 @@ Any contribution must follow this separation of concerns.
   classifies why the cycle ended (`ShutdownCause`), applies the relaunch policy, and owns every
   task started during a cycle.
 - **Provides:** `run_control_loop`, cancelled to request a graceful stop. `cli.py` maps its result
-  and exceptions to exit codes.
+  and any `IBControllerError` to its `exit_code`.
 - **Rules:** the only layer that decides relaunch or stop. Cancellation is the only stop request.
 
 ### L7 Control API (planned, not built)

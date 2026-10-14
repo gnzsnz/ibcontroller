@@ -59,6 +59,7 @@ import asyncio
 import logging
 import time
 from enum import Enum, auto
+from typing import ClassVar
 
 from ibcontroller.actions import (
     click,
@@ -68,6 +69,7 @@ from ibcontroller.actions import (
 )
 from ibcontroller.config import Config, Program, TradingMode
 from ibcontroller.dispatch import Dispatcher
+from ibcontroller.errors import IBControllerError, TransientError
 from ibcontroller.labels import Labels
 
 logger = logging.getLogger(__name__)
@@ -87,9 +89,28 @@ class LoginState(Enum):
     LOGIN_FAILED = auto()
 
 
-class LoginError(Exception):
+class LoginError(TransientError):
     """The login frame itself was never recognised within the timeout, or some
     other condition this module can't recover from on its own."""
+
+
+class CredentialsRejectedError(IBControllerError):
+    """A real credential/account rejection (wrong password, wrong username for
+    the trading mode, a known non-brokerage reason). Exits 77: no retry, because
+    of account-lockout risk (gitea #60/#62). Not raised for a bug in a
+    recogniser, which propagates as whatever exception it actually is."""
+
+    exit_code: ClassVar[int] = 77  # EX_NOPERM
+
+
+class TransientLoginError(TransientError):
+    """A login-blocking dialog that is a server-side condition, not a credential
+    rejection (a "Login failed"/"Login Error" dialog, or a Gateway "Connection to
+    server failed" reason not in `known_reasons` -- e.g. a stale restart token).
+    `run_control_loop` catches it and relaunches unbounded with a full fresh
+    login, the same shape as a scheduled `ShutdownCause.COLD_RESTART`, matching
+    IBC's unconditional cold-restart for these dialogs (gitea #62). Never reaches
+    `cli.py` under normal operation."""
 
 
 class LoginFrameTimeoutError(LoginError):
@@ -105,6 +126,8 @@ class MfaTimeoutError(LoginError):
     `SecondFactorAuthenticationExitInterval` watchdog).
     `Config.mfa_timeout_action` decides what `control_loop.run_control_loop`
     does with it: `exit` propagates as-is, `restart` relaunches instead."""
+
+    exit_code: ClassVar[int] = 75  # EX_TEMPFAIL
 
 
 class LoginManager:
@@ -160,7 +183,7 @@ class LoginManager:
         """Drives the whole Login domain sequence, end to end: waits for the
         login frame, skips credential fill if a restart is already in
         progress, otherwise fills and submits credentials, then waits for
-        the outcome. Raises `LoginError`/`recognisers.LoginFailedError`/
+        the outcome. Raises `LoginError`/`CredentialsRejectedError`/
         `TimeoutError` on failure; returns normally once `state` is
         `LOGGED_IN`. `login_timeout`/`outcome_timeout` default from
         `Config.login_dialog_display_timeout`/

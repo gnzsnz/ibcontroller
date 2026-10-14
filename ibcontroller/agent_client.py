@@ -23,10 +23,12 @@ import cattrs
 from cattrs.gen import make_dict_structure_fn, override
 from typed_settings.types import Secret
 
+from ibcontroller.errors import TransientError
+
 converter = cattrs.Converter()
 
 
-class AgentClientError(Exception):
+class AgentClientError(TransientError):
     """Base class for every error this module raises."""
 
 

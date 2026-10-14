@@ -12,7 +12,7 @@ non-brokerage dialogs is entirely `recognisers.watch_for_unprompted_windows`'s j
 now, run as a separate concurrent task. The tests for those scenarios run both
 `LoginManager.run()` and the watcher together, matching how they're actually meant
 to be wired -- see `test_login_failed_is_raised_by_the_watcher_not_by_run` for why
-`LoginFailedError` no longer propagates from `run()` itself."""
+`CredentialsRejectedError` no longer propagates from `run()` itself."""
 
 from __future__ import annotations
 
@@ -1116,7 +1116,7 @@ async def test_gateway_outcome_wait_is_bounded_by_outcome_timeout(
     """Gateway equivalent of the TWS test above -- wrong credentials, no 2FA,
     no splash-closed event ever arrives. `_wait_for_outcome_gateway`'s own
     `TimeoutError` must surface as `LoginError`, matching `cli.py`'s
-    `_OPERATIONAL_ERRORS` contract, not leak out raw (the shape of the bug
+    `IBControllerError` contract, not leak out raw (the shape of the bug
     found live: a short `mfa_timeout` plus a
     credential mismatch produced an unhandled `TimeoutError` traceback
     instead of a clean login failure)."""

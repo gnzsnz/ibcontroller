@@ -46,9 +46,11 @@ from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
 from ibcontroller.launcher import LaunchedInstance
 from ibcontroller.login import (
+    CredentialsRejectedError,
     LoginFrameTimeoutError,
     LoginManager,
     MfaTimeoutError,
+    TransientLoginError,
 )
 from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
@@ -56,10 +58,8 @@ from ibcontroller.recognisers import (
     ExistingSessionRecognizer,
     GatewayConnectionFailedRecognizer,
     LoginErrorRecognizer,
-    LoginFailedError,
     LoginFailedRecognizer,
     TooManyFailedLoginAttemptsRecognizer,
-    TransientLoginError,
     UnrecognizedCredentialsRecognizer,
 )
 from ibcontroller.schedule import ScheduledAction, ScheduledShutdown
@@ -347,7 +347,7 @@ async def test_wait_for_first_completion_returns_watcher_without_grace_delay():
     assert process.returncode is None
 
 
-@pytest.mark.parametrize("exc_type", [LoginFailedError, TransientLoginError])
+@pytest.mark.parametrize("exc_type", [CredentialsRejectedError, TransientLoginError])
 async def test_ready_state_watcher_exception_propagates_unchanged(exc_type):
     """The edge case login succeeds, then the watcher raises later (e.g. a
     reconnect attempt hits a credential or transient dialog): `_run_one_cycle`'s
@@ -490,12 +490,12 @@ async def test_run_phase_watching_process_propagates_watcher_failure_immediately
 
     async def _watcher_raises():
         await asyncio.sleep(0)
-        raise LoginFailedError("unrecognized username or password")
+        raise CredentialsRejectedError("unrecognized username or password")
 
     watcher = asyncio.ensure_future(_watcher_raises())
     phase_task = asyncio.ensure_future(asyncio.sleep(3600))  # stands in for mfa_timeout
     try:
-        with pytest.raises(LoginFailedError):
+        with pytest.raises(CredentialsRejectedError):
             await asyncio.wait_for(
                 _run_phase_watching_process(
                     phase_task,

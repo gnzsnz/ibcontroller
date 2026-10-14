@@ -39,6 +39,7 @@ from ibcontroller.app_dirs import resolve_app_dirs
 from ibcontroller.config import load_config
 from ibcontroller.control_loop import ShutdownCause, run_control_loop
 from ibcontroller.labels import load_labels
+from ibcontroller.launcher import LauncherError
 
 logger = logging.getLogger("ibcontroller.main")
 
@@ -61,7 +62,7 @@ def _load_jar_path() -> Path:
     resource = resources.files("ibcontroller").joinpath("ibcontroller-agent.jar")
     jar_path = Path(str(resource))
     if not jar_path.is_file():
-        raise RuntimeError(
+        raise LauncherError(
             f"ibcontroller-agent.jar not found at {jar_path} -- build it first "
             "(`make` from the project root) before running from a source checkout, "
             "or reinstall the package if this is a wheel install."
