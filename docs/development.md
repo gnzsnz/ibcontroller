@@ -247,6 +247,10 @@ Any contribution must follow this separation of concerns.
     base class carrying its `exit_code`: `ConfigError` 78, `CredentialsRejectedError` 77,
     `MfaTimeoutError` 75, `TransientError` 69. A new exception picks its group by base class.
     The login-outcome exceptions live in `login.py`, wherever the detecting recogniser lives.
+  - Login waits for its outcome with no overall deadline (as IBC); only `login_dialog_display_timeout`
+    and the `mfa_exit_interval` watchdog raise. A retry (too-many-attempts cooldown, late 2FA close)
+    only resubmits credentials, the original wait continues, and `run()` cancels a pending retry
+    when it ends.
   - Domains do not call each other; L6 wires them together. L6 builds the registry
     (`build_default_registry`) and runs the settings sequence (`apply_declarative_settings`), one
     call per domain. A step that belongs to another domain (the diagnostic settings sweep) is

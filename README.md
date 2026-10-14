@@ -515,7 +515,7 @@ code, grouped by what a supervisor (a container's `restart:` policy, systemd's
 | `78` (`EX_CONFIG`) | Deployment error (bad config, install not found) | Do not retry |
 | `77` (`EX_NOPERM`) | Credentials rejected | Do not retry (lockout risk) |
 | `75` (`EX_TEMPFAIL`) | Login did not complete after 2FA, `mfa_timeout_action=exit` | Retry per policy |
-| `69` (`EX_UNAVAILABLE`) | Transient runtime failure (process crashed or killed, connection lost, JVM exited before becoming ready, login timed out with no 2FA dialog) | Retry |
+| `69` (`EX_UNAVAILABLE`) | Transient runtime failure (process crashed or killed, connection lost, JVM exited before becoming ready) | Retry |
 
 `77`/`78` work with systemd's `RestartPreventExitStatus=`.
 

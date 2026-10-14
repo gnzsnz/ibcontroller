@@ -33,7 +33,7 @@ return_when=FIRST_COMPLETED)`), all converging on one exit path:
   phase.
 - **LOGIN_FAILED**: not currently produced -- `login.CredentialsRejectedError`/
   `TransientLoginError` (from `watch_for_unprompted_windows`) and
-  `login.LoginError` (the MFA-timeout watchdog) always propagate as
+  `login.MfaTimeoutError` (the exit-interval watchdog) always propagate as
   exceptions instead, the same way regardless of which phase raised them,
   including the post-login `READY` wait (gitea #62). Kept defined/mapped
   (cli.py's `_CAUSE_EXIT_CODES`) as a safety net only.
