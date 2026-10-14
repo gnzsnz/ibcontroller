@@ -1038,6 +1038,93 @@ async def test_too_many_failed_login_attempts_enabled_dismisses_and_schedules(
     assert scheduled == [4 * 60 + 47 + 3]
 
 
+_GATEWAY_FAILED_TEXT = [
+    _component(
+        class_="javax.swing.JTextPane",
+        text="<html>Connection to server failed: some reason</html>",
+    )
+]
+_TOO_MANY_TEXT = [
+    _component(text="Too many failed login attempts. Please wait 1 minute & 2 seconds")
+]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (
+            lambda: LoginFailedRecognizer(LABELS.login_failed),
+            "Login failed",
+            [],
+            TransientLoginError,
+        ),
+        (
+            lambda: LoginErrorRecognizer(LABELS.login_error),
+            "Login Error",
+            [],
+            TransientLoginError,
+        ),
+        (
+            lambda: UnrecognizedCredentialsRecognizer(LABELS.unrecognized_credentials),
+            "Unrecognized Username or Password",
+            [],
+            CredentialsRejectedError,
+        ),
+        (
+            lambda: GatewayConnectionFailedRecognizer(LABELS.gateway_connection_failed),
+            "Gateway",
+            _GATEWAY_FAILED_TEXT,
+            TransientLoginError,
+        ),
+    ],
+)
+@pytest.mark.parametrize("error", ["window_gone", "not_found"])
+async def test_failed_dismiss_still_raises_the_classification(
+    sock_path, event_sock_path, caplog, case, error
+):
+    build, title, components, expected = case
+    async with (
+        FakeCommandServer(
+            sock_path, lambda _req: {"ok": False, "error": error, "detail": "x"}
+        ),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            with (
+                caplog.at_level(logging.WARNING, logger="ibcontroller.recognisers"),
+                pytest.raises(expected),
+            ):
+                await build().handle(_event(title, "w1"), components, dispatcher)
+        finally:
+            await dispatcher.stop()
+    assert any("dismiss" in message for message in caplog.messages)
+
+
+async def test_too_many_failed_login_attempts_failed_dismiss_still_schedules(
+    sock_path, event_sock_path
+):
+    scheduled: list[float] = []
+    recognizer = TooManyFailedLoginAttemptsRecognizer(
+        LABELS.too_many_failed_login_attempts,
+        relogin_enabled=True,
+        schedule_retry=scheduled.append,
+    )
+    async with (
+        FakeCommandServer(
+            sock_path,
+            lambda _req: {"ok": False, "error": "window_gone", "detail": "x"},
+        ),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await recognizer.handle(_event("Warning", "w1"), _TOO_MANY_TEXT, dispatcher)
+        finally:
+            await dispatcher.stop()
+    assert scheduled == [65.0]
+
+
 def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
     config = Config(
         program=Program.GATEWAY,

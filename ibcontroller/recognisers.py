@@ -29,6 +29,7 @@ import eventkit
 from ibcontroller.actions import click, dump
 from ibcontroller.agent_client import (
     Component,
+    ElementNotFoundError,
     WindowEvent,
     WindowGoneError,
 )
@@ -78,6 +79,15 @@ def _strip_html(text: str) -> str:
     """Strips HTML tags from an IB `JTextPane` message (always HTML, e.g.
     `<html>...<br><br>...</html>`), collapsing the whitespace left behind."""
     return re.sub(r"\s+", " ", _HTML_TAG_PATTERN.sub(" ", text)).strip()
+
+
+async def _dismiss(dispatcher: Dispatcher, label: str, window_id: str | None) -> None:
+    """Clicks `label`, best-effort: a stale label or an already closed window
+    is logged, so the caller's classification still gets raised."""
+    try:
+        await click(dispatcher, label, window_id=window_id)
+    except (ElementNotFoundError, WindowGoneError) as exc:
+        logger.warning("IBController > dismiss of %r failed: %s", label, exc)
 
 
 class Recognizer(Protocol):
@@ -198,11 +208,7 @@ class TooManyFailedLoginAttemptsRecognizer:
         logger.warning(
             "too many failed login attempts -- retrying in %.0fs", wait_seconds
         )
-        await click(
-            dispatcher,
-            self._labels.dismiss_button,
-            window_id=event.window.window_id,
-        )
+        await _dismiss(dispatcher, self._labels.dismiss_button, event.window.window_id)
         self._schedule_retry(wait_seconds)
 
 
@@ -225,11 +231,7 @@ class LoginFailedRecognizer:
         components: list[Component],
         dispatcher: Dispatcher,
     ) -> None:
-        await click(
-            dispatcher,
-            self._labels.dismiss_button,
-            window_id=event.window.window_id,
-        )
+        await _dismiss(dispatcher, self._labels.dismiss_button, event.window.window_id)
         logger.warning("IBController > login failed -- transient, relaunching")
         raise TransientLoginError("login failed; server disconnected")
 
@@ -260,11 +262,7 @@ class LoginErrorRecognizer:
             if raw is not None:
                 texts.append(_strip_html(raw))
         logger.warning("IBController > login error: %s", " | ".join(texts))
-        await click(
-            dispatcher,
-            self._labels.dismiss_button,
-            window_id=event.window.window_id,
-        )
+        await _dismiss(dispatcher, self._labels.dismiss_button, event.window.window_id)
         raise TransientLoginError("login error dialog; server disconnected")
 
 
@@ -287,11 +285,7 @@ class UnrecognizedCredentialsRecognizer:
         components: list[Component],
         dispatcher: Dispatcher,
     ) -> None:
-        await click(
-            dispatcher,
-            self._labels.dismiss_button,
-            window_id=event.window.window_id,
-        )
+        await _dismiss(dispatcher, self._labels.dismiss_button, event.window.window_id)
         logger.warning(
             "IBController > unrecognized username or password -- login rejected"
         )
@@ -337,11 +331,7 @@ class GatewayConnectionFailedRecognizer:
     ) -> None:
         text = self._stripped_text(components) or ""
         logger.warning("IBController > %s", text)
-        await click(
-            dispatcher,
-            self._labels.dismiss_button,
-            window_id=event.window.window_id,
-        )
+        await _dismiss(dispatcher, self._labels.dismiss_button, event.window.window_id)
         if any(reason in text for reason in self._labels.known_reasons):
             raise CredentialsRejectedError(f"gateway connection failed: {text}")
         raise TransientLoginError(f"gateway connection failed: {text}")

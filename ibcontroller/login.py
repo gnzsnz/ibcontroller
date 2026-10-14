@@ -67,6 +67,7 @@ from ibcontroller.actions import (
     type_text,
     wait_for_window,
 )
+from ibcontroller.agent_client import WindowGoneError
 from ibcontroller.config import Config, Program, TradingMode
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.errors import IBControllerError, TransientError
@@ -410,11 +411,14 @@ class LoginManager:
                     # be the main window without one, keep looping.
                     continue
 
-                exists, _enabled = await menu_item_exists(
-                    self._dispatcher,
-                    self._labels.login.tws_main_window_menu_item,
-                    window_id=window.window_id,
-                )
+                try:
+                    exists, _enabled = await menu_item_exists(
+                        self._dispatcher,
+                        self._labels.login.tws_main_window_menu_item,
+                        window_id=window.window_id,
+                    )
+                except WindowGoneError:
+                    continue  # short-lived intermediate window closed already
                 if exists:
                     self.state = LoginState.LOGGED_IN
                     # Keep the window_id this same check just validated (#40)

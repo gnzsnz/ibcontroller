@@ -1294,6 +1294,48 @@ async def test_tws_window_opening_during_menu_check_is_not_lost(
     assert manager.main_window_id == "w-main"
 
 
+async def test_tws_candidate_window_gone_before_menu_check_is_skipped(
+    sock_path, event_sock_path
+):
+    """An intermediate window that closes before `menu_item_exists` reaches it
+    answers `window_gone`; the loop moves on to the main window."""
+
+    def responder(request):
+        if request.get("cmd") == "menu_item_exists":
+            if request.get("window_id") == "w-gone":
+                return {"ok": False, "error": "window_gone", "detail": "closed"}
+            return {"ok": True, "exists": True, "enabled": True}
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=False
+        )
+        try:
+            task = asyncio.ensure_future(manager._wait_for_outcome_tws(5.0))
+            await asyncio.sleep(0.01)
+            for seq, window_id in ((1, "w-gone"), (2, "w-main")):
+                dispatcher._window_events.emit(
+                    _window_event(
+                        seq,
+                        "window_opened",
+                        "javax.swing.JDialog",
+                        "Downloading settings from server",
+                        window_id=window_id,
+                    )
+                )
+            await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+
+    assert manager.state is LoginState.LOGGED_IN
+    assert manager.main_window_id == "w-main"
+
+
 async def test_tws_outcome_finds_a_window_already_open_when_it_starts(
     sock_path, event_sock_path
 ):
