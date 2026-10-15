@@ -68,7 +68,7 @@
 # apply_settings_from_file) -- see ibkr_settings.toml.example. Omit this key (the
 # default) to apply nothing declaratively.
 # (env: IBC_SETTINGS_FILE)
-# settings_file = "~/.config/ibkr_settings.toml"
+# settings_file = "~/.config/ibcontroller/ibkr_settings.toml"
 # settings_file = "~/Library/Application Support/ibcontroller/ibkr_settings.toml"
 
 # Where ibcontroller's own log and trace files live (env: IBC_LOG_DIR).
