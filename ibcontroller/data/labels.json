@@ -20,6 +20,15 @@
     "continue_buttons": ["OK", "Continue Login", "Reconnect This Session"],
     "cancel_buttons": ["Cancel", "Exit Application"]
   },
+  "relogin": {
+    "title": "Re-login is required",
+    "relogin_buttons": ["Re-login"],
+    "cancel_buttons": ["Cancel"]
+  },
+  "trading_login_handoff": {
+    "title": "Trading Login Handoff",
+    "disconnect_buttons": ["Disconnect Other Session"]
+  },
   "accept_incoming_connection": {
     "title": "Accept incoming connection",
     "accept_buttons": ["OK", "Yes"],

@@ -28,7 +28,12 @@ from ibcontroller.config import (
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import DismissRule, LabelsError, load_labels
 from ibcontroller.logging_setup import configure_logging, stop_logging
-from ibcontroller.login import CredentialsRejectedError, TransientLoginError
+from ibcontroller.login import (
+    CredentialsRejectedError,
+    InvalidSessionStateError,
+    SessionCededError,
+    TransientLoginError,
+)
 from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
     DeclarativeDismissRecognizer,
@@ -37,7 +42,9 @@ from ibcontroller.recognisers import (
     LoginErrorRecognizer,
     LoginFailedRecognizer,
     RecognizerRegistry,
+    ReloginRecognizer,
     TooManyFailedLoginAttemptsRecognizer,
+    TradingLoginHandoffRecognizer,
     UnrecognizedCredentialsRecognizer,
     _parse_wait_seconds,
     _strip_html,
@@ -441,7 +448,7 @@ async def test_existing_session_manual_does_nothing(sock_path, event_sock_path):
     assert calls == []
 
 
-async def test_existing_session_secondary_clicks_cancel(sock_path, event_sock_path):
+async def test_existing_session_secondary_cancels_and_ends(sock_path, event_sock_path):
     seen = []
 
     async with (
@@ -455,14 +462,17 @@ async def test_existing_session_secondary_clicks_cancel(sock_path, event_sock_pa
             recognizer = ExistingSessionRecognizer(
                 LABELS.existing_session, ExistingSessionAction.SECONDARY, lambda: False
             )
-            await recognizer.handle(_event("Existing session detected"), [], dispatcher)
+            with pytest.raises(SessionCededError):
+                await recognizer.handle(
+                    _event("Existing session detected"), [], dispatcher
+                )
         finally:
             await dispatcher.stop()
 
     assert seen == ["Cancel"]
 
 
-async def test_existing_session_first_attempt_continues_second_attempt_cancels(
+async def test_existing_session_first_attempt_continues_second_attempt_ends(
     sock_path, event_sock_path
 ):
     """Matches IBC's own scenario 3 -> 4: not logged in, unknown other session type --
@@ -482,7 +492,8 @@ async def test_existing_session_first_attempt_continues_second_attempt_cancels(
             )
             event = _event("Existing session detected")
             await recognizer.handle(event, [], dispatcher)
-            await recognizer.handle(event, [], dispatcher)
+            with pytest.raises(SessionCededError):
+                await recognizer.handle(event, [], dispatcher)
         finally:
             await dispatcher.stop()
 
@@ -510,7 +521,7 @@ async def test_existing_session_logged_in_primary_continues(sock_path, event_soc
     assert seen == ["OK"]
 
 
-async def test_existing_session_logged_in_primary_override_cancels(
+async def test_existing_session_logged_in_primary_override_ends(
     sock_path, event_sock_path
 ):
     seen = []
@@ -528,11 +539,102 @@ async def test_existing_session_logged_in_primary_override_cancels(
                 ExistingSessionAction.PRIMARY_OVERRIDE,
                 lambda: True,
             )
-            await recognizer.handle(_event("Existing session detected"), [], dispatcher)
+            with pytest.raises(SessionCededError):
+                await recognizer.handle(
+                    _event("Existing session detected"), [], dispatcher
+                )
         finally:
             await dispatcher.stop()
 
     assert seen == ["Cancel"]
+
+
+async def _run_recognizer(recognizer, title, sock_path, event_sock_path):
+    """Runs `recognizer.handle` against a fake agent; returns (clicked targets,
+    exception or None)."""
+    seen = []
+    error = None
+    async with (
+        FakeCommandServer(
+            sock_path, lambda req: (seen.append(req["target"]), {"ok": True})[1]
+        ),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await recognizer.handle(_event(title), [], dispatcher)
+        except (SessionCededError, InvalidSessionStateError) as exc:
+            error = exc
+        finally:
+            await dispatcher.stop()
+    return seen, error
+
+
+async def test_relogin_recognises_by_title():
+    recognizer = ReloginRecognizer(LABELS.relogin, ExistingSessionAction.PRIMARY)
+    assert recognizer.recognises(_event("Re-login is required"), []) is True
+    assert recognizer.recognises(_event("Existing session detected"), []) is False
+
+
+@pytest.mark.parametrize(
+    ("action", "clicked", "error"),
+    [
+        (ExistingSessionAction.MANUAL, [], None),
+        (ExistingSessionAction.PRIMARY, ["Re-login"], None),
+        (ExistingSessionAction.PRIMARY_OVERRIDE, ["Re-login"], None),
+        (ExistingSessionAction.SECONDARY, ["Cancel"], SessionCededError),
+    ],
+)
+async def test_relogin_by_action(action, clicked, error, sock_path, event_sock_path):
+    seen, raised = await _run_recognizer(
+        ReloginRecognizer(LABELS.relogin, action),
+        "Re-login is required",
+        sock_path,
+        event_sock_path,
+    )
+    assert seen == clicked
+    assert type(raised) is error if error else raised is None
+
+
+async def test_relogin_keeps_session_existing(sock_path, event_sock_path):
+    """After Re-login the next existing-session dialog must still take the
+    EXISTING path (login state untouched), so `primary` continues."""
+    existing = ExistingSessionRecognizer(
+        LABELS.existing_session, ExistingSessionAction.PRIMARY, lambda: True
+    )
+    relogin = ReloginRecognizer(LABELS.relogin, ExistingSessionAction.PRIMARY)
+    await _run_recognizer(relogin, "Re-login is required", sock_path, event_sock_path)
+    seen, raised = await _run_recognizer(
+        existing, "Existing session detected", sock_path, event_sock_path
+    )
+    assert seen == ["OK"]
+    assert raised is None
+
+
+@pytest.mark.parametrize(
+    ("action", "clicked", "error"),
+    [
+        (ExistingSessionAction.MANUAL, [], None),
+        (ExistingSessionAction.PRIMARY, ["Disconnect Other Session"], None),
+        (ExistingSessionAction.PRIMARY_OVERRIDE, [], InvalidSessionStateError),
+        (ExistingSessionAction.SECONDARY, [], InvalidSessionStateError),
+    ],
+)
+async def test_trading_login_handoff_by_action(
+    action, clicked, error, sock_path, event_sock_path
+):
+    recognizer = TradingLoginHandoffRecognizer(LABELS.trading_login_handoff, action)
+    assert recognizer.recognises(_event("Trading Login Handoff"), []) is True
+    seen, raised = await _run_recognizer(
+        recognizer, "Trading Login Handoff", sock_path, event_sock_path
+    )
+    assert seen == clicked
+    assert type(raised) is error if error else raised is None
+
+
+def test_session_exit_codes():
+    assert SessionCededError.exit_code == 0
+    assert InvalidSessionStateError.exit_code == 76
 
 
 async def test_accept_incoming_connection_recognises_by_title():
@@ -1158,6 +1260,8 @@ def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
     }
     assert hand_written_types == {
         ExistingSessionRecognizer,
+        ReloginRecognizer,
+        TradingLoginHandoffRecognizer,
         AcceptIncomingConnectionsRecognizer,
         LoginFailedRecognizer,
         LoginErrorRecognizer,

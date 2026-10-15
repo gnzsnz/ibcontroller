@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable, Sequence
+from enum import Enum, auto
 from typing import Protocol
 
 import eventkit
@@ -47,11 +48,15 @@ from ibcontroller.labels import (
     Labels,
     LoginErrorLabels,
     LoginFailedLabels,
+    ReloginLabels,
     TooManyFailedLoginAttemptsLabels,
+    TradingLoginHandoffLabels,
     UnrecognizedCredentialsLabels,
 )
 from ibcontroller.login import (
     CredentialsRejectedError,
+    InvalidSessionStateError,
+    SessionCededError,
     SessionState,
     TransientLoginError,
 )
@@ -337,13 +342,35 @@ class GatewayConnectionFailedRecognizer:
         raise TransientLoginError(f"gateway connection failed: {text}")
 
 
+class SessionRole(Enum):
+    """Which side of an existing-session conflict this session is on."""
+
+    NEW = auto()  # still logging in
+    EXISTING = auto()  # already logged in when the other session connected
+
+
+def _role(is_logged_in: Callable[[], bool]) -> SessionRole:
+    return SessionRole.EXISTING if is_logged_in() else SessionRole.NEW
+
+
+async def _cede(
+    dispatcher: Dispatcher, buttons: list[str], event: WindowEvent, reason: str
+) -> None:
+    """Cancels the dialog, then ends the run: cancelling alone leaves the
+    login screen up."""
+    logger.info("IBController > %s -- ending this session", reason)
+    await click(dispatcher, buttons, window_id=event.window.window_id)
+    raise SessionCededError(reason)
+
+
 class ExistingSessionRecognizer:
     """Matches an existing-session-conflict dialog by window title. `action`
-    (`ExistingSessionAction`: manual/secondary/primary/primaryoverride)
-    selects how to resolve it; `is_logged_in` reports whether this session
-    has already reached `LOGGED_IN`, since the correct response differs
-    before vs. after login completes. Stateful: tracks whether a previous
-    attempt was already made this process, one instance per running agent."""
+    (`ExistingSessionAction`: manual/secondary/primary/primaryoverride) and
+    the session's `SessionRole` select the response (table in
+    `docs/Configuration.md`); `is_logged_in` tells the roles apart. Ending
+    the session raises `SessionCededError`. Stateful: tracks whether a
+    previous attempt was already made this process, one instance per
+    running agent."""
 
     def __init__(
         self,
@@ -365,6 +392,7 @@ class ExistingSessionRecognizer:
         components: list[Component],
         dispatcher: Dispatcher,
     ) -> None:
+        cancel = self._labels.cancel_buttons
         if self._action is ExistingSessionAction.MANUAL:
             logger.info(
                 "IBController > existing session detected -- manual, leaving for"
@@ -373,18 +401,10 @@ class ExistingSessionRecognizer:
             return  # scenario 1: user must choose -- nothing to do
         if self._action is ExistingSessionAction.SECONDARY:
             # scenario 2: end this session, let the other one proceed
-            logger.info(
-                "IBController > existing session detected -- secondary, ending"
-                " this session"
+            await _cede(
+                dispatcher, cancel, event, "existing session detected -- secondary"
             )
-            await click(
-                dispatcher,
-                self._labels.cancel_buttons,
-                window_id=event.window.window_id,
-            )
-            return
-        if not self._is_logged_in():
-            # we are session B (login not yet complete)
+        if _role(self._is_logged_in) is SessionRole.NEW:
             if not self._attempted:
                 self._attempted = True
                 # scenario 3: don't know session A's type, continue this one
@@ -398,15 +418,12 @@ class ExistingSessionRecognizer:
                     window_id=event.window.window_id,
                 )
             else:
-                # scenario 4: session A must be primary/primaryoverride, end this one
-                logger.info(
-                    "IBController > existing session detected -- second attempt, ending"
-                    " this session"
-                )
-                await click(
+                # scenario 4: session A must be primary/primaryoverride
+                await _cede(
                     dispatcher,
-                    self._labels.cancel_buttons,
-                    window_id=event.window.window_id,
+                    cancel,
+                    event,
+                    "existing session detected -- second attempt",
                 )
         elif self._action is ExistingSessionAction.PRIMARY:
             # scenario 5: we are session A, primary -- continue this, let the other exit
@@ -421,14 +438,93 @@ class ExistingSessionRecognizer:
             )
         else:
             # scenario 6: we are session A, primaryoverride -- let the other proceed
+            await _cede(
+                dispatcher,
+                cancel,
+                event,
+                "existing session detected -- primaryoverride",
+            )
+
+
+class ReloginRecognizer:
+    """Matches "Re-login is required" by title (IBC's `ReloginDialogHandler`).
+    `primary`/`primaryoverride` click Re-login, which reconnects and hands the
+    other session its own dialog; `secondary` ends this session, `manual`
+    leaves the dialog. The login state is not touched, so the next
+    existing-session dialog still sees this session as `EXISTING`."""
+
+    def __init__(self, labels: ReloginLabels, action: ExistingSessionAction) -> None:
+        self._labels = labels
+        self._action = action
+
+    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
+        return self._labels.title in (event.window.title or "")
+
+    async def handle(
+        self,
+        event: WindowEvent,
+        components: list[Component],
+        dispatcher: Dispatcher,
+    ) -> None:
+        if self._action is ExistingSessionAction.MANUAL:
             logger.info(
-                "IBController > existing session detected -- primaryoverride, ending"
-                " this session"
+                "IBController > re-login required -- manual, leaving for the user"
+            )
+        elif self._action is ExistingSessionAction.SECONDARY:
+            await _cede(
+                dispatcher,
+                self._labels.cancel_buttons,
+                event,
+                "re-login required -- secondary",
+            )
+        else:
+            logger.info("IBController > re-login required -- re-logging in")
+            await click(
+                dispatcher,
+                self._labels.relogin_buttons,
+                window_id=event.window.window_id,
+            )
+
+
+class TradingLoginHandoffRecognizer:
+    """Matches "Trading Login Handoff" by title (IBC's
+    `TradingLoginHandoffDialogHandler`; labels from IBC, not seen live). It
+    only appears after this session chose to continue, so `primaryoverride`
+    and `secondary` raise `InvalidSessionStateError`; `primary` disconnects
+    the other session; `manual` leaves the dialog."""
+
+    def __init__(
+        self, labels: TradingLoginHandoffLabels, action: ExistingSessionAction
+    ) -> None:
+        self._labels = labels
+        self._action = action
+
+    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
+        return self._labels.title in (event.window.title or "")
+
+    async def handle(
+        self,
+        event: WindowEvent,
+        components: list[Component],
+        dispatcher: Dispatcher,
+    ) -> None:
+        if self._action is ExistingSessionAction.MANUAL:
+            logger.info(
+                "IBController > trading login handoff -- manual, leaving for the user"
+            )
+        elif self._action is ExistingSessionAction.PRIMARY:
+            logger.info(
+                "IBController > trading login handoff -- primary, disconnecting"
+                " the other session"
             )
             await click(
                 dispatcher,
-                self._labels.cancel_buttons,
+                self._labels.disconnect_buttons,
                 window_id=event.window.window_id,
+            )
+        else:
+            raise InvalidSessionStateError(
+                f"trading login handoff with existing_session_action={self._action}"
             )
 
 
@@ -558,6 +654,10 @@ def build_default_registry(
                 labels.existing_session,
                 config.existing_session_action,
                 session.is_logged_in,
+            ),
+            ReloginRecognizer(labels.relogin, config.existing_session_action),
+            TradingLoginHandoffRecognizer(
+                labels.trading_login_handoff, config.existing_session_action
             ),
             AcceptIncomingConnectionsRecognizer(
                 labels.accept_incoming_connection,

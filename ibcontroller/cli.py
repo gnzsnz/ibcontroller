@@ -29,7 +29,7 @@ from ibcontroller.config import (
 from ibcontroller.control_loop import ShutdownCause
 from ibcontroller.errors import IBControllerError, TransientError
 from ibcontroller.labels import LabelsError
-from ibcontroller.login import CredentialsRejectedError
+from ibcontroller.login import CredentialsRejectedError, SessionCededError
 
 # A `ShutdownCause` returned by `run_control_loop` without an exception -- checked
 # only for causes that can actually reach `run()` (`COLD_RESTART` always loops
@@ -214,6 +214,9 @@ def run(  # noqa: PLR0913, PLR0917 -- one typer.Option per Config field, not
                 err=True,
             )
         raise typer.Exit(_exit_code_for_exception(exc)) from exc
+    except SessionCededError as exc:
+        typer.echo(f"stopped: SESSION_CEDED ({exc})")
+        raise typer.Exit(SessionCededError.exit_code) from exc
     except IBControllerError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(_exit_code_for_exception(exc)) from exc

@@ -7,6 +7,9 @@ keeping a list of leaf types:
 - `ConfigError` (`config.py`): 78, deployment error, do not retry.
 - `login.CredentialsRejectedError`: 77, credentials rejected, do not retry.
 - `login.MfaTimeoutError`: 75, login did not complete after 2FA, retry per policy.
+- `login.InvalidSessionStateError`: 76, a dialog `existing_session_action` rules out,
+  do not retry.
+- `login.SessionCededError`: 0, this session yielded to another on purpose, no retry.
 - `TransientError` (below): 69, transient runtime failure, retry.
 
 The specific cause stays in the logs and in the `stopped: <CAUSE>` line. A subclass

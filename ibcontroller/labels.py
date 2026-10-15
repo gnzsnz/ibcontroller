@@ -110,6 +110,25 @@ class ExistingSessionLabels:
 
 
 @attrs.define(frozen=True)
+class ReloginLabels:
+    """The "Re-login is required" dialog, shown after the other session took
+    over. `relogin_buttons` reconnects, `cancel_buttons` ends this session."""
+
+    title: str
+    relogin_buttons: list[str] = attrs.field(validator=_non_empty)
+    cancel_buttons: list[str] = attrs.field(validator=_non_empty)
+
+
+@attrs.define(frozen=True)
+class TradingLoginHandoffLabels:
+    """The "Trading Login Handoff" dialog (accounts with 2FA), from IBC; not
+    yet seen live. `disconnect_buttons` ends the other session."""
+
+    title: str
+    disconnect_buttons: list[str] = attrs.field(validator=_non_empty)
+
+
+@attrs.define(frozen=True)
 class AcceptIncomingConnectionLabels:
     """`accept_buttons` tries "OK" then "Yes" in order; `reject_buttons` is
     "No"."""
@@ -278,6 +297,8 @@ class Labels:
     login: LoginLabels
     mfa: MfaLabels
     existing_session: ExistingSessionLabels
+    relogin: ReloginLabels
+    trading_login_handoff: TradingLoginHandoffLabels
     accept_incoming_connection: AcceptIncomingConnectionLabels
     login_failed: LoginFailedLabels
     login_error: LoginErrorLabels

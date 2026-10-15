@@ -105,6 +105,22 @@ class CredentialsRejectedError(IBControllerError):
     exit_code: ClassVar[int] = 77  # EX_NOPERM
 
 
+class SessionCededError(IBControllerError):
+    """This session ended itself on purpose to let the other session proceed
+    (`existing_session_action`). Exit 0, no relaunch: relaunching would only
+    take the session back."""
+
+    exit_code: ClassVar[int] = 0
+
+
+class InvalidSessionStateError(IBControllerError):
+    """A dialog arrived that `existing_session_action` rules out (IBC's
+    `INVALID_STATE`), e.g. the Trading Login Handoff with `secondary`. Exit 76,
+    no relaunch: the configuration and the other session disagree."""
+
+    exit_code: ClassVar[int] = 76  # EX_PROTOCOL
+
+
 class TransientLoginError(TransientError):
     """A login-blocking dialog that is a server-side condition, not a credential
     rejection (a "Login failed"/"Login Error" dialog, or a Gateway "Connection to
