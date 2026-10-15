@@ -68,8 +68,9 @@ _MACOS_PROGRAM_NAMES = {
     Program.TWS: "Trader Workstation",
 }
 
-# Longest AF_UNIX path in bytes (measured: bind fails at 104 on macOS, 108 on Linux).
-_SOCKET_PATH_MAX = {"macos": 103, "linux": 107}
+# Longest AF_UNIX path in bytes. macOS: the agent's Java bind fails at 103 (Python's
+# at 104). Linux: Python bind fails at 108, Java not measured.
+_SOCKET_PATH_MAX = {"macos": 102, "linux": 107}
 # Bounds one connect+ping probe -- the agent serves one command client at a time,
 # so a probe on another agent's socket otherwise blocks forever.
 _PING_ATTEMPT_TIMEOUT = 2.0

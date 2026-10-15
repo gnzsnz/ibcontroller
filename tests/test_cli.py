@@ -313,6 +313,27 @@ def test_run_labels_error_exits_78_with_labels_hint(tmp_path, monkeypatch):
     assert "ibcontroller.toml" not in result.output
 
 
+def test_run_launcher_error_exits_78_without_config_hint(tmp_path, monkeypatch):
+    """Gitea #110: a launcher error is not a config-file problem, so no
+    `ibcontroller.toml` / `ibcontroller init` hint."""
+    app_dir = tmp_path / "app"
+    monkeypatch.setenv("IBC_APP_DIR", str(app_dir))
+
+    async def fake_run_async(
+        config_dir, log_dir, *, dotenv_path=None, cli_overrides=None
+    ):
+        raise LauncherError("agent socket path is 103 bytes")
+
+    monkeypatch.setattr(_main, "run_async", fake_run_async)
+
+    result = runner.invoke(_cli.app, ["run"])
+
+    assert result.exit_code == 78  # EX_CONFIG
+    assert "agent socket path is 103 bytes" in result.output
+    assert "ibcontroller.toml" not in result.output
+    assert "ibcontroller init" not in result.output
+
+
 def test_run_program_flag_is_case_insensitive(tmp_path, monkeypatch):
     monkeypatch.setenv("IBC_APP_DIR", str(tmp_path / "app"))
     captured = {}

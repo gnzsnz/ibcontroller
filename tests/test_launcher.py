@@ -1443,9 +1443,9 @@ async def test_wait_for_ready_sees_exit_while_probe_is_stuck(sock_path, monkeypa
 
 
 def test_check_socket_path_accepts_the_limit_and_rejects_one_more():
-    """Limits measured by binding real sockets: 103 bytes on macOS, 107 on
-    Linux; one byte more fails with "AF_UNIX path too long" (L1 F14, #78)."""
-    for os_name, limit in (("macos", 103), ("linux", 107)):
+    """Limits measured by binding real sockets: 102 bytes on macOS (Java agent
+    bind), 107 on Linux; one byte more fails (L1 F14, #78, #110)."""
+    for os_name, limit in (("macos", 102), ("linux", 107)):
         _check_socket_path("/" + "x" * (limit - 1), os_name)
         with pytest.raises(LauncherError, match=f"over the {limit}-byte limit"):
             _check_socket_path("/" + "x" * limit, os_name)

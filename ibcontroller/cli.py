@@ -29,6 +29,7 @@ from ibcontroller.config import (
 from ibcontroller.control_loop import ShutdownCause
 from ibcontroller.errors import IBControllerError, TransientError
 from ibcontroller.labels import LabelsError
+from ibcontroller.launcher import LauncherError
 from ibcontroller.login import CredentialsRejectedError, SessionCededError
 
 # A `ShutdownCause` returned by `run_control_loop` without an exception -- checked
@@ -207,6 +208,8 @@ def run(  # noqa: PLR0913, PLR0917 -- one typer.Option per Config field, not
             )
         elif isinstance(exc, LabelsError):
             typer.echo(f"\nCheck {config_dir / 'labels.json'}.", err=True)
+        elif isinstance(exc, LauncherError):
+            pass  # message already names the fix; the config files are not at fault
         else:
             typer.echo(
                 f"\nCheck {config_dir / 'ibcontroller.toml'} and the environment "
