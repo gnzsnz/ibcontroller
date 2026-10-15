@@ -29,7 +29,9 @@ background task, so a real dialog occurrence is never handled twice at once.
    before it, with `relogin_after_mfa_timeout` enabled: arms the shorter
    `mfa_exit_interval` watchdog and raises `MfaTimeoutError` if login still
    hasn't completed. Closed at or after it (IB timed out on an unanswered push):
-   resubmits the login after a fixed `_IBC_RELOGIN_DELAY_SECONDS`.
+   resubmits the login after a fixed `_IBC_RELOGIN_DELAY_SECONDS`, but only
+   if the login form is shown again; a failed resubmit is logged and the
+   wait continues.
 2. `recognisers.TooManyFailedLoginAttemptsRecognizer`, a real server-side
    rate-limit dialog, unrelated to the MFA timing above. Its `handle()`
    calls `LoginManager.schedule_retry`, which re-fills credentials and
@@ -65,10 +67,11 @@ from typing import ClassVar, Protocol
 from ibcontroller.actions import (
     click,
     menu_item_exists,
+    read_text,
     type_text,
     wait_for_window,
 )
-from ibcontroller.agent_client import WindowGoneError
+from ibcontroller.agent_client import ElementNotFoundError, WindowGoneError
 from ibcontroller.config import Config, Program, TradingMode
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.errors import IBControllerError, TransientError
@@ -477,7 +480,9 @@ class LoginManager:
         `mfa_timeout`, `None` when the caller just keeps waiting. If 2FA
         closed at or after `mfa_timeout` (IB timed out an unanswered push)
         and relogin is enabled, resubmits the login after
-        `_IBC_RELOGIN_DELAY_SECONDS`; the caller's wait then continues."""
+        `_IBC_RELOGIN_DELAY_SECONDS` if the login form is shown (TWS can report
+        spurious 2FA closes); the caller's wait then continues, also when the
+        resubmit fails."""
         elapsed = time.monotonic() - (self._login_start_time or time.monotonic())
 
         if elapsed < self._config.mfa_timeout:
@@ -495,5 +500,29 @@ class LoginManager:
             "IBController > re-login after second factor authentication timeout in %ss",
             _IBC_RELOGIN_DELAY_SECONDS,
         )
-        await self.retry_login(_IBC_RELOGIN_DELAY_SECONDS)
+        await asyncio.sleep(_IBC_RELOGIN_DELAY_SECONDS)
+        if not await self._login_form_shown():
+            logger.info(
+                "IBController > 2FA dialog reported closed but the login form is "
+                "not shown -- not re-logging in"
+            )
+            return None
+        try:
+            await self._fill_credentials_and_submit()
+        except (ElementNotFoundError, WindowGoneError) as exc:
+            logger.warning("IBController > re-login failed, still waiting: %s", exc)
         return None
+
+    async def _login_form_shown(self) -> bool:
+        """Whether the login frame shows its username field. TWS can report a 2FA
+        close while the frame still shows 2FA, so a refill is only safe once the
+        form is back."""
+        try:
+            await read_text(
+                self._dispatcher,
+                self._labels.login.username_field,
+                window_id=self._login_frame_window_id,
+            )
+        except (ElementNotFoundError, WindowGoneError):
+            return False
+        return True

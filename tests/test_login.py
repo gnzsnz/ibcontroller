@@ -109,18 +109,27 @@ def _splash_closed_event(seq: int) -> WindowEvent:
     return _window_event(seq, "window_closed", _SPLASH_CLASS, "Starting application...")
 
 
-def _tracking_responder(calls: list[dict], *, menu_item_exists: bool = True):
+def _tracking_responder(
+    calls: list[dict],
+    *,
+    menu_item_exists: bool = True,
+    not_found_cmds: frozenset[str] = frozenset(),
+):
     """`dump` needs a `components` key (empty is fine -- these tests recognise
     existing-session/login-failed by event title, not component content);
     `menu_item_exists` needs `exists`/`enabled` keys (`login.py`'s TWS
     main-window detection, 2026-09-09 -- default `True` matches every
     existing TWS test's own fed "main window" event); everything else just
-    needs `{"ok": True}`."""
+    needs `{"ok": True}`. Commands in `not_found_cmds` answer `not_found`."""
 
     def responder(request):
         calls.append(request)
+        if request.get("cmd") in not_found_cmds:
+            return {"ok": False, "error": "not_found", "detail": "no such component"}
         if request.get("cmd") == "dump":
             return {"ok": True, "components": []}
+        if request.get("cmd") == "get_text":
+            return {"ok": True, "value": ""}
         if request.get("cmd") == "menu_item_exists":
             return {"ok": True, "exists": menu_item_exists, "enabled": menu_item_exists}
         return {"ok": True}
@@ -746,7 +755,7 @@ async def test_mfa_late_close_relogin_enabled_retries_then_succeeds(
 
     assert manager.state is LoginState.LOGGED_IN
     # credentials were genuinely re-submitted, not just the original click
-    sent_targets = [c.get("target") for c in calls if "target" in c]
+    sent_targets = [c.get("target") for c in calls if c.get("cmd") == "set_text"]
     assert sent_targets.count("Username") == 2
 
 
@@ -974,6 +983,8 @@ async def test_tws_skips_intermediate_window_then_matches_main_window_by_menu_it
     def responder(request):
         if request.get("cmd") == "dump":
             return {"ok": True, "components": []}
+        if request.get("cmd") == "get_text":
+            return {"ok": True, "value": ""}
         if request.get("cmd") == "menu_item_exists":
             has_it = request.get("window_id") == "w-main"
             return {"ok": True, "exists": has_it, "enabled": has_it}
@@ -1132,7 +1143,7 @@ async def test_gateway_unanswered_2fa_closing_after_the_deadline_relogs_in(
         finally:
             await dispatcher.stop()
     assert manager.state is LoginState.LOGGED_IN
-    sent_targets = [c.get("target") for c in calls if "target" in c]
+    sent_targets = [c.get("target") for c in calls if c.get("cmd") == "set_text"]
     assert sent_targets.count("Username") == 2
 
 
@@ -1179,8 +1190,76 @@ async def test_tws_unanswered_2fa_closing_after_the_deadline_relogs_in(
         finally:
             await dispatcher.stop()
     assert manager.state is LoginState.LOGGED_IN
-    sent_targets = [c.get("target") for c in calls if "target" in c]
+    sent_targets = [c.get("target") for c in calls if c.get("cmd") == "set_text"]
     assert sent_targets.count("Username") == 2
+
+
+async def _late_close_run(
+    sock_path, event_sock_path, monkeypatch, calls, responder
+) -> LoginManager:
+    """TWS: unanswered 2FA closes after `mfa_timeout`, relogin on. Returns the
+    manager with `run()` still pending after the close."""
+    monkeypatch.setattr("ibcontroller.login._IBC_RELOGIN_DELAY_SECONDS", 0.01)
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        config = _config(
+            program=Program.TWS, relogin_after_mfa_timeout=True, mfa_timeout=0.2
+        )
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
+        task = asyncio.ensure_future(manager.run(login_timeout=5.0))
+        try:
+            await _feed(
+                dispatcher,
+                [_window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE)],
+            )
+            await asyncio.sleep(0.4)  # past mfa_timeout
+            dispatcher._window_events.emit(
+                _window_event(2, "window_closed", _MFA_CLASS, _MFA_TITLE)
+            )
+            await asyncio.sleep(0.1)  # relogin delay, then the form check
+            assert not task.done()
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            await dispatcher.stop()
+    return manager
+
+
+async def test_tws_late_2fa_close_without_login_form_does_not_relogin(
+    sock_path, event_sock_path, monkeypatch
+):
+    """The 2FA close is reported while the frame still shows 2FA (live TWS, #61):
+    no credentials are refilled and the wait continues."""
+    calls: list[dict] = []
+    responder = _tracking_responder(calls, not_found_cmds=frozenset({"get_text"}))
+    await _late_close_run(sock_path, event_sock_path, monkeypatch, calls, responder)
+    sent = [c.get("target") for c in calls if c.get("cmd") == "set_text"]
+    assert sent.count("Username") == 1  # the initial fill only
+
+
+async def test_tws_failed_relogin_does_not_end_the_login_wait(
+    sock_path, event_sock_path, monkeypatch
+):
+    """A resubmit that cannot find its controls is logged, not fatal."""
+    calls: list[dict] = []
+    base = _tracking_responder(calls)
+    fills = 0
+
+    def responder(request):
+        nonlocal fills
+        if request.get("cmd") == "set_text" and request.get("target") == "Username":
+            fills += 1
+        if request.get("cmd") == "click" and fills > 1:  # only the relogin fails
+            calls.append(request)
+            return {"ok": False, "error": "not_found", "detail": "no such component"}
+        return base(request)
+
+    await _late_close_run(sock_path, event_sock_path, monkeypatch, calls, responder)
+    assert fills == 2  # the relogin was attempted
 
 
 async def test_gateway_late_2fa_close_without_relogin_keeps_waiting(
