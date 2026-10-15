@@ -130,7 +130,8 @@
 # read_only_api = false
 
 # IBC: ExistingSessionDetectedAction -- how ibcontroller itself reacts to Gateway's
-# "existing session detected" dialog: manual/primary/primaryoverride/secondary
+# "existing session detected", "Re-login is required" and "Trading Login Handoff" dialogs:
+# manual/primary/primaryoverride/secondary (table in docs/Configuration.md)
 # (env: IBC_EXISTING_SESSION_ACTION)
 # Default "manual"
 # existing_session_action = "manual"

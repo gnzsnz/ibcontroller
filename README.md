@@ -509,15 +509,16 @@ code, grouped by what a supervisor (a container's `restart:` policy, systemd's
 
 | Code | Meaning | Supervisor action |
 | --- | --- | --- |
-| `0` | Intentional stop (Ctrl-C, `closedown_at`, Gateway/TWS closed normally, e.g. File>Close) | Do not restart |
+| `0` | Intentional stop (Ctrl-C, `closedown_at`, Gateway/TWS closed normally, e.g. File>Close, or this session yielded to another via `existing_session_action`: `stopped: SESSION_CEDED`) | Do not restart |
 | `1` | Unhandled exception (a bug) | Restart, report |
 | `2` | CLI usage error | Fix the command |
 | `78` (`EX_CONFIG`) | Deployment error (bad config, install not found) | Do not retry |
 | `77` (`EX_NOPERM`) | Credentials rejected | Do not retry (lockout risk) |
+| `76` (`EX_PROTOCOL`) | A dialog `existing_session_action` rules out (Trading Login Handoff with `secondary`/`primaryoverride`) | Do not retry |
 | `75` (`EX_TEMPFAIL`) | Login did not complete after 2FA, `mfa_timeout_action=exit` | Retry per policy |
 | `69` (`EX_UNAVAILABLE`) | Transient runtime failure (process crashed or killed, connection lost, JVM exited before becoming ready) | Retry |
 
-`77`/`78` work with systemd's `RestartPreventExitStatus=`.
+`76`/`77`/`78` work with systemd's `RestartPreventExitStatus=`.
 
 Some login-blocking dialogs IB reports as a server-side condition -- not a credential
 rejection -- never reach this table at all: a "Login failed"/"Login Error" dialog, or a

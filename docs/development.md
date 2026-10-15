@@ -245,7 +245,8 @@ Any contribution must follow this separation of concerns.
     continue.
   - Outcome exceptions derive from `IBControllerError` (`errors.py`). Each exit-code group is a
     base class carrying its `exit_code`: `ConfigError` 78, `CredentialsRejectedError` 77,
-    `MfaTimeoutError` 75, `TransientError` 69. A new exception picks its group by base class.
+    `MfaTimeoutError` 75, `InvalidSessionStateError` 76, `SessionCededError` 0 (a deliberate yield),
+    `TransientError` 69. A new exception picks its group by base class.
     The login-outcome exceptions live in `login.py`, wherever the detecting recogniser lives.
   - Login waits for its outcome with no overall deadline (as IBC); only `login_dialog_display_timeout`
     and the `mfa_exit_interval` watchdog raise. A retry (too-many-attempts cooldown, late 2FA close)

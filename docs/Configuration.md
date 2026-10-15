@@ -115,6 +115,33 @@ The difference between 'primary' and 'primaryoverride' is that a
 'primary' session, the 'primary' session is automatically reconnected. The
 default is 'manual'.
 
+What ibcontroller does at each dialog, by value and by the role of this
+session. The *new* session is the one still logging in; the *existing* session
+is the one already logged in when the other one connects.
+
+| Dialog | Role | `manual` | `secondary` | `primary` | `primaryoverride` |
+| --- | --- | --- | --- | --- | --- |
+| Existing session detected | new | user decides | cancel, session ends | first time: continue; if the dialog returns: cancel, session ends | same as `primary` |
+| Existing session detected | existing | user decides | cancel, session ends | continue | cancel, session ends |
+| Re-login is required | new | user decides | cancel, session ends | click Re-login | click Re-login |
+| Re-login is required | existing | user decides | cancel, session ends | click Re-login | click Re-login |
+| Trading Login Handoff (2FA accounts) | new | user decides | invalid state, session ends | click Disconnect Other Session | invalid state, session ends |
+
+Notes:
+- "Re-login is required" is the dialog an IBKR session shows after the other
+  session took over. Clicking Re-login makes the session reconnect, which in
+  turn shows the other session its own Re-login dialog. The exchange stops when
+  one side ends. A `secondary` session never reconnects, because that would
+  displace the other session.
+- "Session ends" means ibcontroller cancels the dialog and exits with code `0`
+  (`stopped: SESSION_CEDED`), without relaunching: relaunching would take the
+  session back. Cancelling a dialog by hand is a manual decision; ibcontroller
+  does not react to it.
+- "Invalid state" is IBC's own rule: the Trading Login Handoff only appears
+  after this session chose to continue, which `secondary` and `primaryoverride`
+  never do. ibcontroller exits with code `76` without relaunching. The dialog's
+  title and button come from IBC and have not been seen live.
+
 ### Auto Restart Time
 
 **key:** `auto_restart_time`
