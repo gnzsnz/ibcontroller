@@ -139,8 +139,7 @@ Notes:
   does not react to it.
 - "Invalid state" is IBC's own rule: the Trading Login Handoff only appears
   after this session chose to continue, which `secondary` and `primaryoverride`
-  never do. ibcontroller exits with code `76` without relaunching. The dialog's
-  title and button come from IBC and have not been seen live.
+  never do. ibcontroller exits with code `76` without relaunching.
 
 ### Auto Restart Time
 

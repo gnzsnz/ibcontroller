@@ -488,7 +488,7 @@ class ReloginRecognizer:
 
 class TradingLoginHandoffRecognizer:
     """Matches "Trading Login Handoff" by title (IBC's
-    `TradingLoginHandoffDialogHandler`; labels from IBC, not seen live). It
+    `TradingLoginHandoffDialogHandler`). It
     only appears after this session chose to continue, so `primaryoverride`
     and `secondary` raise `InvalidSessionStateError`; `primary` disconnects
     the other session; `manual` leaves the dialog."""

@@ -121,8 +121,8 @@ class ReloginLabels:
 
 @attrs.define(frozen=True)
 class TradingLoginHandoffLabels:
-    """The "Trading Login Handoff" dialog (accounts with 2FA), from IBC; not
-    yet seen live. `disconnect_buttons` ends the other session."""
+    """The "Trading Login Handoff" dialog (accounts with 2FA), as in IBC.
+    `disconnect_buttons` ends the other session."""
 
     title: str
     disconnect_buttons: list[str] = attrs.field(validator=_non_empty)
