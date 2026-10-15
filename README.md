@@ -187,7 +187,7 @@ When `IBC_APP_DIR` is set then:
 - `socket_dir` -> `IBC_APP_DIR/run`
 
 Socket paths (`socket_dir/ibcontroller-agent-<instance>-events.sock`) must fit
-the Unix socket limit: 102 bytes on macOS, 107 on Linux. On macOS the default
+the Unix socket limit: 102 bytes on macOS, 106 on Linux. On macOS the default
 `socket_dir` leaves room for an instance name of about 15 characters with a
 5-letter user name (each extra user-name character costs one). Over the limit,
 `ibcontroller run` stops with an error naming the path; use a shorter instance
