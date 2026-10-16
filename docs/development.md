@@ -258,6 +258,10 @@ Any contribution must follow this separation of concerns.
     passed in by L6 as a hook (`after_apply`).
   - A domain reads the login session only through the read-only `SessionState` protocol
     (`login.py`: `is_logged_in()`, `main_window_id`), never `LoginManager` itself.
+    `main_window_id` is the main frame's id on both programs: TWS takes it from the window that
+    shows `File/Lock Application`, Gateway from the non-login "IBKR Gateway" frame that shows
+    `Help/About Gateway` (menu probe, class names are obfuscated), captured when the splash
+    closes. It is `None` when no frame matches, and consumers then search unscoped.
     `LoginState` is login-sequence progress only: `LOGGED_IN` is terminal for the cycle, a later
     session loss does not change it, and failures leave as exceptions.
   - A recogniser acts only on the window it matched (`window_id`). The dialogs registry never acts

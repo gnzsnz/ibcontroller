@@ -95,6 +95,10 @@ class LoginLabels:
     real main window title is account-specific, so a title match can't be
     used here the way it can for Gateway. See `login.py`'s
     `_wait_for_outcome_tws`."""
+    gateway_main_window_menu_items: list[str] = attrs.field(validator=_non_empty)
+    """Gateway only. Any of these menu items existing marks a frame as the
+    main window, whose id then scopes menu navigation (IBC's
+    `GatewayMainWindowFrameHandler` recognises it the same way)."""
 
 
 @attrs.define(frozen=True)

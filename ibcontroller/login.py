@@ -248,6 +248,7 @@ class LoginManager:
         assert login_frame is not None  # closed=False always returns the window
         self._login_frame_class = login_frame.class_
         self._login_frame_window_id = login_frame.window_id
+        self.main_window_id = None  # a relaunch must not keep the previous id
 
         self._retry_failed = asyncio.get_running_loop().create_future()
         outcome: asyncio.Task[None] | None = None
@@ -501,11 +502,8 @@ class LoginManager:
                     continue  # short-lived intermediate window closed already
                 if exists:
                     self.state = LoginState.LOGGED_IN
-                    # Keep the window_id this same check just validated (#40)
-                    # -- Gateway's path below never sets this (no ambiguity
-                    # there, see _wait_for_outcome_gateway's docstring), so
-                    # consumers must treat None as "no scoping available, fall
-                    # back".
+                    # Keep the window_id this same check just validated (#40);
+                    # None means "no scoping available, fall back".
                     self.main_window_id = window.window_id
                     logger.info("IBController > login completed")
                     return
@@ -523,7 +521,8 @@ class LoginManager:
         An MFA dialog opening/closing along the way only updates `state` and
         may arm `_after_mfa_closed`'s exit-interval watchdog -- unlike
         the TWS path, it is never itself a terminal signal. One subscription
-        and one loop cover both events."""
+        and one loop cover both events. `main_window_id` is captured when the
+        splash closes."""
         splash_title = self._labels.login.starting_application_title
         mfa_title = self._labels.mfa.title
         watchdog: float | None = None  # monotonic end of the post-MFA exit interval
@@ -555,8 +554,41 @@ class LoginManager:
                     if interval is not None:
                         watchdog = time.monotonic() + interval
 
+        await self._capture_gateway_main_window()
         self.state = LoginState.LOGGED_IN
         logger.info("IBController > login completed")
+
+    async def _capture_gateway_main_window(self) -> None:
+        """Sets `main_window_id` to the open Gateway frame (not the login
+        frame) whose menu bar has a `gateway_main_window_menu_items` entry.
+        The main frame opens before login ends, so it comes from the window
+        registry. Best effort: with no match the id stays None and consumers
+        fall back to an unscoped menu search."""
+        titles = self._labels.login.gateway_titles
+        for window in list(self._dispatcher.windows.values()):
+            if (
+                window.window_id is None
+                or window.title not in titles
+                or window.class_ == self._login_frame_class
+            ):
+                continue
+            for path in self._labels.login.gateway_main_window_menu_items:
+                try:
+                    exists, _enabled = await menu_item_exists(
+                        self._dispatcher, path, window_id=window.window_id
+                    )
+                except WindowGoneError:
+                    break  # closed since the snapshot
+                logger.info(
+                    "IBController > main window probe %s (%s) %s: %s",
+                    window.window_id,
+                    window.class_,
+                    path,
+                    exists,
+                )
+                if exists:
+                    self.main_window_id = window.window_id
+                    return
 
     async def _after_mfa_closed(self) -> float | None:
         """Does nothing after a read-only click (the close is expected).

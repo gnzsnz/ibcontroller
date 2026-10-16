@@ -1768,3 +1768,98 @@ async def test_gateway_read_only_login_warns_and_logs_in_normally(
             await dispatcher.stop()
     assert "read_only_login is not supported by Gateway" in caplog.text
     assert not [c for c in calls if c.get("target") == "Enter Read Only"]
+
+
+_GW_LOGIN_CLASS = "ibgateway.ax"
+_GW_MAIN_CLASS = "ibgateway.aw"
+_GW_SNAPSHOT = {
+    "type": "snapshot",
+    "windows": [
+        {"class": _GW_LOGIN_CLASS, "title": "IBKR Gateway", "window_id": "w1"},
+        {"class": _GW_MAIN_CLASS, "title": "IBKR Gateway", "window_id": "w2"},
+        {"class": "jutils.eh", "title": "Some dialog", "window_id": "w3"},
+    ],
+}
+
+
+async def _gateway_capture(
+    sock_path, event_sock_path, responder, snapshot=_GW_SNAPSHOT
+) -> LoginManager:
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, [snapshot]),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
+        manager._login_frame_class = _GW_LOGIN_CLASS
+        try:
+            await _registry_seeded(dispatcher, "w2")
+            await manager._capture_gateway_main_window()
+        finally:
+            await dispatcher.stop()
+    return manager
+
+
+async def test_gateway_main_window_is_found_by_menu_probe(sock_path, event_sock_path):
+    """The login frame (same title, other class) is skipped; the frame with
+    the About item becomes `main_window_id`."""
+    probed: list[tuple[str, str]] = []
+
+    def responder(request):
+        if request.get("cmd") == "menu_item_exists":
+            probed.append((request["window_id"], request["path"]))
+            hit = request["window_id"] == "w2" and request["path"].endswith("Gateway")
+            return {"ok": True, "exists": hit, "enabled": hit}
+        return {"ok": True}
+
+    manager = await _gateway_capture(sock_path, event_sock_path, responder)
+
+    assert manager.main_window_id == "w2"
+    assert all(window_id == "w2" for window_id, _ in probed)  # only w2 is a candidate
+
+
+async def test_gateway_main_window_tries_the_alternative_label(
+    sock_path, event_sock_path
+):
+    """Older Gateway versions label the item `About IB Gateway`."""
+
+    def responder(request):
+        if request.get("cmd") == "menu_item_exists":
+            hit = request["path"] == "Help/About IB Gateway"
+            return {"ok": True, "exists": hit, "enabled": hit}
+        return {"ok": True}
+
+    manager = await _gateway_capture(sock_path, event_sock_path, responder)
+
+    assert manager.main_window_id == "w2"
+
+
+async def test_gateway_main_window_stays_none_without_a_match(
+    sock_path, event_sock_path
+):
+    """No frame has the menu item: consumers fall back to an unscoped search."""
+
+    def responder(request):
+        if request.get("cmd") == "menu_item_exists":
+            return {"ok": True, "exists": False, "enabled": False}
+        return {"ok": True}
+
+    manager = await _gateway_capture(sock_path, event_sock_path, responder)
+
+    assert manager.main_window_id is None
+
+
+async def test_gateway_main_window_gone_before_probe_is_skipped(
+    sock_path, event_sock_path
+):
+    """A frame that closes before the probe answers `window_gone`; capture
+    ends without raising."""
+
+    def responder(request):
+        if request.get("cmd") == "menu_item_exists":
+            return {"ok": False, "error": "window_gone", "detail": "closed"}
+        return {"ok": True}
+
+    manager = await _gateway_capture(sock_path, event_sock_path, responder)
+
+    assert manager.main_window_id is None

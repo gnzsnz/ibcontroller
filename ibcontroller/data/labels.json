@@ -10,7 +10,8 @@
     "username_field": "Username",
     "password_field": "Password",
     "starting_application_title": "Starting application...",
-    "tws_main_window_menu_item": "File/Lock Application"
+    "tws_main_window_menu_item": "File/Lock Application",
+    "gateway_main_window_menu_items": ["Help/About Gateway", "Help/About IB Gateway"]
   },
   "mfa": {
     "title": "Second Factor Authentication",
