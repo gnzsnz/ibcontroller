@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import inspect
 from pathlib import Path
 from tempfile import gettempdir
 
@@ -161,6 +162,41 @@ async def test_clean_shutdown_terminates_when_the_agent_dies_mid_navigate_menu(
         )
 
     assert process.terminated
+
+
+async def test_clean_shutdown_skips_the_exit_wait_when_the_connection_is_broken(
+    sock_path, event_sock_path, monkeypatch
+):
+    """A `ProtocolError` means the menu was never clicked: terminate at once
+    instead of waiting `timeout` for an exit that cannot come (#117)."""
+    async with (
+        FakeCommandServer(sock_path, lambda _request: {"ok": True, "clicked": True}),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start_dispatcher(sock_path, event_sock_path)
+
+        async def drain():
+            raise ConnectionResetError("reset by peer")
+
+        monkeypatch.setattr(dispatcher._command_conn._writer, "drain", drain)
+        process = FakeProcess(returncode=None)
+        launched = _launched(process, dispatcher, sock_path, event_sock_path)
+        await asyncio.wait_for(
+            clean_shutdown(
+                launched,
+                program=Program.GATEWAY,
+                logged_in=True,
+                labels=LABELS.shutdown,
+                timeout=60.0,  # the outer wait_for fails the test if it is used
+            ),
+            timeout=3,
+        )
+
+    assert process.terminated
+
+
+def test_clean_shutdown_default_timeout_is_under_dockers_stop_timeout():
+    assert inspect.signature(clean_shutdown).parameters["timeout"].default == 8.0
 
 
 async def test_clean_shutdown_terminates_when_the_agent_never_answers(

@@ -11,7 +11,7 @@ import asyncio
 import logging
 
 from ibcontroller.actions import navigate_menu
-from ibcontroller.agent_client import AgentClientError
+from ibcontroller.agent_client import AgentClientError, ProtocolError
 from ibcontroller.config import Program
 from ibcontroller.labels import ShutdownLabels
 from ibcontroller.launcher import LaunchedInstance, terminate_and_wait
@@ -26,7 +26,7 @@ async def clean_shutdown(
     logged_in: bool,
     labels: ShutdownLabels,
     main_window_id: str | None = None,
-    timeout: float = 15.0,
+    timeout: float = 8.0,  # measured shutdown p99 4.3 s, max 4.9 s (#117)
 ) -> None:
     """Shutdown is not a process signal if login has completed -- invokes the
     app's own File -> Exit (TWS) / File -> Close (Gateway) menu item first, so
@@ -67,6 +67,8 @@ async def clean_shutdown(
     `AgentClientError`), caught below. Every hard-terminate waits for the
     process to exit (`launcher.terminate_and_wait`) -- `run_control_loop`
     may relaunch immediately, and a still-alive JVM holds the command socket.
+    A `ProtocolError` from the menu command skips the wait for exit: the click
+    never happened.
     """
     if launched.process.returncode is not None:
         logger.info(
@@ -91,6 +93,16 @@ async def clean_shutdown(
         await navigate_menu(
             launched.dispatcher, target, timeout=5.0, window_id=main_window_id
         )
+    except ProtocolError as exc:
+        # Broken connection: the menu was never clicked, so no exit is coming.
+        logger.warning(
+            "IBController > clean shutdown via %s failed (%s) -- terminating",
+            target,
+            exc,
+        )
+        await terminate_and_wait(launched.process)
+        await launched.dispatcher.stop()
+        return
     except (AgentClientError, TimeoutError):
         pass  # best-effort -- the wait-then-terminate fallback below is what matters
 

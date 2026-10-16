@@ -136,10 +136,10 @@ class TransientLoginError(TransientError):
     """A login-blocking dialog that is a server-side condition, not a credential
     rejection (a "Login failed"/"Login Error" dialog, or a Gateway "Connection to
     server failed" reason not in `known_reasons` -- e.g. a stale restart token).
-    `run_control_loop` catches it and relaunches unbounded with a full fresh
-    login, the same shape as a scheduled `ShutdownCause.COLD_RESTART`, matching
-    IBC's unconditional cold-restart for these dialogs (gitea #62). Never reaches
-    `cli.py` under normal operation."""
+    `run_control_loop` catches it and relaunches (bounded by `restart_cap`) with a
+    full fresh login, the same shape as a scheduled `ShutdownCause.COLD_RESTART`,
+    matching IBC's unconditional cold-restart for these dialogs (gitea #62).
+    Never reaches `cli.py` under normal operation."""
 
 
 class LoginFrameTimeoutError(LoginError):
