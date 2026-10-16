@@ -258,6 +258,8 @@ Any contribution must follow this separation of concerns.
     passed in by L6 as a hook (`after_apply`).
   - A domain reads the login session only through the read-only `SessionState` protocol
     (`login.py`: `is_logged_in()`, `main_window_id`), never `LoginManager` itself.
+    `LoginState` is login-sequence progress only: `LOGGED_IN` is terminal for the cycle, a later
+    session loss does not change it, and failures leave as exceptions.
   - A recogniser acts only on the window it matched (`window_id`). The dialogs registry never acts
     on a window with a visible credential field.
 - **Known deviations:**

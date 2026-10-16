@@ -1,6 +1,8 @@
-"""The Login domain's own state machine. `LoginState` has six states:
-`LOGGED_OUT`, `AWAITING_CREDENTIALS`, `LOGGING_IN`, `MFA_IN_PROGRESS`,
-`LOGGED_IN`, `LOGIN_FAILED`.
+"""The Login domain's own state machine. `LoginState` tracks the progress of
+one login sequence: `LOGGED_OUT`, `AWAITING_CREDENTIALS`, `LOGGING_IN`,
+`MFA_IN_PROGRESS`, `LOGGED_IN`. `LOGGED_IN` is terminal for the cycle: a
+session lost later does not change it, and a failed login leaves as an
+exception, not as a state.
 
 **Distinguishing the login frame from the main window, given both can share
 the same title.** This module records the login frame's own window *class*
@@ -92,7 +94,6 @@ class LoginState(Enum):
     LOGGING_IN = auto()
     MFA_IN_PROGRESS = auto()
     LOGGED_IN = auto()
-    LOGIN_FAILED = auto()
 
 
 class LoginError(TransientError):
@@ -191,7 +192,8 @@ class LoginManager:
         self.main_window_id: str | None = None
 
     def is_logged_in(self) -> bool:
-        """Returns whether `state` is `LOGGED_IN`. Supplied to
+        """Returns whether this cycle's login sequence completed (`state` is
+        `LOGGED_IN`); stays true after a later session loss. Supplied to
         `ExistingSessionRecognizer` (`recognisers.py`) as its
         `is_logged_in` callable -- that recogniser reacts to login state, it
         doesn't own it."""
