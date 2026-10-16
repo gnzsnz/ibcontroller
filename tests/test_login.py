@@ -1545,3 +1545,104 @@ async def test_tws_2fa_close_without_open_arms_exit_interval_watchdog(
                 await asyncio.wait_for(task, timeout=2.0)
         finally:
             await dispatcher.stop()
+
+
+def _poll_responder(calls: list[dict], components: list[dict]):
+    def responder(request):
+        calls.append(request)
+        if request.get("cmd") == "dump":
+            return {"ok": True, "components": components}
+        if request.get("cmd") == "menu_item_exists":
+            return {"ok": True, "exists": True, "enabled": True}
+        return {"ok": True}
+
+    return responder
+
+
+async def _poll_run(
+    sock_path, event_sock_path, monkeypatch, components, **config
+) -> tuple[LoginManager, list[dict], LoginState]:
+    """Runs a TWS login until the frame poll had time to fire; returns the
+    manager, the commands sent and the state seen mid-login."""
+    monkeypatch.setattr("ibcontroller.login._TWS_2FA_POLL_SECONDS", 0.01)
+    calls: list[dict] = []
+    async with (
+        FakeCommandServer(sock_path, _poll_responder(calls, components)),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program=Program.TWS, **config),
+            LABELS,
+            dispatcher,
+            restart_expected=False,
+        )
+        try:
+            task = asyncio.ensure_future(manager.run(login_timeout=5.0))
+            await _feed(
+                dispatcher,
+                [_window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE, "w1")],
+            )
+            await asyncio.sleep(0.2)
+            mid_state = manager.state
+            dispatcher._window_events.emit(
+                _window_event(2, "window_opened", _TWS_MAIN_CLASS, _TWS_TITLE, "w-main")
+            )
+            await asyncio.wait_for(task, timeout=2.0)
+        finally:
+            await dispatcher.stop()
+    return manager, calls, mid_state
+
+
+async def test_tws_poll_sets_mfa_in_progress_when_login_frame_shows_2fa_heading(
+    sock_path, event_sock_path, monkeypatch
+):
+    components = [
+        {
+            "class": "javax.swing.JLabel",
+            "accessible_name": "SECOND FACTOR AUTHENTICATION",
+        }
+    ]
+    manager, calls, mid_state = await _poll_run(
+        sock_path,
+        event_sock_path,
+        monkeypatch,
+        components,
+        trading_mode=TradingMode.LIVE,
+    )
+    assert mid_state is LoginState.MFA_IN_PROGRESS
+    assert manager.state is LoginState.LOGGED_IN
+    assert {c["window_id"] for c in calls if c["cmd"] == "dump"} == {"w1"}
+
+
+async def test_tws_poll_ignores_the_login_heading(
+    sock_path, event_sock_path, monkeypatch
+):
+    components = [
+        {
+            "class": "javax.swing.JLabel",
+            "accessible_name": "Second Factor Authentication",
+        }
+    ]
+    _, _, mid_state = await _poll_run(
+        sock_path,
+        event_sock_path,
+        monkeypatch,
+        components,
+        trading_mode=TradingMode.LIVE,
+    )
+    assert mid_state is LoginState.LOGGING_IN
+
+
+async def test_tws_paper_login_does_not_poll(sock_path, event_sock_path, monkeypatch):
+    components = [
+        {
+            "class": "javax.swing.JLabel",
+            "accessible_name": "SECOND FACTOR AUTHENTICATION",
+        }
+    ]
+    _, calls, mid_state = await _poll_run(
+        sock_path, event_sock_path, monkeypatch, components
+    )
+    assert mid_state is LoginState.LOGGING_IN
+    assert not [c for c in calls if c["cmd"] == "dump"]

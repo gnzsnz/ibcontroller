@@ -100,6 +100,9 @@ class LoginLabels:
 @attrs.define(frozen=True)
 class MfaLabels:
     title: str
+    tws_frame_label: str
+    """TWS only. Heading the login frame shows once it has turned into the 2FA
+    frame in place (no window event), matched case-sensitively."""
 
 
 @attrs.define(frozen=True)

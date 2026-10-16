@@ -13,7 +13,8 @@
     "tws_main_window_menu_item": "File/Lock Application"
   },
   "mfa": {
-    "title": "Second Factor Authentication"
+    "title": "Second Factor Authentication",
+    "tws_frame_label": "SECOND FACTOR AUTHENTICATION"
   },
   "existing_session": {
     "title": "Existing session detected",

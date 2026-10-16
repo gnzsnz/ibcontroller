@@ -51,7 +51,8 @@ TWS. `_wait_for_outcome` dispatches on `config.program`:
 `File > Lock Application` menu item; `_wait_for_outcome_gateway` waits for
 the splash/"Authenticating..." window's own `WINDOW_CLOSED` event instead,
 the one signal that's correct in both trading modes without needing to know
-which one it is.
+which one it is. On live-mode TWS, `_poll_tws_2fa_frame` also watches the login
+frame for the 2FA heading (no window event announces it) to set `MFA_IN_PROGRESS`.
 
 **Not live-validated against real IBKR servers:** "too many failed login
 attempts" carries real account-level risk for no safe benefit -- built and
@@ -69,6 +70,7 @@ from typing import ClassVar, Protocol
 
 from ibcontroller.actions import (
     click,
+    dump,
     menu_item_exists,
     read_text,
     type_text,
@@ -86,6 +88,10 @@ logger = logging.getLogger(__name__)
 # secondFactorAuthenticationDialogClosed), not a config value -- kept literal
 # here for the same reason IBC never exposed it as one.
 _IBC_RELOGIN_DELAY_SECONDS = 5.0
+
+# TWS shows 2FA in the login frame with no window event; IBC polls every 200 ms,
+# a status needs second-level accuracy and each check is an agent command.
+_TWS_2FA_POLL_SECONDS = 1.0
 
 
 class LoginState(Enum):
@@ -352,8 +358,44 @@ class LoginManager:
         docstring). Unbounded: only the `mfa_exit_interval` watchdog raises."""
         if self._config.program == Program.GATEWAY:
             await self._wait_for_outcome_gateway()
-        else:
+            return
+        poll: asyncio.Task[None] | None = None
+        if self._config.trading_mode is TradingMode.LIVE:  # paper has no 2FA
+            poll = asyncio.ensure_future(self._poll_tws_2fa_frame())
+        try:
             await self._wait_for_outcome_tws()
+        finally:
+            if poll is not None:
+                poll.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await poll
+
+    async def _poll_tws_2fa_frame(self) -> None:
+        """Sets `MFA_IN_PROGRESS` while the login frame shows the 2FA heading.
+        Best effort: `state` is status only, so a failed check ends the poll
+        instead of the login."""
+        label = self._labels.mfa.tws_frame_label
+        while True:
+            await asyncio.sleep(_TWS_2FA_POLL_SECONDS)
+            if (
+                self.state is not LoginState.LOGGING_IN
+                or self._login_frame_window_id is None
+            ):
+                continue
+            try:
+                components = await dump(
+                    self._dispatcher, window_id=self._login_frame_window_id
+                )
+            except WindowGoneError:
+                continue  # frame closed; the outcome wait handles the rest
+            except Exception as exc:
+                logger.warning("IBController > 2FA frame poll stopped: %s", exc)
+                return
+            if self.state is LoginState.LOGGING_IN and any(
+                label in (c.accessible_name, c.text) for c in components
+            ):
+                self.state = LoginState.MFA_IN_PROGRESS
+                logger.info("IBController > second factor authentication in progress")
 
     def _exit_interval_error(self) -> MfaTimeoutError:
         return MfaTimeoutError(
