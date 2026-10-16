@@ -101,6 +101,7 @@ class ShutdownCause(Enum):
 
 
 # Either way the JVM is gone -- a scheduled restart can end as both.
+_SCHEDULE_POLL_SECONDS = 60.0  # max sleep between wall-clock re-reads
 _PROCESS_GONE = frozenset({ShutdownCause.PROCESS_CLOSED, ShutdownCause.PROCESS_EXITED})
 
 
@@ -464,11 +465,9 @@ async def _sleep_until_scheduled_shutdown(config: Config) -> ShutdownCause:
     nor `closedown_at` applies, so this task never itself decides to end the
     cycle in that case.
 
-    Uses `asyncio.sleep`, not `loop.call_at` -- matches every other scheduled
-    wait in this codebase (`login.py`'s `schedule_retry`,
-    `_is_restart_with_grace` above, `launcher._wait_for_ready`); `call_at`
-    schedules against the monotonic loop clock, the wrong primitive for a
-    wall-clock target like "next Sunday 07:05 local time". Recomputed fresh
+    Sleeps in bounded chunks and re-reads the wall clock each time, because
+    the loop's monotonic clock drifts from a wall-clock target across DST
+    changes and host suspend. Recomputed fresh
     each `_run_one_cycle` lap (never carried over from a previous cycle), so
     this only matters within one already-running cycle, not indefinitely."""
     scheduled = next_scheduled_shutdown(config, datetime.now())
@@ -482,7 +481,10 @@ async def _sleep_until_scheduled_shutdown(config: Config) -> ShutdownCause:
         scheduled.at,
         delay,
     )
-    await asyncio.sleep(delay)
+    while (remaining := (scheduled.at - datetime.now()).total_seconds()) > 0:
+        await asyncio.sleep(
+            min(remaining, _SCHEDULE_POLL_SECONDS)
+        )  # re-read wall clock
     return (
         ShutdownCause.COLD_RESTART
         if scheduled.action is ScheduledAction.COLD_RESTART

@@ -143,6 +143,31 @@ async def test_sleep_until_scheduled_shutdown_fires_the_matching_cause(monkeypat
     assert cause is ShutdownCause.TIDY_CLOSEDOWN
 
 
+async def test_sleep_until_scheduled_shutdown_follows_wall_clock_jump(monkeypatch):
+    # Wall clock jumps forward (DST, host resume) while the monotonic clock
+    # barely moves: the sleep must notice on its next chunk and fire.
+    start = datetime(2026, 3, 8, 1, 0)
+    clock = {"now": start}
+
+    fake_datetime = types.SimpleNamespace(now=lambda: clock["now"])
+    target = ScheduledShutdown(
+        at=start + timedelta(hours=2), action=ScheduledAction.COLD_RESTART
+    )
+    monkeypatch.setattr(control_loop, "datetime", fake_datetime)
+    monkeypatch.setattr(
+        control_loop, "next_scheduled_shutdown", lambda config, now: target
+    )
+    monkeypatch.setattr(control_loop, "_SCHEDULE_POLL_SECONDS", 0.01)
+    task = asyncio.ensure_future(
+        _sleep_until_scheduled_shutdown(_config(cold_restart_time="Sunday 03:00"))
+    )
+    await asyncio.sleep(0.05)
+    assert not task.done()  # target still two wall-clock hours away
+    clock["now"] = start + timedelta(hours=2)  # clocks jump
+    cause = await asyncio.wait_for(task, timeout=5.0)
+    assert cause is ShutdownCause.COLD_RESTART
+
+
 async def test_sleep_until_scheduled_shutdown_sleeps_forever_when_unconfigured():
     config = _config(program=Program.TWS)
     task = asyncio.ensure_future(_sleep_until_scheduled_shutdown(config))
