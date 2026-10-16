@@ -67,6 +67,10 @@
       "click": "OK"
     }
   ],
+  "not_currently_available": {
+    "message_marker": "not currently available",
+    "dismiss_button": "OK"
+  },
   "too_many_failed_login_attempts": {
     "message_prefix": "Too many failed login attempts",
     "dismiss_button": "OK"

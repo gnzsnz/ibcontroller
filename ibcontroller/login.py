@@ -59,6 +59,7 @@ unit-tested against synthetic timing/dialogs instead.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from enum import Enum, auto
@@ -186,6 +187,7 @@ class LoginManager:
         self._login_frame_window_id: str | None = None
         self._login_start_time: float | None = None
         self._retry_task: asyncio.Task[None] | None = None
+        self._retry_failed: asyncio.Future[None] | None = None  # set by run()
         self.main_window_id: str | None = None
 
     def is_logged_in(self) -> bool:
@@ -210,7 +212,8 @@ class LoginManager:
         `CredentialsRejectedError`/`MfaTimeoutError` on failure; returns
         normally once `state` is `LOGGED_IN`. `login_timeout` defaults from
         `Config.login_dialog_display_timeout`. A pending scheduled retry is
-        cancelled when this ends."""
+        cancelled when this ends; a scheduled retry that fails ends the wait
+        with its exception."""
         login_timeout = (
             login_timeout
             if login_timeout is not None
@@ -232,6 +235,8 @@ class LoginManager:
         self._login_frame_class = login_frame.class_
         self._login_frame_window_id = login_frame.window_id
 
+        self._retry_failed = asyncio.get_running_loop().create_future()
+        outcome: asyncio.Task[None] | None = None
         try:
             if self._restart_expected:
                 logger.info(
@@ -241,10 +246,24 @@ class LoginManager:
                 self._login_start_time = time.monotonic()
             else:
                 await self._fill_credentials_and_submit()
-            await self._wait_for_outcome()
+            outcome = asyncio.ensure_future(self._wait_for_outcome())
+            await asyncio.wait(
+                {outcome, self._retry_failed}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if outcome.done():
+                outcome.result()
+            else:
+                raise self._retry_failed.exception()  # type: ignore[misc]
         finally:
+            if outcome is not None and not outcome.done():
+                outcome.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await outcome
             if self._retry_task is not None:
                 self._retry_task.cancel()
+            if self._retry_failed.done() and not self._retry_failed.cancelled():
+                self._retry_failed.exception()  # mark retrieved
+            self._retry_failed = None
 
     async def _fill_credentials(self) -> None:
         """Fills the trading-mode/username/password fields on the login
@@ -307,8 +326,23 @@ class LoginManager:
         (`recognisers.py`): fires `retry_login` as a background task after
         `wait_seconds`, so the caller (running inside
         `watch_for_unprompted_windows`'s own loop) never blocks on the
-        cooldown itself. `run()` owns the task and cancels it when it ends."""
+        cooldown itself. `run()` owns the task and cancels it when it ends; a
+        failure of the task is passed on to `run()`."""
+        if self._retry_task is not None:
+            self._retry_task.cancel()  # a newer cooldown replaces a pending one
         self._retry_task = asyncio.ensure_future(self.retry_login(wait_seconds))
+        self._retry_task.add_done_callback(self._on_retry_done)
+
+    def _on_retry_done(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if (
+            exc is not None
+            and self._retry_failed is not None
+            and not self._retry_failed.done()
+        ):
+            self._retry_failed.set_exception(exc)
 
     async def _wait_for_outcome(self) -> None:
         """Waits for the login outcome, dispatching on `config.program` --

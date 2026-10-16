@@ -521,7 +521,7 @@ code, grouped by what a supervisor (a container's `restart:` policy, systemd's
 `76`/`77`/`78` work with systemd's `RestartPreventExitStatus=`.
 
 Some login-blocking dialogs IB reports as a server-side condition -- not a credential
-rejection -- never reach this table at all: a "Login failed"/"Login Error" dialog, or a
+rejection -- never reach this table at all: a "Login failed"/"Login Error"/"not currently available" dialog, or a
 Gateway "Connection to server failed" reason other than a known credential/account one
 (e.g. a stale restart token), make ibcontroller relaunch in-process with a full fresh
 login, unbounded, the same way a scheduled `cold_restart_time` does -- the container

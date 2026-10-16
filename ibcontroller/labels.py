@@ -217,6 +217,17 @@ class DismissRule:
 
 
 @attrs.define(frozen=True)
+class NotCurrentlyAvailableLabels:
+    """The "not currently available" login dialog (ported from IBC's
+    `NotCurrentlyAvailableDialogHandler`). `message_marker` is matched
+    case-insensitively against the dialog text, not the title. See
+    `recognisers.NotCurrentlyAvailableRecognizer`."""
+
+    message_marker: str
+    dismiss_button: str
+
+
+@attrs.define(frozen=True)
 class TooManyFailedLoginAttemptsLabels:
     """`message_prefix` matches the start of the dialog text ("Too many
     failed login attempts. Please wait N minute(s) & M second(s) before
@@ -304,6 +315,7 @@ class Labels:
     login_error: LoginErrorLabels
     unrecognized_credentials: UnrecognizedCredentialsLabels
     gateway_connection_failed: GatewayConnectionFailedLabels
+    not_currently_available: NotCurrentlyAvailableLabels
     too_many_failed_login_attempts: TooManyFailedLoginAttemptsLabels
     settings: SettingsLabels
     shutdown: ShutdownLabels

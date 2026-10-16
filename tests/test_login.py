@@ -28,6 +28,7 @@ from ibcontroller.agent_client import (
     AgentCommandConnection,
     AgentEventConnection,
     WindowEvent,
+    WindowGoneError,
     WindowInfo,
 )
 from ibcontroller.config import Config, ExistingSessionAction, Program, TradingMode
@@ -836,6 +837,27 @@ async def test_run_cancels_pending_retry_when_it_ends(sock_path, event_sock_path
             await dispatcher.stop()
 
 
+async def test_schedule_retry_cancels_a_pending_retry(sock_path, event_sock_path):
+    async with (
+        FakeCommandServer(sock_path, _tracking_responder([])),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
+        try:
+            manager.schedule_retry(60.0)
+            first = manager._retry_task
+            manager.schedule_retry(60.0)
+            await asyncio.sleep(0)
+            assert first is not None
+            assert first.cancelled()
+            assert manager._retry_task is not first
+            assert manager._retry_task is not None
+            manager._retry_task.cancel()
+        finally:
+            await dispatcher.stop()
+
+
 async def test_too_many_failed_attempts_dialog_triggers_retry_via_watcher(
     sock_path, event_sock_path, tmp_path
 ):
@@ -1075,6 +1097,47 @@ async def test_tws_2fa_is_handled_inline_then_reaches_logged_in(
             await dispatcher.stop()
 
     assert manager.state is LoginState.LOGGED_IN
+
+
+@pytest.mark.parametrize(
+    ("program", "login_event"),
+    [
+        (Program.TWS, ("window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE)),
+        (Program.GATEWAY, ("window_opened", "ibgateway.ax", "IBKR Gateway")),
+    ],
+)
+async def test_run_raises_when_scheduled_retry_fails(
+    sock_path, event_sock_path, program, login_event
+):
+    """A retry whose click hits a closed frame ends `run()` with that error
+    instead of leaving the outcome wait pending (F13)."""
+    clicks = 0
+
+    def responder(request):
+        nonlocal clicks
+        if request.get("cmd") == "click":
+            clicks += 1
+            if clicks > 1:  # the first click is the initial submit
+                return {"ok": False, "error": "window_gone", "detail": "closed"}
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program=program), LABELS, dispatcher, restart_expected=False
+        )
+        task = asyncio.ensure_future(manager.run(login_timeout=5.0))
+        try:
+            await _feed(dispatcher, [_window_event(1, *login_event)])
+            await asyncio.sleep(0.05)
+            manager.schedule_retry(0.01)
+            with pytest.raises(WindowGoneError):
+                await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
 
 
 @pytest.mark.parametrize(

@@ -48,6 +48,7 @@ from ibcontroller.labels import (
     Labels,
     LoginErrorLabels,
     LoginFailedLabels,
+    NotCurrentlyAvailableLabels,
     ReloginLabels,
     TooManyFailedLoginAttemptsLabels,
     TradingLoginHandoffLabels,
@@ -340,6 +341,35 @@ class GatewayConnectionFailedRecognizer:
         if any(reason in text for reason in self._labels.known_reasons):
             raise CredentialsRejectedError(f"gateway connection failed: {text}")
         raise TransientLoginError(f"gateway connection failed: {text}")
+
+
+class NotCurrentlyAvailableRecognizer:
+    """Matches the "not currently available" login dialog by message text
+    (ported from IBC's `NotCurrentlyAvailableDialogHandler`; IBC also requires
+    "Login" in the title, not ported so a retitled dialog still matches).
+    A server-side outage: dismisses it and raises `TransientLoginError`, which
+    relaunches like IBC's close-and-restart."""
+
+    def __init__(self, labels: NotCurrentlyAvailableLabels) -> None:
+        self._labels = labels
+
+    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
+        marker = self._labels.message_marker.lower()
+        return any(
+            marker in _strip_html(raw).lower()
+            for c in components
+            if (raw := c.text if c.text is not None else c.accessible_name) is not None
+        )
+
+    async def handle(
+        self,
+        event: WindowEvent,
+        components: list[Component],
+        dispatcher: Dispatcher,
+    ) -> None:
+        await _dismiss(dispatcher, self._labels.dismiss_button, event.window.window_id)
+        logger.warning("IBController > system not currently available -- transient")
+        raise TransientLoginError("login system not currently available")
 
 
 class SessionRole(Enum):
@@ -663,6 +693,7 @@ def build_default_registry(
                 labels.accept_incoming_connection,
                 config.accept_incoming_connections,
             ),
+            NotCurrentlyAvailableRecognizer(labels.not_currently_available),
             LoginFailedRecognizer(labels.login_failed),
             LoginErrorRecognizer(labels.login_error),
             UnrecognizedCredentialsRecognizer(labels.unrecognized_credentials),

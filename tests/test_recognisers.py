@@ -41,6 +41,7 @@ from ibcontroller.recognisers import (
     GatewayConnectionFailedRecognizer,
     LoginErrorRecognizer,
     LoginFailedRecognizer,
+    NotCurrentlyAvailableRecognizer,
     RecognizerRegistry,
     ReloginRecognizer,
     TooManyFailedLoginAttemptsRecognizer,
@@ -321,6 +322,67 @@ async def test_login_error_handle_logs_dismisses_then_raises(
         finally:
             await dispatcher.stop()
     assert any("Server disconnected" in message for message in caplog.messages)
+
+
+def test_not_currently_available_recognises_by_text_ignoring_case_and_html():
+    recognizer = NotCurrentlyAvailableRecognizer(LABELS.not_currently_available)
+    event = _event("Login")
+    for text in (
+        "The system is not currently available.",
+        "<html>Service Not Currently Available</html>",
+    ):
+        assert recognizer.recognises(event, [_component(text=text)]) is True
+    assert (
+        recognizer.recognises(
+            event, [_component(text=None, accessible_name="not currently available")]
+        )
+        is True
+    )
+    assert recognizer.recognises(event, [_component(text="Login failed")]) is False
+    assert recognizer.recognises(event, []) is False
+
+
+async def test_not_currently_available_dismisses_then_raises(
+    sock_path, event_sock_path
+):
+    calls: list[dict] = []
+
+    def responder(request):
+        calls.append(request)
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            recognizer = NotCurrentlyAvailableRecognizer(LABELS.not_currently_available)
+            with pytest.raises(TransientLoginError):
+                await recognizer.handle(_event("Login", "w1"), [], dispatcher)
+        finally:
+            await dispatcher.stop()
+    assert [c.get("target") for c in calls if c.get("cmd") == "click"] == ["OK"]
+
+
+def test_not_currently_available_registered_before_login_failed():
+    registry = build_default_registry(
+        Config(
+            program=Program.GATEWAY,
+            tws_version="10.50",
+            trading_mode=TradingMode.PAPER,
+            userid=Secret("u"),
+            password=Secret("p"),
+            log_dir=f"{gettempdir()}/log",
+        ),
+        LABELS,
+        types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False),  # type: ignore[arg-type]
+        lambda _s: None,
+    )
+    order = [type(r) for r in registry._registry]
+    assert order.index(NotCurrentlyAvailableRecognizer) < order.index(
+        LoginFailedRecognizer
+    )
 
 
 async def test_unrecognized_credentials_recognises_by_title():
@@ -1167,6 +1229,12 @@ _TOO_MANY_TEXT = [
             TransientLoginError,
         ),
         (
+            lambda: NotCurrentlyAvailableRecognizer(LABELS.not_currently_available),
+            "Login",
+            [_component(text="The system is not currently available.")],
+            TransientLoginError,
+        ),
+        (
             lambda: UnrecognizedCredentialsRecognizer(LABELS.unrecognized_credentials),
             "Unrecognized Username or Password",
             [],
@@ -1263,6 +1331,7 @@ def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
         ReloginRecognizer,
         TradingLoginHandoffRecognizer,
         AcceptIncomingConnectionsRecognizer,
+        NotCurrentlyAvailableRecognizer,
         LoginFailedRecognizer,
         LoginErrorRecognizer,
         UnrecognizedCredentialsRecognizer,
