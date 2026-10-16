@@ -210,7 +210,9 @@ class DismissRule:
     share only one of the two conditions. `match_text` checks every
     component's `text` *and* `accessible_name`, since which field a label's
     text lands in depends on the real Swing component type -- `JLabel` text
-    only ever surfaces via `accessible_name`."""
+    only ever surfaces via `accessible_name`. Text that is HTML is also matched
+    with tags stripped and entities decoded, so a phrase can be copied as shown
+    on screen."""
 
     name: str
     click: str

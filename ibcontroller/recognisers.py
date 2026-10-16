@@ -19,6 +19,7 @@ events and routing each one through `handle_window_opened`.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from collections.abc import Callable, Sequence
@@ -141,12 +142,20 @@ class DeclarativeDismissRecognizer:
         ):
             return False
         if rule.match_text is not None and not any(
-            (c.accessible_name is not None and rule.match_text in c.accessible_name)
-            or (c.text is not None and rule.match_text in c.text)
+            self._text_matches(rule.match_text, value)
             for c in components
+            for value in (c.accessible_name, c.text)
+            if value is not None
         ):
             return False
         return True
+
+    @staticmethod
+    def _text_matches(match_text: str, value: str) -> bool:
+        """Raw match first; then HTML-stripped, since IB message panes are HTML
+        and a phrase copied from the screen can span a tag or hold an entity
+        (`&quot;`)."""
+        return match_text in value or match_text in html.unescape(_strip_html(value))
 
     async def handle(
         self,

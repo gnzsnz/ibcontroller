@@ -81,11 +81,11 @@ def _component(**overrides) -> Component:
     return Component(**base)
 
 
-def _event(title: str, window_id: str | None = None) -> WindowEvent:
+def _event(title: str, window_id: str | None = None, class_: str = "x") -> WindowEvent:
     return WindowEvent(
         seq=1,
         kind="window_opened",
-        window=WindowInfo(class_="x", title=title, window_id=window_id),
+        window=WindowInfo(class_=class_, title=title, window_id=window_id),
     )
 
 
@@ -137,6 +137,33 @@ def test_declarative_dismiss_recognises_by_text_via_accessible_name():
 
     assert recognizer.recognises(event, matching) is True
     assert recognizer.recognises(event, not_matching) is False
+
+
+def test_declarative_dismiss_matches_a_phrase_spanning_an_html_tag():
+    """IB message panes are HTML: a phrase copied from the screen can span a
+    `<br>`/`<b>` that the raw text carries between its words."""
+    recognizer = DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)
+    assert _NON_BROKERAGE_RULE.match_text is not None
+    words = _NON_BROKERAGE_RULE.match_text.split(" ", 1)
+    markup = f"<html>{words[0]}<br> <b>{words[1]}</b></html>"
+
+    assert recognizer.recognises(_event("IBKR Gateway"), [_component(text=markup)])
+
+
+def test_declarative_dismiss_matches_a_phrase_holding_an_html_entity():
+    """From a live 2FA dialog dump: the pane holds `&quot;` where the screen
+    shows a quote, and a `<br>` mid-sentence."""
+    rule = DismissRule(
+        name="x", match_text='go to "authenticate" from the services screen', click="OK"
+    )
+    markup = (
+        "<html><body>In the app go to &quot;authenticate&quot; from the "
+        "services<br>screen.</body></html>"
+    )
+
+    assert DeclarativeDismissRecognizer(rule).recognises(
+        _event("2FA"), [_component(text=markup)]
+    )
 
 
 def test_declarative_dismiss_also_matches_via_text_field():
