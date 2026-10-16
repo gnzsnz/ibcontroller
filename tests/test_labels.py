@@ -17,6 +17,7 @@ def test_bundled_default_loads_and_structures():
     assert "IBKR Gateway" in labels.login.gateway_titles
     assert labels.mfa.title == "Second Factor Authentication"
     assert labels.mfa.tws_frame_label == "SECOND FACTOR AUTHENTICATION"
+    assert labels.mfa.read_only_button == "Enter Read Only"
     assert labels.existing_session.title == "Existing session detected"
     assert labels.accept_incoming_connection.title == "Accept incoming connection"
     assert labels.accept_incoming_connection.accept_buttons == ["OK", "Yes"]

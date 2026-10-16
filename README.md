@@ -230,7 +230,7 @@ TWS/ibgateway settings
 | TOML key | Env var or CLI flag | Description | Default |
 | --- | --- | --- | --- |
 | `trading_mode` | `IBC_TRADING_MODE`, `--trading-mode` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
-| `read_only_login` | `IBC_READ_ONLY_LOGIN` | TWS-only; **not yet wired to any behavior** (loaded, unused — see TODO.md) | `false` |
+| `read_only_login` | `IBC_READ_ONLY_LOGIN` | TWS-only (Gateway warns and logs in normally); clicks "Enter Read Only" on the 2FA frame instead of waiting for the push, no effect without 2FA (paper) | `false` |
 | `read_only_api` | `IBC_READ_ONLY_API` | `true`/`false` sets it; omit to leave unchanged. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` |
 | `accept_incoming_connections` | `IBC_ACCEPT_INCOMING_CONNECTIONS` | `manual`/`accept`/`reject` | `"manual"` |
 | `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | `manual`/`primary`/`primaryoverride`/`secondary` | `"manual"` |

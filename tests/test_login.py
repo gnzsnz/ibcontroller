@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from tempfile import gettempdir
 
 import attrs
@@ -1646,3 +1647,124 @@ async def test_tws_paper_login_does_not_poll(sock_path, event_sock_path, monkeyp
     )
     assert mid_state is LoginState.LOGGING_IN
     assert not [c for c in calls if c["cmd"] == "dump"]
+
+
+def _read_only_responder(calls: list[dict], click_error: str | None = None):
+    components = [{"class": "j", "accessible_name": "SECOND FACTOR AUTHENTICATION"}]
+
+    def responder(request):
+        calls.append(request)
+        if request.get("cmd") == "dump":
+            return {"ok": True, "components": components}
+        if request.get("cmd") == "menu_item_exists":
+            return {"ok": True, "exists": True, "enabled": True}
+        if (
+            click_error
+            and request.get("cmd") == "click"
+            and request.get("target") == "Enter Read Only"
+        ):
+            return {"ok": False, "error": click_error, "detail": "x"}
+        return {"ok": True}
+
+    return responder
+
+
+async def _read_only_run(sock_path, event_sock_path, monkeypatch, responder, **config):
+    monkeypatch.setattr("ibcontroller.login._TWS_2FA_POLL_SECONDS", 0.01)
+    monkeypatch.setattr("ibcontroller.login._IBC_RELOGIN_DELAY_SECONDS", 0.01)
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(
+                program=Program.TWS,
+                trading_mode=TradingMode.LIVE,
+                read_only_login=True,
+                **config,
+            ),
+            LABELS,
+            dispatcher,
+            restart_expected=False,
+        )
+        try:
+            task = asyncio.ensure_future(manager.run(login_timeout=5.0))
+            await _feed(
+                dispatcher,
+                [_window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE, "w1")],
+            )
+            await asyncio.sleep(0.2)
+            dispatcher._window_events.emit(
+                _window_event(2, "window_closed", _MFA_CLASS, _MFA_TITLE)
+            )
+            await asyncio.sleep(0.1)
+            dispatcher._window_events.emit(
+                _window_event(3, "window_opened", _TWS_MAIN_CLASS, _TWS_TITLE, "w-main")
+            )
+            await asyncio.wait_for(task, timeout=2.0)
+        finally:
+            await dispatcher.stop()
+    return manager
+
+
+async def test_tws_read_only_clicks_the_button_and_skips_2fa_close_handling(
+    sock_path, event_sock_path, monkeypatch
+):
+    calls: list[dict] = []
+    manager = await _read_only_run(
+        sock_path,
+        event_sock_path,
+        monkeypatch,
+        _read_only_responder(calls),
+        relogin_after_mfa_timeout=True,
+        mfa_timeout=0.0,  # a normal close would count as late and relogin
+    )
+    clicks = [
+        c for c in calls if c["cmd"] == "click" and c["target"] == "Enter Read Only"
+    ]
+    assert [c["window_id"] for c in clicks] == ["w1"]
+    assert not [c for c in calls if c["cmd"] == "set_text"][2:]  # filled once only
+    assert manager.state is LoginState.LOGGED_IN
+
+
+async def test_tws_read_only_click_failure_keeps_normal_2fa_handling(
+    sock_path, event_sock_path, monkeypatch
+):
+    calls: list[dict] = []
+    manager = await _read_only_run(
+        sock_path,
+        event_sock_path,
+        monkeypatch,
+        _read_only_responder(calls, click_error="not_found"),
+    )
+    assert manager._read_only_clicked is False
+    assert manager.state is LoginState.LOGGED_IN
+
+
+async def test_gateway_read_only_login_warns_and_logs_in_normally(
+    sock_path, event_sock_path, caplog
+):
+    caplog.set_level(logging.WARNING)
+    calls: list[dict] = []
+    async with (
+        FakeCommandServer(sock_path, _tracking_responder(calls)),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(read_only_login=True), LABELS, dispatcher, restart_expected=False
+        )
+        try:
+            task = asyncio.ensure_future(manager.run(login_timeout=5.0))
+            await _feed(
+                dispatcher,
+                [_window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway")],
+            )
+            await asyncio.sleep(0.05)
+            dispatcher._window_events.emit(_splash_closed_event(2))
+            await asyncio.wait_for(task, timeout=2.0)
+        finally:
+            await dispatcher.stop()
+    assert "read_only_login is not supported by Gateway" in caplog.text
+    assert not [c for c in calls if c.get("target") == "Enter Read Only"]

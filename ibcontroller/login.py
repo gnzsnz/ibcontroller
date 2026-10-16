@@ -196,6 +196,7 @@ class LoginManager:
         self._retry_task: asyncio.Task[None] | None = None
         self._retry_failed: asyncio.Future[None] | None = None  # set by run()
         self.main_window_id: str | None = None
+        self._read_only_clicked = False  # the 2FA close is then expected, not timed
 
     def is_logged_in(self) -> bool:
         """Returns whether this cycle's login sequence completed (`state` is
@@ -227,6 +228,11 @@ class LoginManager:
             if login_timeout is not None
             else self._config.login_dialog_display_timeout
         )
+        if self._config.read_only_login and self._config.program == Program.GATEWAY:
+            logger.warning(
+                "IBController > read_only_login is not supported by Gateway -- "
+                "logging in normally"
+            )
         titles = self._gateway_or_tws_titles()
         try:
             login_frame = await wait_for_window(
@@ -396,6 +402,8 @@ class LoginManager:
             ):
                 self.state = LoginState.MFA_IN_PROGRESS
                 logger.info("IBController > second factor authentication in progress")
+                if self._config.read_only_login:
+                    await self._enter_read_only()
 
     def _exit_interval_error(self) -> MfaTimeoutError:
         return MfaTimeoutError(
@@ -551,7 +559,8 @@ class LoginManager:
         logger.info("IBController > login completed")
 
     async def _after_mfa_closed(self) -> float | None:
-        """Measures elapsed time since login started against `mfa_timeout`
+        """Does nothing after a read-only click (the close is expected).
+        Otherwise measures elapsed time since login started against `mfa_timeout`
         (IB's own limit for an unanswered 2FA push, default 180s). Returns the
         `mfa_exit_interval` (seconds) the caller must enforce as a watchdog
         when `relogin_after_mfa_timeout` is enabled and 2FA closed within
@@ -561,6 +570,8 @@ class LoginManager:
         `_IBC_RELOGIN_DELAY_SECONDS` if the login form is shown (TWS can report
         spurious 2FA closes); the caller's wait then continues, also when the
         resubmit fails."""
+        if self._read_only_clicked:
+            return None  # the close is the read-only login itself
         elapsed = time.monotonic() - (self._login_start_time or time.monotonic())
 
         if elapsed < self._config.mfa_timeout:
@@ -590,6 +601,21 @@ class LoginManager:
         except (ElementNotFoundError, WindowGoneError) as exc:
             logger.warning("IBController > re-login failed, still waiting: %s", exc)
         return None
+
+    async def _enter_read_only(self) -> None:
+        """Clicks the 2FA frame's read-only button instead of waiting for the
+        push. A failed click is logged and the push can still be approved."""
+        try:
+            await click(
+                self._dispatcher,
+                self._labels.mfa.read_only_button,
+                window_id=self._login_frame_window_id,
+            )
+        except (ElementNotFoundError, WindowGoneError) as exc:
+            logger.error("IBController > could not initiate read-only login: %s", exc)
+            return
+        self._read_only_clicked = True
+        logger.info("IBController > initiating read-only login")
 
     async def _login_form_shown(self) -> bool:
         """Whether the login frame shows its username field. TWS can report a 2FA

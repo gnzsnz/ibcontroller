@@ -318,7 +318,7 @@ class Config:
     )
     # IBC-key-compatible settings (file or env, never a secret).
     trading_mode: TradingMode = TradingMode.PAPER
-    # IBC: ReadOnlyLogin -- loaded but not yet wired to any behavior.
+    # IBC: ReadOnlyLogin -- TWS only, clicks "Enter Read Only" on the 2FA frame.
     read_only_login: bool = False
     read_only_api: bool | None = None  # None = leave the existing setting unchanged
     accept_incoming_connections: AcceptIncomingConnections = (

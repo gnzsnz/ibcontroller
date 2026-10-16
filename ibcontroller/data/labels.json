@@ -14,7 +14,8 @@
   },
   "mfa": {
     "title": "Second Factor Authentication",
-    "tws_frame_label": "SECOND FACTOR AUTHENTICATION"
+    "tws_frame_label": "SECOND FACTOR AUTHENTICATION",
+    "read_only_button": "Enter Read Only"
   },
   "existing_session": {
     "title": "Existing session detected",

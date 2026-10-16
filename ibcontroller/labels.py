@@ -103,6 +103,8 @@ class MfaLabels:
     tws_frame_label: str
     """TWS only. Heading the login frame shows once it has turned into the 2FA
     frame in place (no window event), matched case-sensitively."""
+    read_only_button: str
+    """TWS only. Button on the 2FA frame that logs in without trading rights."""
 
 
 @attrs.define(frozen=True)

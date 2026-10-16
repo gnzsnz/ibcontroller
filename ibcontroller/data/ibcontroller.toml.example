@@ -119,8 +119,8 @@
 # Default false
 # diagnostic_settings_sweep = true
 
-# IBC: ReadOnlyLogin -- TWS only (IBC disables it on Gateway); NOT YET WIRED to any real
-# behavior in ibcontroller (loaded, but nothing acts on it yet -- see TODO.md).
+# IBC: ReadOnlyLogin -- TWS only (Gateway logs a warning and logs in normally). Clicks
+# "Enter Read Only" on the 2FA frame instead of waiting for the push; no effect without 2FA.
 # Default false
 # read_only_login = false
 
