@@ -1039,6 +1039,98 @@ async def test_watch_for_unprompted_windows_dispatches_a_window_that_arrives_lat
     assert "click" in calls
 
 
+@pytest.mark.parametrize("error", ["window_gone", "not_found"])
+async def test_watch_for_unprompted_windows_survives_a_failed_action(
+    sock_path, event_sock_path, caplog, error
+):
+    """L5-dialogs F1: a click that fails on one window (closed first, stale
+    label) is logged; the next window is still handled."""
+    clicks = []
+
+    def responder(request):
+        if request.get("cmd") == "dump":
+            return {
+                "ok": True,
+                "components": [
+                    {
+                        "class": "javax.swing.JLabel",
+                        "accessible_name": _NON_BROKERAGE_RULE.match_text,
+                    }
+                ],
+            }
+        if request.get("cmd") == "click":
+            clicks.append(request.get("window_id"))
+            if request.get("window_id") == "w1":
+                return {"ok": False, "error": error, "detail": "x"}
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            registry = RecognizerRegistry(
+                [DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)]
+            )
+            watcher = asyncio.ensure_future(
+                watch_for_unprompted_windows(registry, dispatcher)
+            )
+            await asyncio.sleep(0.05)
+            with caplog.at_level(logging.WARNING, logger="ibcontroller.recognisers"):
+                dispatcher._window_events.emit(_event("Warning", "w1"))
+                dispatcher._window_events.emit(_event("Warning", "w2"))
+                await asyncio.sleep(0.3)
+            assert not watcher.done()
+            watcher.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await watcher
+        finally:
+            await dispatcher.stop()
+
+    assert clicks == ["w1", "w2"]
+    assert any("could not handle window" in message for message in caplog.messages)
+
+
+async def test_watch_for_unprompted_windows_propagates_a_login_outcome(
+    sock_path, event_sock_path
+):
+    """The boundary catches agent errors only: a login-outcome signal still
+    ends the watcher (L6 relies on it, #62)."""
+
+    def responder(request):
+        if request.get("cmd") == "dump":
+            return {
+                "ok": True,
+                "components": [
+                    {
+                        "class": "javax.swing.JTextPane",
+                        "text": "<html>Connection to server failed: x</html>",
+                    }
+                ],
+            }
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            registry = RecognizerRegistry(
+                [GatewayConnectionFailedRecognizer(LABELS.gateway_connection_failed)]
+            )
+            watcher = asyncio.ensure_future(
+                watch_for_unprompted_windows(registry, dispatcher)
+            )
+            await asyncio.sleep(0.05)
+            dispatcher._window_events.emit(_event("Gateway", "w1"))
+            with pytest.raises(TransientLoginError):
+                await asyncio.wait_for(watcher, timeout=2.0)
+        finally:
+            await dispatcher.stop()
+
+
 # --- TooManyFailedLoginAttemptsRecognizer / _parse_wait_seconds --------------
 
 

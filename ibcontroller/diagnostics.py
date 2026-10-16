@@ -20,6 +20,7 @@ from collections.abc import Callable
 
 from ibcontroller.actions import dump, expand_tree
 from ibcontroller.agent_client import (
+    AgentClientError,
     Component,
     ElementNotFoundError,
     WindowEvent,
@@ -111,6 +112,11 @@ async def watch_for_diagnostics(
                     event,
                     f"{event.kind} {event.window.class_} {event.window.title!r} "
                     "(window already gone, no structure)",
+                )
+                continue
+            except AgentClientError as exc:  # diagnostics must not end the cycle
+                logger.warning(
+                    "diagnostic dump failed for %r: %s", event.window.title, exc
                 )
                 continue
             if scope is not DiagnosticScope.ALL:

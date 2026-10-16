@@ -4,6 +4,7 @@ test_recognisers.py's own `watch_for_unprompted_windows` tests use."""
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -250,3 +251,51 @@ async def test_sweep_settings_tree_dumps_each_path_and_reports_missing_ones(
     assert "text='panel'" in out[0]
     assert out[1] == "'Nope' not found"
     assert "'Orders'" in out[2]
+
+
+async def test_watch_for_diagnostics_survives_a_failed_dump(
+    sock_path, event_sock_path, caplog
+):
+    """L6 F6: a dump failing with an agent error is logged; the next window
+    is still dumped."""
+    dumps = []
+
+    def responder(request):
+        if request.get("cmd") == "dump":
+            dumps.append(request.get("window_id"))
+            if request.get("window_id") == "w1":
+                return {"ok": False, "error": "agent_error", "detail": "x"}
+            return {"ok": True, "components": [{"class": "javax.swing.JLabel"}]}
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            calls = []
+            watcher = asyncio.ensure_future(
+                watch_for_diagnostics(
+                    RecognizerRegistry([]),
+                    dispatcher,
+                    DiagnosticScope.ALL,
+                    DiagnosticWhen.OPEN,
+                    sink=lambda event, text: calls.append(event),
+                )
+            )
+            await asyncio.sleep(0.05)
+            with caplog.at_level(logging.WARNING, logger="ibcontroller.diagnostics"):
+                dispatcher._window_events.emit(_event("window_opened", "A", "w1"))
+                dispatcher._window_events.emit(_event("window_opened", "B", "w2"))
+                await asyncio.sleep(0.3)
+            assert not watcher.done()
+            watcher.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await watcher
+        finally:
+            await dispatcher.stop()
+
+    assert dumps == ["w1", "w2"]
+    assert len(calls) == 1
+    assert any("diagnostic dump failed" in m for m in caplog.messages)

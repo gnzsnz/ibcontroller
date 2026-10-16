@@ -29,6 +29,7 @@ import eventkit
 
 from ibcontroller.actions import click, dump
 from ibcontroller.agent_client import (
+    AgentClientError,
     Component,
     ElementNotFoundError,
     WindowEvent,
@@ -713,14 +714,25 @@ async def watch_for_unprompted_windows(
 ) -> None:
     """Runs for the agent's whole lifetime: watches `dispatcher.subscribe()`
     for `window_opened` events and routes each one through
-    `handle_window_opened`, logging any that go unhandled. Meant to be
+    `handle_window_opened`, logging any that go unhandled. A failed action on
+    one window (`AgentClientError`) is logged and the watch continues; login
+    outcome exceptions propagate. Meant to be
     started via `asyncio.create_task`, not awaited directly -- it never
     returns on its own."""
     with dispatcher.subscribe() as sub:
         async for event in sub:
             if event.kind != "window_opened":
                 continue
-            handled = await handle_window_opened(registry, event, dispatcher)
+            try:
+                handled = await handle_window_opened(registry, event, dispatcher)
+            except AgentClientError as exc:  # one window must not end the session
+                logger.warning(
+                    "could not handle window %s %r: %s",
+                    event.window.class_,
+                    event.window.title,
+                    exc,
+                )
+                continue
             if not handled:
                 logger.info(
                     "unhandled unprompted window: %s %r",
