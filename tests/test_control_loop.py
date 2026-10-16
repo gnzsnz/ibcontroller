@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from tempfile import gettempdir
 
 import attrs
+import eventkit
 import pytest
 from typed_settings.types import Secret
 
@@ -28,6 +29,7 @@ from ibcontroller.agent_client import (
 )
 from ibcontroller.config import Config, MfaTimeoutAction, Program, TradingMode
 from ibcontroller.control_loop import (
+    RestartCapExceededError,
     ShutdownCause,
     StartupState,
     _apply_declarative_settings_or_log,
@@ -47,6 +49,7 @@ from ibcontroller.login import (
     MfaTimeoutError,
     TransientLoginError,
 )
+from ibcontroller.recognisers import ExitKind
 from ibcontroller.schedule import ScheduledAction, ScheduledShutdown
 from tests.fakes import FakeProcess
 
@@ -88,6 +91,10 @@ def _config(**overrides) -> Config:
         log_dir=f"{gettempdir()}/log",
     )
     return attrs.evolve(base, **overrides)
+
+
+class _NoRegistry:
+    handled = eventkit.Event()
 
 
 async def test_run_control_loop_returns_requested_when_task_is_cancelled(
@@ -514,7 +521,9 @@ async def test_run_control_loop_cold_restart_relaunches_with_no_restart_hash(
     is forcing reauth."""
     calls: list[dict | None] = []
 
-    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+    async def _fake_run_one_cycle(
+        config, agent_jar, labels, *, restart_hash=None, lap=None
+    ):
         calls.append(restart_hash)
         if len(calls) == 1:
             return ShutdownCause.COLD_RESTART, f"{gettempdir()}/settings"
@@ -537,7 +546,9 @@ async def test_run_control_loop_tidy_closedown_stops_without_relaunch(monkeypatc
     call `_run_one_cycle` a second time."""
     calls = 0
 
-    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+    async def _fake_run_one_cycle(
+        config, agent_jar, labels, *, restart_hash=None, lap=None
+    ):
         nonlocal calls
         calls += 1
         return ShutdownCause.TIDY_CLOSEDOWN, f"{gettempdir()}/settings"
@@ -559,7 +570,9 @@ async def test_run_control_loop_login_frame_timeout_always_relaunches(
     below (gitea #60)."""
     calls: list[dict | None] = []
 
-    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+    async def _fake_run_one_cycle(
+        config, agent_jar, labels, *, restart_hash=None, lap=None
+    ):
         calls.append(restart_hash)
         if len(calls) == 1:
             raise LoginFrameTimeoutError("login frame never appeared")
@@ -584,7 +597,9 @@ async def test_run_control_loop_relaunches_on_transient_login_error(
     with a full fresh login, unconditionally -- gitea #62."""
     calls: list[dict | None] = []
 
-    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+    async def _fake_run_one_cycle(
+        config, agent_jar, labels, *, restart_hash=None, lap=None
+    ):
         calls.append(restart_hash)
         if len(calls) == 1:
             raise TransientLoginError("login error dialog; server disconnected")
@@ -613,7 +628,9 @@ async def test_run_control_loop_process_gone_relaunches_only_with_marker(
     marker_present = [True, False]
     calls: list[str | None] = []
 
-    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+    async def _fake_run_one_cycle(
+        config, agent_jar, labels, *, restart_hash=None, lap=None
+    ):
         calls.append(restart_hash)
         return cause, f"{gettempdir()}/settings"
 
@@ -640,7 +657,9 @@ async def test_run_control_loop_login_frame_timeout_keeps_restart_hash(monkeypat
     1112 -- the next lap still relogins silently instead of pushing 2FA."""
     calls: list[str | None] = []
 
-    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+    async def _fake_run_one_cycle(
+        config, agent_jar, labels, *, restart_hash=None, lap=None
+    ):
         calls.append(restart_hash)
         if len(calls) == 1:
             return ShutdownCause.PROCESS_EXITED, f"{gettempdir()}/settings"
@@ -672,7 +691,9 @@ async def test_run_control_loop_mfa_timeout_relaunches_when_action_is_restart(
 ):
     calls: list[dict | None] = []
 
-    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+    async def _fake_run_one_cycle(
+        config, agent_jar, labels, *, restart_hash=None, lap=None
+    ):
         calls.append(restart_hash)
         if len(calls) == 1:
             raise MfaTimeoutError("mfa_exit_interval watchdog fired")
@@ -700,7 +721,9 @@ async def test_run_control_loop_mfa_timeout_propagates_when_action_is_exit(
     unchanged instead of relaunching, so `cli.py` can map it to exit 75."""
     calls: list[dict | None] = []
 
-    async def _fake_run_one_cycle(config, agent_jar, labels, *, restart_hash=None):
+    async def _fake_run_one_cycle(
+        config, agent_jar, labels, *, restart_hash=None, lap=None
+    ):
         calls.append(restart_hash)
         raise MfaTimeoutError("mfa_exit_interval watchdog fired")
 
@@ -828,7 +851,9 @@ async def test_run_one_cycle_cancels_watcher_when_clean_shutdown_raises(
 
     monkeypatch.setattr(control_loop, "launch_instance", launch)
     monkeypatch.setattr(control_loop, "LoginManager", _Manager)
-    monkeypatch.setattr(control_loop, "build_default_registry", lambda *_a: None)
+    monkeypatch.setattr(
+        control_loop, "build_default_registry", lambda *_a: _NoRegistry()
+    )
     monkeypatch.setattr(control_loop, "watch_for_unprompted_windows", watcher)
     monkeypatch.setattr(control_loop, "watch_for_diagnostics", forever)
     monkeypatch.setattr(control_loop, "clean_shutdown", failing_shutdown)
@@ -885,7 +910,9 @@ async def test_run_one_cycle_shuts_down_when_diagnostics_watcher_died(
 
     monkeypatch.setattr(control_loop, "launch_instance", launch)
     monkeypatch.setattr(control_loop, "LoginManager", _Manager)
-    monkeypatch.setattr(control_loop, "build_default_registry", lambda *_a: None)
+    monkeypatch.setattr(
+        control_loop, "build_default_registry", lambda *_a: _NoRegistry()
+    )
     monkeypatch.setattr(control_loop, "watch_for_unprompted_windows", forever)
     monkeypatch.setattr(control_loop, "watch_for_diagnostics", dead_diagnostics)
     monkeypatch.setattr(control_loop, "clean_shutdown", shutdown)
@@ -1016,3 +1043,130 @@ async def test_run_phase_watching_process_reraises_lost_agent_when_process_alive
             )
     finally:
         process_done.cancel()
+
+
+def _patch_loop(monkeypatch, cycle, *, marker=False):
+    async def _marker(settings_dir):
+        return marker
+
+    async def _hash(settings_dir):
+        return "abc123"
+
+    monkeypatch.setattr(control_loop, "_run_one_cycle", cycle)
+    monkeypatch.setattr(control_loop, "_is_restart_with_grace", _marker)
+    monkeypatch.setattr(control_loop, "find_autorestart_hash", _hash)
+    monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
+
+
+async def test_run_control_loop_shutdown_window_stops_without_marker_poll(monkeypatch):
+    """A "Shutdown progress" window is conclusive: no marker poll."""
+
+    async def _cycle(config, agent_jar, labels, *, restart_hash=None, lap):
+        lap.exit_kind = ExitKind.SHUTDOWN
+        return ShutdownCause.PROCESS_CLOSED, f"{gettempdir()}/settings"
+
+    async def _marker(settings_dir):
+        raise AssertionError("marker polled")
+
+    _patch_loop(monkeypatch, _cycle)
+    monkeypatch.setattr(control_loop, "_is_restart_with_grace", _marker)
+
+    cause = await run_control_loop(_config(), "agent.jar", labels=LABELS)
+
+    assert cause is ShutdownCause.PROCESS_CLOSED
+
+
+async def test_run_control_loop_logout_relaunches_with_fresh_login(monkeypatch):
+    """TWS: restart window, clean exit, no marker = File > Logout."""
+    calls: list[str | None] = []
+
+    async def _cycle(config, agent_jar, labels, *, restart_hash=None, lap):
+        calls.append(restart_hash)
+        if len(calls) == 1:
+            lap.exit_kind = ExitKind.RESTART
+            return ShutdownCause.PROCESS_CLOSED, f"{gettempdir()}/settings"
+        return ShutdownCause.PROCESS_CLOSED, f"{gettempdir()}/settings"
+
+    _patch_loop(monkeypatch, _cycle)
+
+    await run_control_loop(_config(program=Program.TWS), "agent.jar", labels=LABELS)
+
+    assert calls == [None, None]
+
+
+@pytest.mark.parametrize(
+    ("program", "cause"),
+    [
+        (Program.GATEWAY, ShutdownCause.PROCESS_CLOSED),
+        (Program.TWS, ShutdownCause.PROCESS_EXITED),
+    ],
+)
+async def test_run_control_loop_restart_window_without_marker_is_not_logout(
+    monkeypatch, program, cause
+):
+    """Logout is TWS-only and needs a clean exit; otherwise the loop stops."""
+    calls = []
+
+    async def _cycle(config, agent_jar, labels, *, restart_hash=None, lap):
+        calls.append(restart_hash)
+        lap.exit_kind = ExitKind.RESTART
+        return cause, f"{gettempdir()}/settings"
+
+    _patch_loop(monkeypatch, _cycle)
+
+    assert (
+        await run_control_loop(_config(program=program), "a.jar", labels=LABELS)
+        is cause
+    )
+    assert calls == [None]
+
+
+async def test_run_control_loop_restart_window_with_marker_keeps_hash(monkeypatch):
+    calls: list[str | None] = []
+
+    async def _cycle(config, agent_jar, labels, *, restart_hash=None, lap):
+        calls.append(restart_hash)
+        lap.exit_kind = ExitKind.RESTART
+        if len(calls) == 1:
+            return ShutdownCause.PROCESS_CLOSED, f"{gettempdir()}/settings"
+        return ShutdownCause.CONNECTION_LOST, f"{gettempdir()}/settings"
+
+    _patch_loop(monkeypatch, _cycle, marker=True)
+
+    await run_control_loop(_config(program=Program.TWS), "agent.jar", labels=LABELS)
+
+    assert calls == [None, "abc123"]
+
+
+async def test_run_control_loop_restart_cap_stops_after_cap_relaunches(monkeypatch):
+    """`restart_cap` relaunches that never reach READY are allowed, the next stops."""
+    calls = []
+
+    async def _cycle(config, agent_jar, labels, *, restart_hash=None, lap):
+        calls.append(restart_hash)
+        raise TransientLoginError("server unavailable")
+
+    _patch_loop(monkeypatch, _cycle)
+
+    with pytest.raises(RestartCapExceededError):
+        await run_control_loop(_config(restart_cap=3), "agent.jar", labels=LABELS)
+
+    assert len(calls) == 4  # first launch plus 3 relaunches
+
+
+async def test_run_control_loop_reaching_ready_resets_restart_cap(monkeypatch):
+    calls = []
+
+    async def _cycle(config, agent_jar, labels, *, restart_hash=None, lap):
+        calls.append(restart_hash)
+        if len(calls) > 6:
+            return ShutdownCause.CONNECTION_LOST, f"{gettempdir()}/settings"
+        lap.reached_ready = len(calls) % 2 == 1  # every other lap gets to READY
+        raise TransientLoginError("reconnect dialog")
+
+    _patch_loop(monkeypatch, _cycle)
+
+    cause = await run_control_loop(_config(restart_cap=1), "agent.jar", labels=LABELS)
+
+    assert cause is ShutdownCause.CONNECTION_LOST
+    assert len(calls) == 7

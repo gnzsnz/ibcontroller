@@ -281,6 +281,11 @@ Any contribution must follow this separation of concerns.
 - **Provides:** `run_control_loop`, cancelled to request a graceful stop. `cli.py` maps its result
   and any `IBControllerError` to its `exit_code`.
 - **Rules:** the only layer that decides relaunch or stop. Cancellation is the only stop request.
+  The "Shutdown progress" and "Restart in progress" windows (`ExitProgressRecognizer`) classify a
+  clean exit: shutdown stops without polling for the `autorestart` marker; restart with the marker
+  relaunches with its hash; restart without it on TWS is a File > Logout and relaunches with a
+  fresh login. No window seen falls back to the marker poll. Relaunches of laps that never reach
+  READY are capped by `restart_cap`.
 
 ### L7 Control API (planned, not built)
 

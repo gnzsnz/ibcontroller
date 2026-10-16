@@ -55,10 +55,12 @@ from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
-from ibcontroller.agent_client import AgentClientError, ProtocolError
-from ibcontroller.config import Config, MfaTimeoutAction
+import attrs
+
+from ibcontroller.agent_client import AgentClientError, ProtocolError, WindowEvent
+from ibcontroller.config import Config, MfaTimeoutAction, Program
 from ibcontroller.diagnostics import sweep_settings_tree, watch_for_diagnostics
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.errors import IBControllerError
@@ -79,6 +81,8 @@ from ibcontroller.login import (
 )
 from ibcontroller.management import clean_shutdown
 from ibcontroller.recognisers import (
+    ExitKind,
+    ExitProgressRecognizer,
     build_default_registry,
     watch_for_unprompted_windows,
 )
@@ -111,6 +115,39 @@ def _process_gone_cause(returncode: int | None) -> ShutdownCause:
         if returncode == 0
         else ShutdownCause.PROCESS_EXITED
     )
+
+
+class RestartCapExceededError(IBControllerError):
+    """`Config.restart_cap` consecutive relaunches never reached READY. Stopping
+    avoids looping on a login that cannot succeed (and a 2FA push per lap)."""
+
+    exit_code: ClassVar[int] = 70  # EX_SOFTWARE
+
+
+@attrs.define
+class _Lap:
+    """What one `_run_one_cycle` lap learned that `run_control_loop` needs
+    even when the lap ends in an exception."""
+
+    reached_ready: bool = False
+    exit_kind: ExitKind | None = None  # from the progress window, if one was seen
+
+
+@attrs.define
+class _RelaunchBudget:
+    """Consecutive relaunches that never reached READY, against `Config.restart_cap`."""
+
+    cap: int
+    failed: int = 0
+
+    def note(self, lap: _Lap) -> None:
+        """Counts one relaunch; raises `RestartCapExceededError` past the cap."""
+        self.failed = 0 if lap.reached_ready else self.failed + 1
+        if self.failed > self.cap:
+            raise RestartCapExceededError(
+                f"{self.cap} consecutive relaunches never reached READY "
+                f"(restart_cap={self.cap})"
+            )
 
 
 class StartupState(Enum):
@@ -217,13 +254,18 @@ async def run_control_loop(
     -- matching IBC's own `ibcstart.sh` and ibctl; the marker's mere presence
     is not sufficient on its own.
 
-    Three more cases relaunch, unbounded (IBC parity -- no retry cap, see
-    #60): `LoginFrameTimeoutError` (the login frame itself never appeared --
-    IBC error code 1112, always relaunched, not gated by any config) keeps
-    the current `restart_hash`, matching `ibcstart.sh`'s no-op branch for
-    1112, so a frame timeout after a scheduled restart still relogins
-    silently. `MfaTimeoutError` when `Config.mfa_timeout_action` is
-    `RESTART` relaunches with a full fresh login (`restart_hash=None`);
+    The progress window seen before the exit (`ExitKind`) shortens this: a
+    "Shutdown progress" window stops the loop without the marker poll. A
+    "Restart in progress" window with a clean exit and no marker on TWS is a
+    File > Logout: relaunch with a full fresh login (`restart_hash=None`).
+
+    More cases relaunch (IBC parity, see #60): `LoginFrameTimeoutError` (the login
+    frame itself never appeared -- IBC error code 1112, always relaunched, not
+    gated by any config) keeps the current `restart_hash`, matching
+    `ibcstart.sh`'s no-op branch for 1112, so a frame timeout after a scheduled
+    restart still relogins silently. `MfaTimeoutError` when
+    `Config.mfa_timeout_action` is `RESTART` relaunches with a full fresh login
+    (`restart_hash=None`);
     `EXIT`, the default, re-raises instead so the caller sees it.
     `recognisers.TransientLoginError` (a "Login failed"/"Login Error"
     dialog, or a Gateway "Connection to server failed" reason that isn't a
@@ -231,19 +273,26 @@ async def run_control_loop(
     fresh login, matching IBC's own unconditional cold-restart for these
     dialogs.
 
+    Every relaunch of a lap that never reached READY counts toward
+    `Config.restart_cap`; past it `RestartCapExceededError` ends the loop. A lap
+    that reaches READY resets the count.
+
     Cancelling this coroutine's own task requests a graceful stop at any
     point, including mid-relaunch, and always returns
     `ShutdownCause.REQUESTED` rather than propagating `CancelledError` --
     this coroutine is the documented cancellation boundary, so nothing else
     needs a `try`/`except CancelledError` around it."""
     restart_hash: str | None = None
+    budget = _RelaunchBudget(config.restart_cap)
     try:
         while True:
+            lap = _Lap()
             try:
                 cause, settings_dir = await _run_one_cycle(
-                    config, agent_jar, labels, restart_hash=restart_hash
+                    config, agent_jar, labels, restart_hash=restart_hash, lap=lap
                 )
             except LoginFrameTimeoutError as exc:
+                budget.note(lap)
                 logger.warning(
                     "IBController > login frame never appeared -- relaunching "
                     "(restart hash=%s): %s",
@@ -254,6 +303,7 @@ async def run_control_loop(
             except MfaTimeoutError as exc:
                 if config.mfa_timeout_action is not MfaTimeoutAction.RESTART:
                     raise
+                budget.note(lap)
                 restart_hash = None
                 logger.warning(
                     "IBController > mfa_timeout_action=restart -- relaunching "
@@ -262,6 +312,7 @@ async def run_control_loop(
                 )
                 continue
             except TransientLoginError as exc:
+                budget.note(lap)
                 restart_hash = None
                 logger.warning(
                     "IBController > transient login failure -- relaunching "
@@ -270,21 +321,37 @@ async def run_control_loop(
                 )
                 continue
             if cause is ShutdownCause.COLD_RESTART:
+                budget.note(lap)
                 restart_hash = None
                 logger.warning(
                     "IBController > cold_restart_time reached -- relaunching "
                     "with a full fresh login (no restart hash)"
                 )
                 continue
-            if cause in _PROCESS_GONE and await _is_restart_with_grace(settings_dir):
-                restart_hash = await find_autorestart_hash(settings_dir)
-                logger.warning(
-                    "Gateway restarted on its own schedule (autorestart marker "
-                    "present at %s, hash=%s) -- relaunching",
-                    settings_dir,
-                    restart_hash,
-                )
-                continue
+            if cause in _PROCESS_GONE and lap.exit_kind is not ExitKind.SHUTDOWN:
+                if await _is_restart_with_grace(settings_dir):
+                    budget.note(lap)
+                    restart_hash = await find_autorestart_hash(settings_dir)
+                    logger.warning(
+                        "Gateway restarted on its own schedule (autorestart marker "
+                        "present at %s, hash=%s) -- relaunching",
+                        settings_dir,
+                        restart_hash,
+                    )
+                    continue
+                if (
+                    lap.exit_kind is ExitKind.RESTART
+                    and cause is ShutdownCause.PROCESS_CLOSED
+                    and config.program is Program.TWS
+                ):
+                    # Restart window, clean exit, no marker: File > Logout.
+                    budget.note(lap)
+                    restart_hash = None
+                    logger.warning(
+                        "IBController > TWS logged out (restart window, no "
+                        "autorestart marker) -- relaunching with a full fresh login"
+                    )
+                    continue
             return cause
     except asyncio.CancelledError:
         logger.info("IBController > control loop stop requested (task cancelled)")
@@ -507,6 +574,7 @@ async def _run_one_cycle(  # noqa: PLR0915
     labels: Labels,
     *,
     restart_hash: str | None = None,
+    lap: _Lap | None = None,
 ) -> tuple[ShutdownCause, str]:
     """One lap: launch -> login (+ background watcher) -> settings (if
     configured) -> wait until something ends -> clean shutdown. Returns
@@ -521,6 +589,7 @@ async def _run_one_cycle(  # noqa: PLR0915
     check -- Gateway can delete the marker quickly as part of a successful
     silent relogin, so a later check could wrongly find it gone and attempt
     a full credential fill on top of an already-succeeding relogin."""
+    lap = lap or _Lap()
     state = StartupState.LAUNCHING
     launched = await launch_instance(config, agent_jar, restart_hash=restart_hash)
     manager = LoginManager(
@@ -530,6 +599,12 @@ async def _run_one_cycle(  # noqa: PLR0915
         restart_expected=restart_hash is not None,
     )
     registry = build_default_registry(config, labels, manager, manager.schedule_retry)
+
+    def note_exit_kind(recognizer: object, event: WindowEvent) -> None:
+        if isinstance(recognizer, ExitProgressRecognizer):
+            lap.exit_kind = recognizer.kind_of(event)
+
+    registry.handled += note_exit_kind
     watcher = asyncio.ensure_future(
         watch_for_unprompted_windows(registry, launched.dispatcher)
     )
@@ -570,6 +645,7 @@ async def _run_one_cycle(  # noqa: PLR0915
 
             _log_transition(state, StartupState.READY)
             state = StartupState.READY
+            lap.reached_ready = True
 
             scheduled_shutdown = asyncio.ensure_future(
                 _sleep_until_scheduled_shutdown(config)

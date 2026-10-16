@@ -217,6 +217,7 @@ TWS/Gateway itself.
 | `relogin_after_mfa_timeout` | `IBC_RELOGIN_AFTER_MFA_TIMEOUT` | `true`: log in again 5 s after a timed-out push, and enforce `mfa_exit_interval` after an approved one. `false`: keep waiting for the push | `false` |
 | `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | With relogin on: seconds to wait for login to complete after the push is approved, then `mfa_timeout_action` applies | `60.0` |
 | `mfa_timeout_action` | `IBC_MFA_TIMEOUT_ACTION` | What to do when `mfa_exit_interval` expires after an approved push: `exit` (exit 75) or `restart` (relaunch with a fresh login) | `exit` |
+| `restart_cap` | `IBC_RESTART_CAP` | Max consecutive relaunches that never reach READY (login frame timeout, transient login failure, TWS logout, crash during login). A lap that reaches READY resets the count; past the cap the run stops with exit 70 | `3` |
 
 Login has no overall deadline, as in IBC: with no network, an unanswered push and relogin off, or an unrecognised dialog blocking login, `ibcontroller run` keeps waiting. Monitor it from outside.
 

@@ -38,6 +38,8 @@ from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
     DeclarativeDismissRecognizer,
     ExistingSessionRecognizer,
+    ExitKind,
+    ExitProgressRecognizer,
     GatewayConnectionFailedRecognizer,
     LoginErrorRecognizer,
     LoginFailedRecognizer,
@@ -1455,6 +1457,7 @@ def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
         LoginErrorRecognizer,
         UnrecognizedCredentialsRecognizer,
         GatewayConnectionFailedRecognizer,
+        ExitProgressRecognizer,
         TooManyFailedLoginAttemptsRecognizer,
     }
 
@@ -1488,3 +1491,13 @@ def test_build_registry_binds_session_and_schedule_retry():
     )
     assert existing._is_logged_in is session.is_logged_in
     assert retry._schedule_retry == retries.append
+
+
+def test_exit_progress_recognizer_classifies_by_title():
+    recognizer = ExitProgressRecognizer(load_labels().shutdown)
+
+    assert recognizer.kind_of(_event("Shutdown progress")) is ExitKind.SHUTDOWN
+    assert recognizer.kind_of(_event("Restart in progress")) is ExitKind.RESTART
+    assert recognizer.kind_of(_event("Something else")) is None
+    assert recognizer.recognises(_event("Restart in progress"), [])
+    assert not recognizer.recognises(_event("Something else"), [])

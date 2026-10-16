@@ -239,6 +239,7 @@ TWS/ibgateway settings
 | `relogin_after_mfa_timeout` | `IBC_RELOGIN_AFTER_MFA_TIMEOUT` | Log in again after a timed-out push, and enforce `mfa_exit_interval` after an approved one | `false` |
 | `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | Post-approval wait for login to complete when relogin is on | `60.0` |
 | `mfa_timeout_action` | `IBC_MFA_TIMEOUT_ACTION` | `exit` (exit 75, see "Exit codes" above) or `restart` (relaunch with a fresh login) when `mfa_exit_interval` expires after an approved push | `"exit"` |
+| `restart_cap` | `IBC_RESTART_CAP` | Max consecutive relaunches that never reach READY (login frame timeout, transient login failure, logout, crash during login); then exit 70 | `3` |
 | `auto_restart_time` | `IBC_AUTO_RESTART_TIME` | `"hh:mm AM/PM"` daily auto-restart time. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` |
 | `auto_logoff_time` | `IBC_AUTO_LOGOFF_TIME` | `"hh:mm AM/PM"` daily auto-logoff time; same "Lock and Exit" radio-button pair as `auto_restart_time` -- if both are set, `auto_restart_time` wins | `None` |
 | `time_zone` | `IBC_TIME_ZONE` | IANA zone name, e.g. `"Europe/Zurich"`, written to `jts.ini`'s `TimeZone`. Auto-detected from `TZ`, then `/etc/localtime` -- no setup needed in the common case; never overwrites an existing `TimeZone` line | auto-detected |
@@ -517,9 +518,10 @@ code, grouped by what a supervisor (a container's `restart:` policy, systemd's
 | `77` (`EX_NOPERM`) | Credentials rejected | Do not retry (lockout risk) |
 | `76` (`EX_PROTOCOL`) | A dialog `existing_session_action` rules out (Trading Login Handoff with `secondary`/`primaryoverride`) | Do not retry |
 | `75` (`EX_TEMPFAIL`) | Login did not complete after 2FA, `mfa_timeout_action=exit` | Retry per policy |
+| `70` (`EX_SOFTWARE`) | `restart_cap` consecutive relaunches never reached READY | Do not retry |
 | `69` (`EX_UNAVAILABLE`) | Transient runtime failure (process crashed or killed, connection lost, JVM exited before becoming ready) | Retry |
 
-`76`/`77`/`78` work with systemd's `RestartPreventExitStatus=`.
+`70`/`76`/`77`/`78` work with systemd's `RestartPreventExitStatus=`.
 
 Some login-blocking dialogs IB reports as a server-side condition -- not a credential
 rejection -- never reach this table at all: a "Login failed"/"Login Error"/"not currently available" dialog, or a

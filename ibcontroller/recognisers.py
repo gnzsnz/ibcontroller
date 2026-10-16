@@ -52,6 +52,7 @@ from ibcontroller.labels import (
     LoginFailedLabels,
     NotCurrentlyAvailableLabels,
     ReloginLabels,
+    ShutdownLabels,
     TooManyFailedLoginAttemptsLabels,
     TradingLoginHandoffLabels,
     UnrecognizedCredentialsLabels,
@@ -617,6 +618,43 @@ class AcceptIncomingConnectionsRecognizer:
             logger.info("IBController > incoming API connection -- rejected")
 
 
+class ExitKind(Enum):
+    """What TWS/Gateway is about to do, read from the progress window it shows
+    just before its process exits."""
+
+    SHUTDOWN = auto()
+    RESTART = auto()
+
+
+class ExitProgressRecognizer:
+    """Matches the "Shutdown progress" and "Restart in progress" windows by title.
+    Nothing to click, the window closes on its own; `handle` only logs. The
+    control loop reads `kind_of` from `RecognizerRegistry.handled` to classify
+    the exit that follows (gitea #23, #7)."""
+
+    def __init__(self, labels: ShutdownLabels) -> None:
+        self._labels = labels
+
+    def kind_of(self, event: WindowEvent) -> ExitKind | None:
+        title = event.window.title or ""
+        if self._labels.shutdown_progress_title in title:
+            return ExitKind.SHUTDOWN
+        if self._labels.restart_progress_title in title:
+            return ExitKind.RESTART
+        return None
+
+    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
+        return self.kind_of(event) is not None
+
+    async def handle(
+        self,
+        event: WindowEvent,
+        components: list[Component],
+        dispatcher: Dispatcher,
+    ) -> None:
+        logger.info("IBController > %s window seen", event.window.title)
+
+
 class RecognizerRegistry:
     """Ordered list of `Recognizer`s, checked in sequence; `dispatch()` runs
     the first one that matches. A bug in a recogniser propagates unchanged,
@@ -713,6 +751,7 @@ def build_default_registry(
                 config.relogin_after_mfa_timeout,
                 schedule_retry,
             ),
+            ExitProgressRecognizer(labels.shutdown),
         ]
     )
 

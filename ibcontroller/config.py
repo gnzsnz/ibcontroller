@@ -347,6 +347,11 @@ class Config:
     # and the mfa_exit_interval watchdog above actually fires.
     mfa_timeout_action: MfaTimeoutAction = MfaTimeoutAction.EXIT
 
+    # Max consecutive relaunches that never reach READY (login frame timeout,
+    # transient login failure, logout, a crash during login); the loop then stops
+    # with RestartCapExceededError. A lap that reaches READY resets the count.
+    restart_cap: int = 3
+
     # AutoRestartTime "hh:mm AM/PM" format (e.g. "08:00 AM")
     auto_restart_time: str | None = None  # None = leave the existing setting unchanged
     # AutoLogoffTime "hh:mm AM/PM" format (e.g. "08:00 AM"); shares one Lock and

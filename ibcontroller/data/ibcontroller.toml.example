@@ -162,6 +162,9 @@
 # IBC: --on2fatimeout, default "exit". What to do when mfa_exit_interval expires:
 # "exit" (exit code 75) or "restart" (relaunch with a fresh login)
 # mfa_timeout_action = "exit"
+# Max consecutive relaunches that never reach READY (login frame timeout, transient
+# login failure, TWS logout, crash during login), then exit code 70. Default 3
+# restart_cap = 3
 
 # IBC: AutoRestartTime -- same name, same "hh:mm AM/PM" format (e.g. "08:00 AM"), a
 # single space between the two parts. Drives settings.py's "auto_restart_time" action

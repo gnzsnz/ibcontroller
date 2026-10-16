@@ -307,11 +307,14 @@ class GenericLabels:
 
 @attrs.define(frozen=True)
 class ShutdownLabels:
-    """The graceful shutdown menu item: Gateway's `File > Close` or TWS's
-    `File > Exit`. See `management.clean_shutdown`."""
+    """The graceful shutdown menu item (Gateway's `File > Close`, TWS's
+    `File > Exit`; see `management.clean_shutdown`) and the titles of the progress
+    windows TWS/Gateway shows before exiting."""
 
     gateway_menu_path: str
     tws_menu_path: str
+    shutdown_progress_title: str
+    restart_progress_title: str
 
 
 @attrs.define(frozen=True)

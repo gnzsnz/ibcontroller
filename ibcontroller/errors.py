@@ -10,6 +10,8 @@ keeping a list of leaf types:
 - `login.InvalidSessionStateError`: 76, a dialog `existing_session_action` rules out,
   do not retry.
 - `login.SessionCededError`: 0, this session yielded to another on purpose, no retry.
+- `control_loop.RestartCapExceededError`: 70, `restart_cap` consecutive relaunches never
+  reached READY, do not retry.
 - `TransientError` (below): 69, transient runtime failure, retry.
 
 The specific cause stays in the logs and in the `stopped: <CAUSE>` line. A subclass

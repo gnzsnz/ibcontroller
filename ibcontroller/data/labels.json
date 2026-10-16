@@ -80,7 +80,9 @@
   },
   "shutdown": {
     "gateway_menu_path": "File/Close",
-    "tws_menu_path": "File/Exit"
+    "tws_menu_path": "File/Exit",
+    "shutdown_progress_title": "Shutdown progress",
+    "restart_progress_title": "Restart in progress"
   },
   "settings": {
     "gateway_menu_path": "Configure/Settings",
