@@ -124,7 +124,6 @@ def test_run_reports_shutdown_cause_on_success(tmp_path, monkeypatch):
         (ShutdownCause.PROCESS_CLOSED, 0),  # returncode 0, e.g. File>Close
         (ShutdownCause.PROCESS_EXITED, 69),  # EX_UNAVAILABLE
         (ShutdownCause.CONNECTION_LOST, 69),  # EX_UNAVAILABLE
-        (ShutdownCause.LOGIN_FAILED, 77),  # EX_NOPERM
     ],
 )
 def test_run_exit_code_matches_shutdown_cause_contract(

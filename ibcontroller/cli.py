@@ -30,7 +30,7 @@ from ibcontroller.control_loop import ShutdownCause
 from ibcontroller.errors import IBControllerError, TransientError
 from ibcontroller.labels import LabelsError
 from ibcontroller.launcher import LauncherError
-from ibcontroller.login import CredentialsRejectedError, SessionCededError
+from ibcontroller.login import SessionCededError
 
 # A `ShutdownCause` returned by `run_control_loop` without an exception -- checked
 # only for causes that can actually reach `run()` (`COLD_RESTART` always loops
@@ -41,7 +41,6 @@ _CAUSE_EXIT_CODES: dict[ShutdownCause, int] = {
     ShutdownCause.PROCESS_CLOSED: 0,  # Gateway/TWS exited by choice (File>Close)
     ShutdownCause.PROCESS_EXITED: TransientError.exit_code,
     ShutdownCause.CONNECTION_LOST: TransientError.exit_code,
-    ShutdownCause.LOGIN_FAILED: CredentialsRejectedError.exit_code,
 }
 
 

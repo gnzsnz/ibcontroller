@@ -31,12 +31,10 @@ return_when=FIRST_COMPLETED)`), all converging on one exit path:
 - **CONNECTION_LOST**: `Dispatcher.tasks` ends while the process is still
   alive -- a distinct failure mode from process-exit, also raced across every
   phase.
-- **LOGIN_FAILED**: not currently produced -- `login.CredentialsRejectedError`/
+- Login failures have no cause: `login.CredentialsRejectedError`/
   `TransientLoginError` (from `watch_for_unprompted_windows`) and
-  `login.MfaTimeoutError` (the exit-interval watchdog) always propagate as
-  exceptions instead, the same way regardless of which phase raised them,
-  including the post-login `READY` wait (gitea #62). Kept defined/mapped
-  (cli.py's `_CAUSE_EXIT_CODES`) as a safety net only.
+  `login.MfaTimeoutError` (the exit-interval watchdog) propagate as
+  exceptions from every phase, including the post-login `READY` wait.
 - **COLD_RESTART**: `Config.cold_restart_time` reached (TWS and Gateway
   alike, see `schedule.py`) -- a self-scheduled tidy close-down followed by a
   full fresh relogin via `launch_instance` (no restart hash, deliberately not
@@ -95,7 +93,6 @@ class ShutdownCause(Enum):
     PROCESS_CLOSED = auto()
     PROCESS_EXITED = auto()
     CONNECTION_LOST = auto()
-    LOGIN_FAILED = auto()
     COLD_RESTART = auto()
     TIDY_CLOSEDOWN = auto()
 

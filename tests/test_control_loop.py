@@ -518,7 +518,7 @@ async def test_run_control_loop_cold_restart_relaunches_with_no_restart_hash(
         calls.append(restart_hash)
         if len(calls) == 1:
             return ShutdownCause.COLD_RESTART, f"{gettempdir()}/settings"
-        return ShutdownCause.LOGIN_FAILED, f"{gettempdir()}/settings"
+        return ShutdownCause.CONNECTION_LOST, f"{gettempdir()}/settings"
 
     monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
@@ -526,7 +526,7 @@ async def test_run_control_loop_cold_restart_relaunches_with_no_restart_hash(
     with caplog.at_level(logging.WARNING, logger="ibcontroller.control_loop"):
         cause = await run_control_loop(_config(), "agent.jar", labels=LABELS)
 
-    assert cause is ShutdownCause.LOGIN_FAILED
+    assert cause is ShutdownCause.CONNECTION_LOST
     assert calls == [None, None]
     assert any("cold_restart_time reached" in message for message in caplog.messages)
 
@@ -563,7 +563,7 @@ async def test_run_control_loop_login_frame_timeout_always_relaunches(
         calls.append(restart_hash)
         if len(calls) == 1:
             raise LoginFrameTimeoutError("login frame never appeared")
-        return ShutdownCause.LOGIN_FAILED, f"{gettempdir()}/settings"
+        return ShutdownCause.CONNECTION_LOST, f"{gettempdir()}/settings"
 
     monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
@@ -571,7 +571,7 @@ async def test_run_control_loop_login_frame_timeout_always_relaunches(
     with caplog.at_level(logging.WARNING, logger="ibcontroller.control_loop"):
         cause = await run_control_loop(_config(), "agent.jar", labels=LABELS)
 
-    assert cause is ShutdownCause.LOGIN_FAILED
+    assert cause is ShutdownCause.CONNECTION_LOST
     assert calls == [None, None]
     assert any("login frame never appeared" in message for message in caplog.messages)
 
@@ -588,7 +588,7 @@ async def test_run_control_loop_relaunches_on_transient_login_error(
         calls.append(restart_hash)
         if len(calls) == 1:
             raise TransientLoginError("login error dialog; server disconnected")
-        return ShutdownCause.LOGIN_FAILED, f"{gettempdir()}/settings"
+        return ShutdownCause.CONNECTION_LOST, f"{gettempdir()}/settings"
 
     monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
@@ -596,7 +596,7 @@ async def test_run_control_loop_relaunches_on_transient_login_error(
     with caplog.at_level(logging.WARNING, logger="ibcontroller.control_loop"):
         cause = await run_control_loop(_config(), "agent.jar", labels=LABELS)
 
-    assert cause is ShutdownCause.LOGIN_FAILED
+    assert cause is ShutdownCause.CONNECTION_LOST
     assert calls == [None, None]
     assert any("transient login failure" in message for message in caplog.messages)
 
@@ -646,7 +646,7 @@ async def test_run_control_loop_login_frame_timeout_keeps_restart_hash(monkeypat
             return ShutdownCause.PROCESS_EXITED, f"{gettempdir()}/settings"
         if len(calls) == 2:
             raise LoginFrameTimeoutError("login frame never appeared")
-        return ShutdownCause.LOGIN_FAILED, f"{gettempdir()}/settings"
+        return ShutdownCause.CONNECTION_LOST, f"{gettempdir()}/settings"
 
     async def _restart_marker_present(settings_dir):
         return True
@@ -663,7 +663,7 @@ async def test_run_control_loop_login_frame_timeout_keeps_restart_hash(monkeypat
 
     cause = await run_control_loop(_config(), "agent.jar", labels=LABELS)
 
-    assert cause is ShutdownCause.LOGIN_FAILED
+    assert cause is ShutdownCause.CONNECTION_LOST
     assert calls == [None, "abc123", "abc123"]
 
 
@@ -676,7 +676,7 @@ async def test_run_control_loop_mfa_timeout_relaunches_when_action_is_restart(
         calls.append(restart_hash)
         if len(calls) == 1:
             raise MfaTimeoutError("mfa_exit_interval watchdog fired")
-        return ShutdownCause.LOGIN_FAILED, f"{gettempdir()}/settings"
+        return ShutdownCause.CONNECTION_LOST, f"{gettempdir()}/settings"
 
     monkeypatch.setattr(control_loop, "_run_one_cycle", _fake_run_one_cycle)
     monkeypatch.setattr(control_loop, "stop_logging", lambda: None)
@@ -688,7 +688,7 @@ async def test_run_control_loop_mfa_timeout_relaunches_when_action_is_restart(
             labels=LABELS,
         )
 
-    assert cause is ShutdownCause.LOGIN_FAILED
+    assert cause is ShutdownCause.CONNECTION_LOST
     assert calls == [None, None]
     assert any("mfa_timeout_action=restart" in message for message in caplog.messages)
 
