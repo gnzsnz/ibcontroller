@@ -869,3 +869,125 @@ async def test_run_one_cycle_shuts_down_when_diagnostics_watcher_died(
         await control_loop._run_one_cycle(_config(), "agent.jar", LABELS)
     assert shutdown_called.is_set()
     assert "diagnostics watcher ended with" in caplog.text
+
+
+async def _fails_with(exc: BaseException) -> None:
+    raise exc
+
+
+@pytest.mark.parametrize("exc", [ProtocolError("closed"), ConnectionResetError()])
+async def test_wait_for_first_completion_grace_period_applies_to_a_main_task_lost_agent(
+    exc,
+):
+    """F2: a watcher whose command failed because the JVM went away is
+    reported before `process_done`; the grace period lets `returncode` land."""
+    process = _FakeProcess()
+    process_done = asyncio.ensure_future(_delayed_process_exit(process, delay=0.05))
+    watcher = asyncio.ensure_future(_fails_with(exc))
+    try:
+        finished = await asyncio.wait_for(
+            _wait_for_first_completion(
+                main_tasks=[watcher],
+                process_done=process_done,
+                dispatcher_tasks=[],
+                process=process,
+                grace_period=2.0,
+            ),
+            timeout=2.0,
+        )
+    finally:
+        process_done.cancel()
+
+    assert finished is watcher
+    assert process.returncode == 0
+
+
+async def test_wait_for_first_completion_no_grace_for_a_non_transport_failure():
+    """A login-dialog outcome is not a process-exit candidate: no wait."""
+    process = _FakeProcess()
+    process_done = await _never_completing_task()
+    watcher = asyncio.ensure_future(_fails_with(TransientLoginError("x")))
+    try:
+        finished = await asyncio.wait_for(
+            _wait_for_first_completion(
+                main_tasks=[watcher],
+                process_done=process_done,
+                dispatcher_tasks=[],
+                process=process,
+                grace_period=5.0,
+            ),
+            timeout=1.0,
+        )
+    finally:
+        process_done.cancel()
+        with contextlib.suppress(TransientLoginError):
+            await watcher
+
+    assert finished is watcher
+
+
+@pytest.mark.parametrize(
+    ("returncode", "expected_cause"),
+    [(0, ShutdownCause.PROCESS_CLOSED), (-9, ShutdownCause.PROCESS_EXITED)],
+)
+async def test_run_phase_watching_process_aborts_when_phase_failed_as_agent_died(
+    returncode, expected_cause
+):
+    """F2, login-phase case: `phase` ends with `ProtocolError` ahead of
+    `process_done`, but the process is gone -- a process exit, not an error."""
+    process = _FakeProcess()
+    process_done = asyncio.ensure_future(
+        _delayed_process_exit(process, delay=0.1, returncode=returncode)
+    )
+    try:
+        with pytest.raises(_PhaseAborted) as exc_info:
+            await asyncio.wait_for(
+                _run_phase_watching_process(
+                    _fails_with(ProtocolError("closed")),
+                    process_done=process_done,
+                    dispatcher_tasks=[],
+                    process=process,
+                ),
+                timeout=3.0,
+            )
+    finally:
+        process_done.cancel()
+    assert exc_info.value.cause is expected_cause
+
+
+async def test_run_phase_watching_process_aborts_when_watcher_failed_as_agent_died():
+    process = _FakeProcess()
+    process_done = asyncio.ensure_future(_delayed_process_exit(process, delay=0.1))
+    watcher = asyncio.ensure_future(_fails_with(ProtocolError("closed")))
+    phase_task = asyncio.ensure_future(asyncio.sleep(3600))
+    try:
+        with pytest.raises(_PhaseAborted) as exc_info:
+            await asyncio.wait_for(
+                _run_phase_watching_process(
+                    phase_task,
+                    process_done=process_done,
+                    dispatcher_tasks=[],
+                    process=process,
+                    watcher=watcher,
+                ),
+                timeout=3.0,
+            )
+    finally:
+        process_done.cancel()
+    assert exc_info.value.cause is ShutdownCause.PROCESS_CLOSED
+
+
+async def test_run_phase_watching_process_reraises_lost_agent_when_process_alive():
+    """No process exit after the grace period: the transport error stands."""
+    process = _FakeProcess()
+    process_done = await _never_completing_task()
+    try:
+        with pytest.raises(ProtocolError):
+            await _run_phase_watching_process(
+                _fails_with(ProtocolError("closed")),
+                process_done=process_done,
+                dispatcher_tasks=[],
+                process=process,
+            )
+    finally:
+        process_done.cancel()

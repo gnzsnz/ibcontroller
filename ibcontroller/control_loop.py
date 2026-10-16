@@ -59,7 +59,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Protocol
 
-from ibcontroller.agent_client import AgentClientError
+from ibcontroller.agent_client import AgentClientError, ProtocolError
 from ibcontroller.config import Config, MfaTimeoutAction
 from ibcontroller.diagnostics import sweep_settings_tree, watch_for_diagnostics
 from ibcontroller.dispatch import Dispatcher
@@ -307,6 +307,27 @@ class _HasReturncode(Protocol):
     def returncode(self) -> int | None: ...
 
 
+def _failed_by_lost_agent(task: asyncio.Task) -> bool:
+    """True when `task` ended with a transport error, the way a command in
+    flight fails when the JVM goes away."""
+    if not task.done() or task.cancelled():
+        return False
+    exc = task.exception()
+    return isinstance(exc, ProtocolError) or (
+        isinstance(exc, OSError) and not isinstance(exc, TimeoutError)
+    )
+
+
+def _agent_gone_cause(
+    task: asyncio.Task, process: _HasReturncode
+) -> ShutdownCause | None:
+    """Process-exit cause when `task` failed only because the agent died, else
+    None. `returncode` is ground truth, whichever task asyncio reported first."""
+    if process.returncode is not None and _failed_by_lost_agent(task):
+        return _process_gone_cause(process.returncode)
+    return None
+
+
 async def _wait_for_first_completion(
     *,
     main_tasks: Sequence[asyncio.Task],
@@ -341,13 +362,17 @@ async def _wait_for_first_completion(
     (not `process_done`) either way -- callers already fall back to checking
     `process.returncode` directly, so they pick up a `PROCESS_EXITED`
     classification correctly regardless of which task object this returns,
-    as long as `returncode` itself is now set."""
-    done, _pending = await asyncio.wait(
-        [*main_tasks, process_done, *dispatcher_tasks],
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-    finished = next(iter(done))
-    if finished not in (*main_tasks, process_done) and process.returncode is None:
+    as long as `returncode` itself is now set. The same grace applies to a
+    main task that failed with a transport error (a command cut off by the
+    JVM exiting). Ties resolve in argument order."""
+    tasks = [*main_tasks, process_done, *dispatcher_tasks]
+    done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finished = next(task for task in tasks if task in done)  # stable pick
+    if (
+        finished is not process_done
+        and (finished not in main_tasks or _failed_by_lost_agent(finished))
+        and process.returncode is None
+    ):
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(asyncio.shield(process_done), timeout=grace_period)
     return finished
@@ -413,11 +438,10 @@ async def _run_phase_watching_process(
             dispatcher_tasks=dispatcher_tasks,
             process=process,
         )
-        if finished is phase_task:
-            await phase_task
-            return
-        if watcher is not None and finished is watcher:
-            await watcher
+        if finished in main_tasks:
+            if (gone := _agent_gone_cause(finished, process)) is not None:
+                raise _PhaseAborted(gone)
+            await finished
             return
         cause = (
             _process_gone_cause(process.returncode)
@@ -563,7 +587,15 @@ async def _run_one_cycle(  # noqa: PLR0915
                 with contextlib.suppress(asyncio.CancelledError):
                     await scheduled_shutdown
 
-            if finished is watcher:
+            if finished is watcher and (
+                gone := _agent_gone_cause(watcher, launched.process)
+            ):
+                cause = gone
+                logger.warning(
+                    "watcher failed as the agent process exited (returncode=%s)",
+                    launched.process.returncode,
+                )
+            elif finished is watcher:
                 # Re-raise the recogniser's own exception unchanged (same as
                 # `_run_phase_watching_process`'s watcher branch above) --
                 # a credential/transient dialog can show up after login
