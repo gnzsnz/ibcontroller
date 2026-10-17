@@ -310,32 +310,27 @@ async def open_settings_dialog(
 
     `program` selects `labels.gateway_menu_path` (`"Configure/Settings"`) or,
     for TWS, `labels.tws_menu_path` (`"File/Global Configuration..."`,
-    Mosaic layout -- the only layout live-confirmed so far). TWS has no
-    `Configure` menu at all. Mosaic-only for now -- Classic
-    (`labels.tws_menu_path_classic`, `"Edit/Global Configuration..."`) was
-    the original guess, live-disproven 2026-09-16 (Classic's `Edit` menu
-    doesn't exist under Mosaic, a clean `ElementNotFoundError` every time,
-    not the #40 wrong-frame race it was mistaken for); a real
-    Classic/Mosaic fallback is tracked separately as #39.
+    Mosaic layout). TWS has no `Configure` menu at all. Only Mosaic is
+    supported: Classic (`labels.tws_menu_path_classic`,
+    `"Edit/Global Configuration..."`) has no `Edit` entry under Mosaic, so it
+    fails with `ElementNotFoundError`.
 
     `main_window_id`, when given (`control_loop.py` passes
     `LoginManager.main_window_id`), scopes `navigate_menu` to that exact,
     already-validated main window instead of the agent's own global
-    "first displayable frame with a menu bar" guess -- fixes #40, the
-    live/paper split traced to that guess landing on the wrong frame.
-    `None` (Gateway's path never captures one -- no ambiguity there) keeps
-    the old global search.
+    "first displayable frame with a menu bar" guess, which can land on the
+    wrong frame. `None` (Gateway's path never captures one -- no ambiguity
+    there) uses the global search.
 
     `timeout` bounds the wait for the splash frame to close
     (`_await_menu_ready`), the menu navigation itself (`navigate_menu`
     retries a disabled item for `timeout` and an unresolvable path briefly,
-    e.g. TWS is still populating its menubar right after login -- a real,
-    live-caught race, see #37), and the wait for the dialog to open; needs
-    to be long enough to span a real 2FA wait, since Settings may be
-    attempted right after login while Gateway is still gated on a human
-    approving 2FA -- callers should pass
-    `config.mfa_timeout`, not rely on this
-    function's own default, to stay in sync with `login.py`'s own timeout.
+    e.g. TWS is still populating its menubar right after login), and the wait
+    for the dialog to open. Needs to be long enough to span a 2FA wait, since
+    Settings may be attempted right after login while Gateway is still gated
+    on a human approving 2FA -- callers should pass `config.mfa_timeout`, not
+    rely on this function's own default, to stay in sync with `login.py`'s
+    own timeout.
 
     Returns the dialog's own `window_id`, captured from the `window_opened`
     event this function waits for, so every subsequent action against this
@@ -448,7 +443,7 @@ async def apply_settings_from_file(  # noqa: PLR0912 -- per-entry try/except (be
                 )
                 enable_label = _resolve_control(labels.settings, enable_control)
                 # One time field, labelled by the selected radio -- try the
-                # action's own label first, then the other (#77).
+                # action's own label first, then the other.
                 first_label, second_label = (
                     (restart_time_label, logoff_time_label)
                     if entry.action == "auto_restart_time"
@@ -535,7 +530,7 @@ async def apply_declarative_settings(
     above), merged with a user's own `Config.settings_file` when set.
 
     `session.main_window_id` scopes `open_settings_dialog`'s menu navigation
-    to the already-validated main window instead of a global guess -- #40.
+    to the already-validated main window instead of a global guess.
 
     `window_id` (from `open_settings_dialog`) scopes every subsequent action
     to the dialog that opened, and `close_settings_dialog` always runs in

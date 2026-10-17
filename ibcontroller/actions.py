@@ -50,7 +50,7 @@ menu item is disabled."""
 
 _MENU_NOT_FOUND_TIMEOUT = 5.0
 """Default seconds `navigate_menu` keeps retrying a path that does not resolve:
-covers TWS populating its menu bar after login (#37, measured 0.3-0.6s)."""
+covers TWS populating its menu bar after login (0.3-0.6 s)."""
 
 
 async def type_text(
@@ -161,14 +161,14 @@ async def navigate_menu(
     bar (matching `menu_item_exists`'s scoping) instead of the agent's
     global "first displayable frame with a menu bar" search -- the wrong
     frame can otherwise be picked when more than one displayable frame
-    carries a menu bar at once (#40; `open_settings_dialog` passes
+    carries a menu bar at once (`open_settings_dialog` passes
     `LoginManager.main_window_id`, once `login.py` has validated it, for
-    exactly this reason). `None` (the default) keeps the old global search.
+    exactly this reason). `None` (the default) uses the global search.
 
     Retries every `_MENU_RETRY_INTERVAL` seconds while the resolved item is
     disabled (e.g. a blocking dialog is still open), up to `timeout` seconds,
     then raises `TimeoutError`. A path that does not resolve (TWS still
-    populating its menubar right after login, #37) is retried for only
+    populating its menubar right after login) is retried for only
     `not_found_timeout` seconds from its first failure, then
     `ElementNotFoundError` is re-raised: a wrong path fails fast instead of
     spending `timeout`. The not-found clock restarts if the path resolves and

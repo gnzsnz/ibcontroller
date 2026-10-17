@@ -1,8 +1,6 @@
-"""Regression tests for config.py's `load_config` (the typed-settings-based rewrite,
-see the plan discussed with the user 2026-09-11). Covers the two bugs found live during
-that review: `TomlFormat("")` silently discarding the whole TOML file, and no
-`EnvLoader` being wired in at all -- both fixed by pointing directly at the real
-loader, not a mock."""
+"""Regression tests for config.py's `load_config` (typed-settings based). Covers
+`TomlFormat("")` silently discarding the whole TOML file, and a missing
+`EnvLoader` -- both checked against the real loader, not a mock."""
 
 from __future__ import annotations
 
@@ -35,7 +33,7 @@ def _set_credentials(monkeypatch):
 
 def test_toml_values_are_actually_applied(monkeypatch, tmp_path):
     """`TomlFormat("")` used to look up settings[""] instead of the top-level dict,
-    silently discarding the whole file -- confirmed live before the fix."""
+    silently discarding the whole file."""
     _set_credentials(monkeypatch)
     toml_path = _write_toml(tmp_path, 'trading_mode = "live"\nread_only_api = true\n')
     config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
@@ -45,7 +43,7 @@ def test_toml_values_are_actually_applied(monkeypatch, tmp_path):
 
 def test_env_var_overrides_toml_value(monkeypatch, tmp_path):
     """No `EnvLoader` was wired into `load_config`'s loader list at all -- env vars
-    had zero effect on the loaded Config, confirmed live before the fix."""
+    had zero effect on the loaded Config."""
     _set_credentials(monkeypatch)
     toml_path = _write_toml(tmp_path, 'trading_mode = "paper"\n')
     monkeypatch.setenv("IBC_TRADING_MODE", "live")
@@ -56,7 +54,7 @@ def test_env_var_overrides_toml_value(monkeypatch, tmp_path):
 def test_log_dir_tilde_is_expanded(monkeypatch, tmp_path):
     """A literal `~` in `log_dir` (TOML) must be expanded to the home directory here --
     downstream `Path(log_dir)` calls (logging_setup.py, launcher.py) don't expanduser()
-    themselves, so an unexpanded `~` becomes a literal `~` directory, confirmed live."""
+    themselves, so an unexpanded `~` becomes a literal `~` directory."""
     _set_credentials(monkeypatch)
     toml_path = _write_toml(tmp_path, 'log_dir = "~/some/sub/dir"\n')
     config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
@@ -66,8 +64,7 @@ def test_log_dir_tilde_is_expanded(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("field", ["tws_path", "tws_settings_path", "settings_file"])
 def test_optional_path_fields_tilde_is_expanded(monkeypatch, tmp_path, field):
-    """`tws_path`/`tws_settings_path`/`settings_file` share `log_dir`'s converter
-    (gitea #57, consolidating what used to be inconsistent per-field handling) --
+    """`tws_path`/`tws_settings_path`/`settings_file` share `log_dir`'s converter --
     a literal `~` must be expanded here too, not left for a consumption site to
     forget."""
     _set_credentials(monkeypatch)
@@ -104,7 +101,7 @@ def test_missing_credentials_raise_config_error(monkeypatch, tmp_path):
 
 
 def test_invalid_value_from_env_is_not_missing_credentials_error(monkeypatch, tmp_path):
-    """Gitea #63: `cli.py` must only show the credentials hint for a real
+    """`cli.py` must only show the credentials hint for a real
     missing-credentials failure -- any other bad value is a plain
     `ConfigError`, not `MissingCredentialsError`."""
     _set_credentials(monkeypatch)
@@ -115,7 +112,7 @@ def test_invalid_value_from_env_is_not_missing_credentials_error(monkeypatch, tm
 
 
 def test_invalid_enum_value_from_env_names_the_field(monkeypatch, tmp_path):
-    """Gitea #63: the field name must survive, not just the group summary
+    """The field name must survive, not just the group summary
     ("N errors occured ... (N sub-exception)")."""
     _set_credentials(monkeypatch)
     monkeypatch.setenv("IBC_TRADING_MODE", "xyz")
@@ -254,7 +251,7 @@ def test_empty_cli_overrides_do_not_affect_config(monkeypatch, tmp_path):
 def test_load_config_prints_one_line_per_key_credentials_masked(
     monkeypatch, tmp_path, capsys
 ):
-    """gitea #45: once loaded, Config is printed to stdout, one `key=value` line per
+    """Once loaded, Config is printed to stdout, one `key=value` line per
     field, with userid/password masked (Secret.__str__ already returns '*******')."""
     monkeypatch.setenv("IBC_USERID", "secret-user")
     monkeypatch.setenv("IBC_PASSWORD", "secret-pass")
@@ -269,7 +266,7 @@ def test_load_config_prints_one_line_per_key_credentials_masked(
 
 
 def test_empty_env_var_optional_field_falls_back_to_none(monkeypatch, tmp_path):
-    """gitea #67: `IBC_XYZ=` must be treated as absent, matching IBC's own
+    """`IBC_XYZ=` must be treated as absent, matching IBC's own
     getString(key, "").equals("") convention -- not fed through as a real value."""
     _set_credentials(monkeypatch)
     monkeypatch.setenv("IBC_AUTO_LOGOFF_TIME", "")
@@ -278,7 +275,7 @@ def test_empty_env_var_optional_field_falls_back_to_none(monkeypatch, tmp_path):
 
 
 def test_empty_env_var_non_optional_field_falls_back_to_default(monkeypatch, tmp_path):
-    """Same bug (#67), non-Optional side: an empty value used to raise ConfigError
+    """Same bug, non-Optional side: an empty value used to raise ConfigError
     instead of falling back to the field's default."""
     _set_credentials(monkeypatch)
     monkeypatch.setenv("IBC_MFA_EXIT_INTERVAL", "")
@@ -320,7 +317,7 @@ def test_default_time_zone_none_when_unresolved(monkeypatch):
 
 
 def test_time_zone_defaults_from_tz_env_var(monkeypatch, tmp_path):
-    """gitea #68: no IBC_TIME_ZONE needed -- the container's own TZ (already the
+    """No IBC_TIME_ZONE needed -- the container's own TZ (already the
     Docker convention) is picked up automatically."""
     _set_credentials(monkeypatch)
     monkeypatch.setenv("TZ", "Europe/Zurich")
@@ -337,11 +334,10 @@ def test_time_zone_env_var_overrides_tz_default(monkeypatch, tmp_path):
 
 
 def test_legacy_section_headers_raise_clearly(monkeypatch, tmp_path):
-    """Phase 4 assessment (2026-09-11): config_old.py had a hand-written check for
-    this (a real, live-caught bug -- a [section]-header config silently dropped every
-    key inside it). Confirmed live that typed-settings' own `FileLoader` already
-    catches this for free via `InvalidOptionsError` (`gateway.tws_version` isn't a
-    real flat field) -- no hand-written check needed, just regression coverage."""
+    """A [section]-header config must not silently drop every key
+    inside it: typed-settings' own `FileLoader` catches this via
+    `InvalidOptionsError` (`gateway.tws_version` isn't a real flat field), so no
+    hand-written check is needed."""
     _set_credentials(monkeypatch)
     toml_path = _write_toml(
         tmp_path, '[gateway]\ntws_version = "10.45"\n\n[auth]\ntrading_mode = "paper"\n'

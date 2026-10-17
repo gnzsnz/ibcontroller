@@ -180,7 +180,7 @@ class TooManyFailedLoginAttemptsRecognizer:
     `schedule_retry` with the wait time (in seconds) parsed from the
     message. When `False`, this state won't resolve itself -- the dialog is
     left on screen (IBC parity) and `CredentialsRejectedError` is raised (exit 77,
-    not a retry -- gitea #62). `schedule_retry` is a plain, synchronous
+    not a retry). `schedule_retry` is a plain, synchronous
     callable -- it's expected to schedule the actual retry as a background
     task, since `handle()` returns immediately without waiting out the
     cooldown."""
@@ -232,8 +232,8 @@ class TooManyFailedLoginAttemptsRecognizer:
 class LoginFailedRecognizer:
     """Matches a "Login failed" dialog by window title (ported from IBC's
     `LoginFailedDialogHandler`). IB reuses this title for a "server
-    disconnected" condition, not rejected credentials (IBC's own commit
-    history -- gitea #62). Dismisses it and raises `TransientLoginError`,
+    disconnected" condition, not rejected credentials (per IBC's own commit
+    history). Dismisses it and raises `TransientLoginError`,
     matching IBC's own unconditional cold-restart for this dialog."""
 
     def __init__(self, labels: LoginFailedLabels) -> None:
@@ -257,9 +257,8 @@ class LoginErrorRecognizer:
     """Matches a "Login Error" dialog by window title (ported from IBC's
     `LoginErrorDialogHandler`, e.g. "Login failed - Server disconnected,
     please try again") -- always a transient server condition, never a
-    credential rejection. No prior ibcontroller equivalent (gitea #62).
-    Logs every text component (HTML stripped), as IBC does, dismisses it,
-    and raises `TransientLoginError`."""
+    credential rejection. Logs every text component (HTML stripped), as IBC does,
+    dismisses it, and raises `TransientLoginError`."""
 
     def __init__(self, labels: LoginErrorLabels) -> None:
         self._labels = labels
@@ -287,7 +286,7 @@ class UnrecognizedCredentialsRecognizer:
     """Matches the "Unrecognized Username or Password" dialog by window
     title -- a real rejected login, distinct from `LoginFailedRecognizer`'s
     dialog despite the similar name. No IBC equivalent (IBC never handles
-    this one, leaves it on screen -- gitea #62). Dismisses it and raises
+    this one, leaves it on screen). Dismisses it and raises
     `CredentialsRejectedError`."""
 
     def __init__(self, labels: UnrecognizedCredentialsLabels) -> None:
@@ -319,8 +318,7 @@ class GatewayConnectionFailedRecognizer:
     `labels.known_reasons` (e.g. "multiple Paper Trading users") is a
     credential/account problem -- raises `CredentialsRejectedError` (exit 77, no
     retry). Any other reason (e.g. a stale restart token, IBC's own known
-    cause for this dialog) is transient -- raises `TransientLoginError`
-    (gitea #62)."""
+    cause for this dialog) is transient -- raises `TransientLoginError`."""
 
     def __init__(self, labels: GatewayConnectionFailedLabels) -> None:
         self._labels = labels
@@ -573,9 +571,7 @@ class AcceptIncomingConnectionsRecognizer:
     """Matches the "Accept incoming connection" dialog TWS/Gateway shows when
     a client connects on the API socket, by window title (ported from IBC's
     own `AcceptIncomingConnectionDialogHandler`; title matching, not IBC's
-    body-label search, to match this project's own convention for every
-    other simple dialog here -- confirmed as a valid alternative by ibctl's
-    own independent, live-tested handler, which matches on title too).
+    body-label search, like every other simple dialog here).
     `action` (`AcceptIncomingConnections`: manual/accept/reject) selects the
     response; `MANUAL` leaves the dialog for the user, matching IBC's own
     handler."""
@@ -630,7 +626,7 @@ class ExitProgressRecognizer:
     """Matches the "Shutdown progress" and "Restart in progress" windows by title.
     Nothing to click, the window closes on its own; `handle` only logs. The
     control loop reads `kind_of` from `RecognizerRegistry.handled` to classify
-    the exit that follows (gitea #23, #7)."""
+    the exit that follows."""
 
     def __init__(self, labels: ShutdownLabels) -> None:
         self._labels = labels
@@ -658,8 +654,7 @@ class ExitProgressRecognizer:
 class RecognizerRegistry:
     """Ordered list of `Recognizer`s, checked in sequence; `dispatch()` runs
     the first one that matches. A bug in a recogniser propagates unchanged,
-    not caught here -- there's no plugin/config-rule tier yet to isolate
-    failures from."""
+    not caught here: there is no plugin/config-rule tier to isolate failures."""
 
     def __init__(self, registry: Sequence[Recognizer]) -> None:
         self._registry = list(registry)

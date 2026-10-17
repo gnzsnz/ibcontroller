@@ -1,8 +1,7 @@
-"""Unit tests for launcher.py's pure, filesystem-only half (CLAUDE.md's "Working
-method": unit tests at each layer, once validated) -- a synthetic install tree
-standing in for a real Gateway/TWS install, no live Gateway needed. The async half
-(`launch_instance`, `clean_shutdown`) needs a real install to mean anything and is
-live-validated separately, not unit-tested here."""
+"""Unit tests for launcher.py's pure, filesystem-only half -- a synthetic install
+tree standing in for a real Gateway/TWS install, no live Gateway needed. The async
+half (`launch_instance`, `clean_shutdown`) needs a real install to mean anything and
+is not unit-tested here."""
 
 from __future__ import annotations
 
@@ -94,10 +93,10 @@ def test_resolve_tws_path_defaults_linux():
 
 
 def test_resolve_tws_settings_path_defaults_per_instance():
-    """Deliberately NOT `_resolve_tws_path`'s install location -- a real bug
-    found live (2026-09-05): paper and live shared one settings directory by
-    conflating the two, matching IBC's own userguide.md warning about running
-    multiple instances against the same settings folder. Default shape is
+    """Deliberately NOT `_resolve_tws_path`'s install location: conflating
+    the two makes paper and live share one settings directory, matching IBC's own
+    userguide.md warning about running multiple instances against the same
+    settings folder. Default shape is
     `~/Jts/{instance}`, always separated, unlike IBC's own opt-in default."""
     path = resolve_tws_settings_path(_config(instance="paper"))
     assert path.name == "paper"
@@ -118,9 +117,8 @@ def test_resolve_tws_settings_path_explicit_override(tmp_path):
 
 
 def test_ensure_jts_ini_creates_minimal_file_gateway(tmp_path):
-    """Ports IBC's own JtsIniManager.java (2026-09-05) -- avoids the real
-    "Use SSL encryption" dialog entirely (confirmed live: its own component
-    tree includes the exact JPMS-crash-prone class from the Milestone)."""
+    """Ports IBC's own JtsIniManager.java -- avoids the
+    "Use SSL encryption" dialog entirely."""
     _ensure_jts_ini(tmp_path, is_gateway=True)
     lines = (tmp_path / "jts.ini").read_text().splitlines()
     assert "[Logon]" in lines
@@ -190,7 +188,7 @@ def test_ensure_jts_ini_omits_time_zone_when_unresolved(tmp_path):
 def test_ensure_jts_ini_never_overwrites_existing_time_zone_when_auto_detected(
     tmp_path, monkeypatch
 ):
-    """gitea #68: a value matching what `_default_time_zone` would auto-detect
+    """A value matching what `_default_time_zone` would auto-detect
     is treated as a guess, same as s3store -- never reverts an existing line."""
     monkeypatch.setenv("TZ", "Europe/Zurich")
     (tmp_path / "jts.ini").write_text("[Logon]\nTimeZone=America/New_York\n")
@@ -201,7 +199,7 @@ def test_ensure_jts_ini_never_overwrites_existing_time_zone_when_auto_detected(
 
 
 def test_ensure_jts_ini_overwrites_time_zone_when_explicitly_set(tmp_path, monkeypatch):
-    """gitea #68: a value that differs from what `_default_time_zone` would
+    """A value that differs from what `_default_time_zone` would
     auto-detect right now means the user explicitly set IBC_TIME_ZONE (or
     ibcontroller.toml's time_zone) -- that deliberate choice does overwrite a
     stale existing line."""
@@ -255,7 +253,7 @@ def test_program_path_linux_tws(tmp_path):
 
 
 def test_resolve_program_path_macos_prefers_tws_install(tmp_path):
-    """TWS->Gateway fallback (gitea #25): a TWS request resolves to the TWS
+    """TWS->Gateway fallback: a TWS request resolves to the TWS
     install whenever its `jars/` exists -- IBC's own ibcstart.sh priority."""
     _make_version_dir(tmp_path, "Trader Workstation 10.50")
     _make_version_dir(tmp_path, "IB Gateway 10.50")
@@ -284,7 +282,7 @@ def test_resolve_program_path_linux_tws_falls_back_to_ibgateway(tmp_path):
 
 
 def test_resolve_program_path_gateway_never_falls_back_to_tws(tmp_path):
-    """Scope decision (2026-09-13, gitea #25): only TWS->Gateway exists. A Gateway
+    """Scope decision: only TWS->Gateway exists. A Gateway
     request returns the Gateway path even when a TWS install is present instead."""
     _make_version_dir(tmp_path, "Trader Workstation 10.50")
     path, resolved = _resolve_program_path(Program.GATEWAY, "macos", tmp_path, "10.50")
@@ -401,11 +399,11 @@ def test_read_vmoptions_file_missing_returns_empty(tmp_path):
 
 
 def test_read_i4j_vmoptions_keeps_dprops_filters_templates(tmp_path):
-    """gitea #56: `-D` tokens (including `-DjxBrowserKey` and the
+    """`-D` tokens (including `-DjxBrowserKey` and the
     `jdk.xml.*` XML-parser hardening limits) must be kept, not filtered --
     this same variable is the only place some installs carry them, on
-    Linux and macOS alike (confirmed live against a real macOS install:
-    `i4jparams.conf`'s `javaOptions` there carries the identical shape)."""
+    Linux and macOS alike (`i4jparams.conf`'s `javaOptions` carries
+    the same shape on both)."""
     install4j_dir = tmp_path / ".install4j"
     install4j_dir.mkdir()
     (install4j_dir / "i4jparams.conf").write_text(
@@ -634,7 +632,7 @@ def test_list_version_candidates_linux_tws_excludes_ibgateway_dir(tmp_path):
 
 def test_list_version_candidates_macos_tws_prefers_tws_installs(tmp_path):
     """The fallback only engages when *no* TWS install exists at all -- a TWS
-    install present alongside a Gateway one must win (IBC's priority, gitea #25)."""
+    install present alongside a Gateway one must win (IBC's priority)."""
     _make_version_dir(tmp_path, "Trader Workstation 10.45")
     _make_version_dir(tmp_path, "IB Gateway 10.50")
     candidates = _list_version_candidates(tmp_path, "macos", Program.TWS)
@@ -663,9 +661,8 @@ def test_detect_tws_version_single_candidate(tmp_path):
 
 
 def test_detect_tws_version_multiple_candidates_picks_greatest(tmp_path):
-    """Per the user's own explicit instruction: 'latest' is the greatest version,
-    not an error -- ambiguity is resolved, not rejected, when no channel filter is
-    given."""
+    """'latest' is the greatest version, not an error -- ambiguity is resolved, not
+    rejected, when no channel filter is given."""
     _make_version_dir(tmp_path, "IB Gateway 10.45", channel="stable")
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
     assert _detect_tws_version(tmp_path, "macos", Program.GATEWAY, None) == "10.50"
@@ -693,13 +690,13 @@ def test_detect_tws_version_channel_filter_matches_nothing_raises(tmp_path):
 
 def test_detect_tws_version_tws_falls_back_to_gateway_tree(tmp_path):
     """A TWS request with no TWS install auto-detects against the Gateway
-    installs (gitea #25) -- channel-aware like the primary tree."""
+    installs -- channel-aware like the primary tree."""
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="stable")
     assert _detect_tws_version(tmp_path, "macos", Program.TWS, "stable") == "10.50"
 
 
 def test_detect_tws_version_tws_falls_back_when_tws_on_wrong_channel(tmp_path):
-    """Regression test for the live-caught break (2026-09-13): a TWS install
+    """Regression test: a TWS install
     present but on the wrong channel must NOT short-circuit the fallback.
     `tws` + `latest` with only `Trader Workstation 10.45` (channel=stable)
     installed used to raise -- the `[10.45]` TWS pool (present, but filtered to
@@ -720,7 +717,7 @@ def test_detect_tws_version_tws_channel_filter_picks_tws_when_it_matches(tmp_pat
 
 
 def test_detect_tws_version_tws_channel_filter_still_strict_on_fallback_tree(tmp_path):
-    """Per maintainer decision (2026-09-13): the channel filter gate is not
+    """The channel filter gate is not
     relaxed for the fallback tree -- asking `tws` with `stable` while only a
     `latest` Gateway exists is a config error, surfaced, not silently satisfied."""
     _make_version_dir(tmp_path, "IB Gateway 10.50", channel="latest")
@@ -763,20 +760,17 @@ def test_build_launch_plan_macos_gateway(tmp_path, run_dir):
 
     # The native .app bundle must be renamed -- otherwise Gateway's own
     # restart logic can relaunch it directly, with no agent attached,
-    # racing any future relaunch-after-restart logic of our own (confirmed
-    # live, 2026-09-06: a real scheduled restart came back via
-    # <name>.app/Contents/MacOS/JavaApplicationStub, not through us at all).
+    # racing any relaunch-after-restart logic of our own (a scheduled restart
+    # can come back via <name>.app/Contents/MacOS/JavaApplicationStub).
     program_path = base / "IB Gateway 10.50"
     assert not (program_path / "IB Gateway 10.50.app").exists()
     assert (program_path / "IB Gateway 10.50-1.app").is_dir()
 
 
 def test_build_launch_plan_macos_keeps_real_dprops_from_i4jparams(tmp_path, run_dir):
-    """gitea #56: real `-D` fixes (XML-parser hardening limits,
+    """Real `-D` fixes (XML-parser hardening limits,
     `jxBrowserKey`) live in `i4jparams.conf`'s `javaOptions` on macOS too
-    (confirmed live against a real Gateway install) -- must survive into the
-    command, not be dropped the way the old `Info.plist`-based reader
-    dropped every `-D` token unconditionally."""
+    -- must survive into the command, not be dropped."""
     base = _make_synthetic_install(tmp_path, os_name="macos")
     program_path = base / "IB Gateway 10.50"
     (program_path / ".install4j" / "i4jparams.conf").write_text(
@@ -818,7 +812,7 @@ def test_build_launch_plan_java_heap_size_overrides_vmoptions_file(tmp_path, run
 
 
 def test_build_launch_plan_auto_detects_tws_version_when_unset(tmp_path, run_dir):
-    """`Config.tws_channel` defaults to "stable" (2026-09-11 decision, TODO.md), so
+    """`Config.tws_channel` defaults to "stable", so
     auto-detection filters to stable-channel installs -- the synthetic install must
     carry that channel metadata, matching every real install (see
     `test_build_launch_plan_reads_channel_dynamically`)."""
@@ -841,9 +835,8 @@ def test_build_launch_plan_auto_detects_tws_version_when_unset(tmp_path, run_dir
 
 def test_build_launch_plan_reads_channel_dynamically(tmp_path, run_dir):
     """`-Dchannel=` must reflect the real install's own value, not a hardcoded
-    literal -- confirmed live, 2026-09-09: `IB Gateway 10.45` carries
-    `channel=stable`, `IB Gateway 10.50` carries `channel=latest`, each in its own
-    `i4jparams.conf`."""
+    literal: each install carries its own `channel` in `i4jparams.conf`
+    (`IB Gateway 10.45` stable, `IB Gateway 10.50` latest)."""
     base = _make_synthetic_install(tmp_path, os_name="macos")
     program_path = base / "IB Gateway 10.50"
     (program_path / ".install4j" / "i4jparams.conf").write_text(
@@ -866,8 +859,8 @@ def test_build_launch_plan_channel_falls_back_to_config_when_not_found(
     tmp_path, run_dir, caplog
 ):
     """No `channel` in the real install's `i4jparams.conf` -- falls back to
-    `Config.tws_channel` (default "stable"), not a hardcoded literal (tea #35),
-    and warns about it (tea #58)."""
+    `Config.tws_channel` (default "stable"), not a hardcoded literal,
+    and warns about it."""
     base = _make_synthetic_install(tmp_path, os_name="macos")  # no i4jparams.conf
     config = _config(
         program=Program.GATEWAY,
@@ -912,7 +905,7 @@ def test_build_launch_plan_channel_from_install_does_not_warn(
 def test_build_launch_plan_sets_install_dir_with_trailing_slash(tmp_path, run_dir):
     """IB's launcher passes `-DinstallDir=$prg_dir/`; without it TWS logs
     `'installDir' system property is not set` and keeps a per-settings-dir
-    `locales.jar` (tea #58)."""
+    `locales.jar`."""
     base = _make_synthetic_install(tmp_path, os_name="macos")
     config = _config(
         program=Program.GATEWAY,
@@ -941,7 +934,7 @@ def test_build_launch_plan_omits_restart_flag_when_hash_not_given(tmp_path, run_
 
 
 def test_build_launch_plan_adds_agent_logging_flags(tmp_path, run_dir):
-    """2026-09-08: the agent's java.util.logging is routed to its own per-instance
+    """The agent's java.util.logging is routed to its own per-instance
     file under the same shared log dir Python uses (never the same filename as Python's
     own ibcontroller-{instance}.log / gateway-{instance}.log -- all flat in that
     directory since the per-instance subdirectory was removed the same day), and the
@@ -975,7 +968,7 @@ def test_build_launch_plan_adds_agent_logging_flags(tmp_path, run_dir):
 
 
 def test_build_launch_plan_adds_restart_flag_when_hash_given(tmp_path, run_dir):
-    """2026-09-07: IBC's own `ibcstart.sh` and ibctl's independent
+    """IBC's own `ibcstart.sh` and ibctl's independent
     implementation both pass `-Drestart=<hash>` on a relaunch after a
     scheduled restart -- added here after confirming live that the marker
     file's mere presence is not sufficient by itself."""
@@ -1047,19 +1040,17 @@ def test_build_launch_plan_linux_tws(tmp_path, run_dir):
 
     # The native launch script must be renamed -- otherwise TWS/Gateway's own
     # restart logic can invoke it directly, with no agent attached, bypassing
-    # launcher.py entirely (confirmed live, 2026-09-14: a real scheduled
-    # restart on Linux left ibcontroller unable to detect PROCESS_EXITED and
-    # relaunch/relogin).
+    # launcher.py entirely, leaving ibcontroller unable to detect
+    # PROCESS_EXITED and relaunch/relogin.
     program_path = base / "10.50"
     assert not (program_path / "tws").exists()
     assert (program_path / "tws-1").is_file()
 
 
 def test_build_launch_plan_linux_reads_add_opens_from_i4jparams(tmp_path, run_dir):
-    """The bug this guards against: a real TWS-on-Linux launch crashed with
-    `InaccessibleObjectException` because `tws.vmoptions` never carries
-    `--add-opens`/`--add-exports` -- only install4j's own `javaOptions`
-    variable in `i4jparams.conf` does (confirmed live, 2026-09-14)."""
+    """TWS on Linux crashes with `InaccessibleObjectException` unless
+    `--add-opens`/`--add-exports` are passed: `tws.vmoptions` never carries them,
+    only install4j's own `javaOptions` variable in `i4jparams.conf` does."""
     base = _make_synthetic_install(tmp_path, os_name="linux", program=Program.TWS)
     program_path = base / "10.50"
     (program_path / ".install4j" / "i4jparams.conf").write_text(
@@ -1081,7 +1072,7 @@ def test_build_launch_plan_linux_reads_add_opens_from_i4jparams(tmp_path, run_di
 
 
 def test_build_launch_plan_linux_jxbrowser_key_appears_once(tmp_path, run_dir):
-    """gitea #55: `-DjxBrowserKey` comes solely from `i4jparams.conf`'s
+    """`-DjxBrowserKey` comes solely from `i4jparams.conf`'s
     `javaOptions` blob (via `_read_i4j_vmoptions`) -- `build_launch_plan`
     must not add a second, explicit copy on top of it."""
     base = _make_synthetic_install(tmp_path, os_name="linux", program=Program.TWS)
@@ -1106,7 +1097,7 @@ def test_build_launch_plan_linux_jxbrowser_key_appears_once(tmp_path, run_dir):
 def test_build_launch_plan_macos_tws_falls_back_to_gateway_install(
     tmp_path, run_dir, caplog
 ):
-    """No TWS install, same-version Gateway install present (gitea #25): the
+    """No TWS install, same-version Gateway install present: the
     plan uses the Gateway install's path, `.install4j`, bundled JRE and
     `ibgateway.vmoptions` (the Gateway dir has no `tws.vmoptions`), keeps the
     TWS entry class `jclient.LoginFrame`, and never writes the Gateway-only
@@ -1151,7 +1142,7 @@ def test_build_launch_plan_macos_tws_prefers_tws_install_when_present(
     tmp_path, run_dir, caplog
 ):
     """No fallback when a TWS install exists -- the TWS dir wins, no warning
-    logged (IBC's own priority; gitea #25)."""
+    logged (IBC's own priority)."""
     base = _make_synthetic_install(tmp_path, os_name="macos", program=Program.TWS)
     _make_version_dir(tmp_path / "Applications", "IB Gateway 10.50")
     settings_dir = tmp_path / "settings"
@@ -1297,7 +1288,7 @@ async def test_is_restart_true_when_marker_file_present(tmp_path):
 async def test_find_autorestart_hash_ignores_markers_at_other_depths(tmp_path):
     """Only `<settings>/<hash>/autorestart` counts, matching IBC's
     `find_auto_restart` (its `cut -d/ -f3 == "."` depth check); a marker at
-    the root or deeper is neither found nor counted as ambiguous (L1 F8)."""
+    the root or deeper is neither found nor counted as ambiguous."""
     (tmp_path / "autorestart").write_text("")
     (tmp_path / "a" / "b").mkdir(parents=True)
     (tmp_path / "a" / "b" / "autorestart").write_text("")
@@ -1364,7 +1355,7 @@ async def test_wait_for_ready_times_out_when_nothing_ever_listens(sock_path):
 async def test_wait_for_ready_fails_fast_when_process_already_exited(sock_path):
     """A JVM that exits before binding its socket (e.g. the previous instance
     still held it) must fail within one poll as `AgentStartupError`, not after
-    the full `timeout` as a generic `LauncherError` (gitea #60, case 13)."""
+    the full `timeout` as a generic `LauncherError`."""
     process = FakeProcess(returncode=1)
     start = time.monotonic()
     with pytest.raises(AgentStartupError, match="returncode=1"):
@@ -1416,7 +1407,7 @@ async def _silent_server(path):
 
 async def test_wait_for_ready_times_out_when_ping_is_never_answered(sock_path):
     """Duplicate instance name: the probe connects to a socket that never
-    answers `ping`. `timeout` must still bound the wait (L1 F3, #78)."""
+    answers `ping`. `timeout` must still bound the wait."""
     async with _silent_server(sock_path):
         start = time.monotonic()
         with pytest.raises(LauncherError, match="did not respond to ping"):
@@ -1444,7 +1435,7 @@ async def test_wait_for_ready_sees_exit_while_probe_is_stuck(sock_path, monkeypa
 
 def test_check_socket_path_accepts_the_limit_and_rejects_one_more():
     """Limits measured with the Java agent's bind: 102 bytes on macOS, 106 on
-    Linux; one byte more fails (L1 F14, #78, #110)."""
+    Linux; one byte more fails."""
     for os_name, limit in (("macos", 102), ("linux", 106)):
         _check_socket_path("/" + "x" * (limit - 1), os_name)
         with pytest.raises(LauncherError, match=f"over the {limit}-byte limit"):
@@ -1476,7 +1467,7 @@ def test_build_launch_plan_rejects_too_long_socket_path_before_touching_install(
 
 def test_build_launch_plan_creates_log_dir(tmp_path, run_dir):
     """The agent's FileHandler needs `log_dir` before it binds its sockets;
-    nothing else creates it for log_sink=std with tracing off (L1 F11, #78)."""
+    nothing else creates it for log_sink=std with tracing off."""
     base = _make_synthetic_install(tmp_path, os_name="linux")
     config = _config(
         program=Program.GATEWAY,
@@ -1497,7 +1488,7 @@ def _tree(root: Path) -> set[tuple[str, int]]:
 
 @pytest.mark.parametrize("os_name", ["macos", "linux"])
 def test_build_launch_plan_changes_nothing_on_disk(tmp_path, run_dir, os_name):
-    """Planning only reads; `prepare_installation` makes the changes (L1 F7)."""
+    """Planning only reads; `prepare_installation` makes the changes."""
     base = _make_synthetic_install(tmp_path, os_name=os_name)
     config = _config(
         program=Program.GATEWAY,
@@ -1529,7 +1520,7 @@ def test_prepare_installation_read_only_install_raises_launcher_error(
     tmp_path, run_dir, os_name
 ):
     """The native launcher cannot be renamed: a clear `LauncherError` naming
-    the directory and why, not a raw `OSError` traceback (L1 F6)."""
+    the directory and why, not a raw `OSError` traceback."""
     base = _make_synthetic_install(tmp_path, os_name=os_name)
     config = _config(
         program=Program.GATEWAY,
@@ -1597,7 +1588,7 @@ class _FakeProcessWithStdout:
 async def test_drain_stdout_keeps_reading_after_an_over_long_line(tmp_path, caplog):
     """`readline()` raises `ValueError` on a line over the pipe limit; the
     drain must log once and carry on, or Gateway's stdout fills and every Java
-    thread writing to it blocks (L1 F4, #78)."""
+    thread writing to it blocks."""
     stdout_logger = configure_gateway_stdout("paper", tmp_path, sink="file")
     process = _FakeProcessWithStdout(
         [b"before\n", ValueError("too long"), ValueError("too long"), b"after\n"]
@@ -1640,7 +1631,7 @@ async def test_drain_stdout_writes_lines_through_the_queued_stdout_logger(tmp_pa
 
 
 async def test_drain_stdout_std_sink_reaches_console_not_a_file(tmp_path, capsys):
-    """sink="std" (the default, gitea #26) routes Gateway/TWS's own console
+    """sink="std" (the default) routes Gateway/TWS's own console
     output through a `StreamHandler` instead of `gateway-{instance}.log`, so it
     reaches `docker logs` -- no file is ever created."""
     stdout_logger = configure_gateway_stdout("paper", tmp_path)
@@ -1676,7 +1667,7 @@ async def testterminate_and_wait_kills_when_sigterm_is_ignored():
 
 async def testterminate_and_wait_is_a_noop_on_an_exited_process():
     """The never-ready path hit `ProcessLookupError` signalling a JVM that had
-    already exited (gitea #60, case 13) -- the fake raises it if signalled."""
+    already exited -- the fake raises it if signalled."""
     process = FakeProcess(returncode=1)
     # pyrefly: ignore [bad-argument-type]
     await terminate_and_wait(process, timeout=0.05)
@@ -1736,7 +1727,7 @@ async def test_launch_instance_terminates_jvm_when_cancelled_during_readiness(
     fake_spawn, tmp_path
 ):
     """SIGINT/SIGTERM during the readiness wait cancels `launch_instance`. The
-    JVM runs in its own session, so nothing else would stop it (L1 F2, #78)."""
+    JVM runs in its own session, so nothing else would stop it."""
     task = asyncio.ensure_future(
         launch_instance(_config(log_dir=str(tmp_path)), "agent.jar", ready_timeout=5.0)
     )

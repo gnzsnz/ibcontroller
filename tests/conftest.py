@@ -13,7 +13,7 @@ import ibcontroller.config as _config
 
 @pytest.fixture(autouse=True)
 def _no_real_dotenv_discovery(monkeypatch):
-    """Safety net, 2026-09-09: `config.load_config`'s `dotenv_path` defaults to
+    """Safety net: `config.load_config`'s `dotenv_path` defaults to
     `None`, which makes `python-dotenv`'s `load_dotenv` search *upward from the
     current directory* for a real `.env` file -- and this repo has one, at its
     root, with real credentials. A test that doesn't pass an explicit
@@ -22,9 +22,7 @@ def _no_real_dotenv_discovery(monkeypatch):
     backfilled by the real file, and in a full end-to-end test
     (`test_main.py`'s `run_async`, `test_cli.py`'s `run` command) actually
     launch a real Gateway/TWS session with real credentials as a side effect
-    of running `pytest` -- confirmed live, not hypothetical (a real
-    `gateway-paper` instance launched and ran a full session during a routine
-    full-suite run). Guarded at the one real chokepoint (`config.load_dotenv`,
+    of running `pytest`. Guarded at the one real chokepoint (`config.load_dotenv`,
     the name imported into `config.py`) rather than in each test: only the
     no-path (upward-search) call is neutered -- any test that wants real
     dotenv behavior already passes its own explicit tmp-path `.env` file

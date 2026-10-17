@@ -59,10 +59,9 @@ LABELS = load_labels()
 
 
 def test_startup_state_has_no_separate_awaiting_dialogs_step():
-    """Open item 5's originally-proposed `AWAITING_STARTUP_DIALOGS` state was
-    dropped before being built -- `navigate_menu`'s `isEnabled()`-retry
-    (2026-09-06) absorbed "wait for a blocking startup dialog to clear" into
-    the act of opening Settings itself, so there's no separate step left."""
+    """There is no `AWAITING_STARTUP_DIALOGS` state: `navigate_menu`'s
+    `isEnabled()`-retry absorbed "wait for a blocking startup dialog to clear"
+    into the act of opening Settings itself, so there's no separate step left."""
     assert {s.name for s in StartupState} == {
         "LAUNCHING",
         "LOGGING_IN",
@@ -103,7 +102,7 @@ async def test_run_control_loop_returns_requested_when_task_is_cancelled(
     """The real bug: cancelling `run_control_loop`'s own task used to raise
     `CancelledError` straight through its `finally` instead of ever reaching
     `return cause`, so `ShutdownCause.REQUESTED` was unreachable as a value
-    (CLAUDE.md Open item 5's last loose end, fixed 2026-09-09). `_run_one_cycle`
+    `_run_one_cycle`
     is monkeypatched to a coroutine that never completes on its own, matching
     "cancel this coroutine's own task at any point" -- the documented stop
     mechanism -- rather than exercising the real launch/login sequence."""
@@ -234,7 +233,7 @@ async def test_wait_for_first_completion_returns_process_done_immediately():
 
 
 async def test_wait_for_first_completion_grace_period_catches_a_delayed_reap():
-    """The bug this guards against (confirmed live, 2026-09-14): a dispatcher
+    """The bug this guards against: a dispatcher
     task notices TWS's socket close and finishes before asyncio has reaped the
     already-exiting process. A real scheduled restart was misclassified
     `CONNECTION_LOST` this way. As long as the process is actually reaped
@@ -333,7 +332,7 @@ async def test_ready_state_watcher_exception_propagates_unchanged(exc_type):
     reconnect attempt hits a credential or transient dialog): `_run_one_cycle`'s
     READY-state wait must propagate the watcher's real exception type, exactly
     like `_run_phase_watching_process` does during login/settings -- not
-    collapse it into a fixed `ShutdownCause` the way it used to (gitea #62).
+    collapse it into a fixed `ShutdownCause`.
     Exercises the same one-line `if finished is watcher: await watcher` shape
     the READY block uses, the smallest piece that can be isolated without a
     real launch/login sequence (this module's own stated testing boundary)."""
@@ -382,7 +381,8 @@ async def test_run_phase_watching_process_returns_normally_when_phase_wins():
 async def test_run_phase_watching_process_propagates_a_real_phase_failure():
     """A genuine login/settings failure (e.g. `LoginError`) is not caused by
     the process dying -- it must propagate unchanged, not be reclassified as
-    a `ShutdownCause` (#43/#48's fix must not swallow real login failures)."""
+    a `ShutdownCause` (process-death classification must not swallow real
+    login failures)."""
     process = _FakeProcess()
     process_done = await _never_completing_task()
 
@@ -411,7 +411,7 @@ async def test_run_phase_watching_process_propagates_a_real_phase_failure():
 async def test_run_phase_watching_process_aborts_on_process_exit(
     returncode, expected_cause
 ):
-    """Issue #43's shape: the process exits (e.g. the login window is closed
+    """The process exits (e.g. the login window is closed
     manually) while `phase` is still waiting on an event that will now never
     arrive -- must raise `_PhaseAborted` promptly instead of hanging on
     `phase`'s own (possibly unbounded) timeout, and must cancel the
@@ -437,7 +437,7 @@ async def test_run_phase_watching_process_aborts_on_process_exit(
 
 
 async def test_run_phase_watching_process_aborts_on_connection_lost():
-    """Issue #48's shape: the process is still alive but a dispatcher task
+    """The process is still alive but a dispatcher task
     (the socket connection) has ended -- classified `CONNECTION_LOST`, the
     same distinction `_run_one_cycle`'s READY-state wait already makes."""
     process = _FakeProcess()
@@ -462,7 +462,7 @@ async def test_run_phase_watching_process_aborts_on_connection_lost():
 
 
 async def test_run_phase_watching_process_propagates_watcher_failure_immediately():
-    """Gitea #62's root cause 2: a watcher exception during login must abort
+    """A watcher exception during login must abort
     `phase` right away, not be missed until `phase`'s own (much longer)
     timeout expires."""
     process = _FakeProcess()
@@ -567,7 +567,7 @@ async def test_run_control_loop_login_frame_timeout_always_relaunches(
 ):
     """`LoginFrameTimeoutError` (IBC error code 1112) always relaunches,
     unconditionally -- not gated by any config field, unlike `MfaTimeoutError`
-    below (gitea #60)."""
+    below."""
     calls: list[dict | None] = []
 
     async def _fake_run_one_cycle(
@@ -594,7 +594,7 @@ async def test_run_control_loop_relaunches_on_transient_login_error(
 ):
     """`TransientLoginError` (a "Login failed"/"Login Error" dialog, or an
     unlisted Gateway "Connection to server failed" reason) always relaunches
-    with a full fresh login, unconditionally -- gitea #62."""
+    with a full fresh login, unconditionally."""
     calls: list[dict | None] = []
 
     async def _fake_run_one_cycle(
@@ -773,7 +773,7 @@ async def test_apply_declarative_settings_or_log_traceback_only_for_unexpected(
 
 async def test_run_to_completion_survives_repeated_cancellation():
     """A second SIGINT/SIGTERM during `clean_shutdown` must not abort it
-    midway and leave the JVM running (#79). The shutdown still finishes, then
+    midway and leave the JVM running. The shutdown still finishes, then
     the cancellation propagates."""
     finished = asyncio.Event()
 
@@ -803,7 +803,7 @@ async def test_run_one_cycle_cancels_watcher_when_clean_shutdown_raises(
     monkeypatch, sock_path, event_sock_path
 ):
     """The watcher stays up during shutdown (exiting can raise dialogs), but a
-    failing `clean_shutdown` must not leak it (#79). The process has already
+    failing `clean_shutdown` must not leak it. The process has already
     exited, so the cycle goes straight to shutdown."""
     watcher_cancelled = asyncio.Event()
 
@@ -867,7 +867,7 @@ async def test_run_one_cycle_shuts_down_when_diagnostics_watcher_died(
     monkeypatch, sock_path, event_sock_path, caplog
 ):
     """A background task that died with an exception must not abort the
-    `finally` before `clean_shutdown` runs, or the JVM is left running (#97)."""
+    `finally` before `clean_shutdown` runs, or the JVM is left running."""
     shutdown_called = asyncio.Event()
 
     async def forever(*_args, **_kwargs):
@@ -931,7 +931,7 @@ async def _fails_with(exc: BaseException) -> None:
 async def test_wait_for_first_completion_grace_period_applies_to_a_main_task_lost_agent(
     exc,
 ):
-    """F2: a watcher whose command failed because the JVM went away is
+    """A watcher whose command failed because the JVM went away is
     reported before `process_done`; the grace period lets `returncode` land."""
     process = _FakeProcess()
     process_done = asyncio.ensure_future(_delayed_process_exit(process, delay=0.05))
@@ -985,7 +985,7 @@ async def test_wait_for_first_completion_no_grace_for_a_non_transport_failure():
 async def test_run_phase_watching_process_aborts_when_phase_failed_as_agent_died(
     returncode, expected_cause
 ):
-    """F2, login-phase case: `phase` ends with `ProtocolError` ahead of
+    """`phase` ends with `ProtocolError` ahead of
     `process_done`, but the process is gone -- a process exit, not an error."""
     process = _FakeProcess()
     process_done = asyncio.ensure_future(

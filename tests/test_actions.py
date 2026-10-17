@@ -1,7 +1,5 @@
 """Unit tests for actions.py (L7) -- no live Gateway needed, same fake-socket-server
-pattern dispatch.py's own tests use (CLAUDE.md's "Working method": unit tests after
-the layer is validated -- these follow a real live-validation run against a real
-paper Gateway 10.50 instance, not instead of it)."""
+pattern dispatch.py's own tests use."""
 
 from __future__ import annotations
 
@@ -241,15 +239,10 @@ def test_actions_table_contains_the_real_vocabulary_only():
     command yet (Protocol.java's dispatch recognises ping/dump/get_text/set_text/
     set_checkbox/click/navigate_menu/expand_tree/menu_item_exists); wrapping a
     command that doesn't exist would be building ahead of an unvalidated layer.
-    expand_tree joined the real vocabulary 2026-09-05 once
-    WriteOps.selectConfigSection was built and live-validated (settings.py's own
-    docstring has the full story). menu_item_exists joined 2026-09-09 -- built
-    2026-09-06 as a diagnostic-only agent_client primitive, only now exposed at
-    this layer once login.py's TWS main-window detection became its first real
-    caller (ported from IBC's own MainWindowFrameHandler.recogniseWindow). dump
-    joined 2026-09-11, promoted from a direct, unqueued cmd_conn.dump() call in
-    settings.py -- routing it through Dispatcher.send like every other action
-    closed a real serialization/tracing gap."""
+    expand_tree backs settings.py's tree navigation. menu_item_exists backs
+    login.py's TWS main-window detection (ported from IBC's
+    MainWindowFrameHandler.recogniseWindow). dump goes through Dispatcher.send
+    like every other action, so it is serialized and traced."""
     assert set(ACTIONS) == {
         "type_text",
         "click",
@@ -282,7 +275,7 @@ async def test_navigate_menu_sends_path(sock_path, event_sock_path):
 
 
 async def test_navigate_menu_forwards_window_id(sock_path, event_sock_path):
-    """#40: `window_id`, when given, scopes `navigate_menu` to that exact
+    """`window_id`, when given, scopes `navigate_menu` to that exact
     window instead of the agent's global "first displayable frame" search --
     `open_settings_dialog` passes `LoginManager.main_window_id` for this."""
 

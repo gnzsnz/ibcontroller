@@ -1,5 +1,4 @@
-"""Unit tests for agent_client.py -- no live Gateway needed (CLAUDE.md's "Working
-method": unit tests at each layer, once that layer is validated). Command/event
+"""Unit tests for agent_client.py -- no live Gateway needed. Command/event
 connection tests run against a small fake Unix-socket server started in-process, so the
 locking, error-mapping, and parsing logic gets real socket-level coverage without
 depending on the Java agent at all -- the live agent is validated separately, by hand,
@@ -104,7 +103,7 @@ def test_parse_event_message_window_event():
 
 
 def test_parse_event_message_window_event_carries_window_id():
-    """`window_id` (2026-09-06, `EventBridge.java`'s own registry) -- confirms
+    """`window_id` -- confirms
     it parses through when present, matching the real agent's wire shape."""
     msg = parse_event_message(
         {
@@ -215,7 +214,7 @@ async def test_dump_success(sock_path):
 
 
 async def test_dump_parses_text_truncation_fields(sock_path):
-    """Regression test for a real, live-caught crash (2026-09-09): Gateway's own
+    """Regression test: Gateway's own
     File > Gateway Logs > View Logs window renders its whole log file into one
     JTextComponent -- dump()'s untruncated text field produced a response line past
     asyncio's default 64 KiB stream limit, crashing the read loop with a raw
@@ -303,7 +302,7 @@ async def test_dump_with_window_filter(sock_path):
 
 
 async def test_dump_with_window_id_ignores_title_filter_on_the_wire(sock_path):
-    """Regression test for a real, live-caught bug (2026-09-06): a title like
+    """Regression test: a title like
     "IBKR Gateway" can match several simultaneously-open windows at once (the
     persisting login frame, the real main window, a fresh popup); on a live
     account, dumping all of them into one response was large enough to
@@ -434,7 +433,7 @@ async def test_click_omits_window_id_when_not_given(sock_path):
 
 
 async def test_click_includes_window_id_when_given(sock_path):
-    """Regression test for a real, live-caught bug (2026-09-06): scoping the
+    """Regression test: scoping the
     agent's own search to one window is what this field exists for."""
     sock = sock_path
 
@@ -504,7 +503,7 @@ async def test_navigate_menu_missing_clicked_raises_protocol_error(sock_path):
 
 
 async def test_navigate_menu_sends_window_id_when_given(sock_path):
-    """#40: `window_id`, when given, scopes the agent's menu-bar lookup to
+    """`window_id`, when given, scopes the agent's menu-bar lookup to
     that exact window instead of its global "first displayable frame"
     search -- omitted from the payload entirely when `None` (the default),
     matching `expand_tree`'s existing optional-scoping shape."""
@@ -674,7 +673,7 @@ async def test_concurrent_requests_do_not_interleave(sock_path):
     assert call_order == ["slow", "fast"]
 
 
-# --- Failure handling (#86) ----------------------------------------------------------
+# --- Failure handling ----------------------------------------------------------
 #
 # The wire has no request IDs, so a request that fails between the write and a fully
 # parsed line leaves the stream at an unknown position. The connection must refuse

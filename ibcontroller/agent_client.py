@@ -375,7 +375,7 @@ class NavigateMenu(Request[bool]):
 
     `window_id`, if given, resolves directly to that window's own menu bar
     instead of the agent's global "first displayable frame with a menu bar"
-    search (#40); `None` keeps that global search, for callers without a
+    search; `None` keeps that global search, for callers without a
     validated main-window id (e.g. Gateway, whose `login.py` path never
     captures one, see `LoginManager.main_window_id`).
 

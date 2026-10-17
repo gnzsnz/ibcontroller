@@ -1,9 +1,7 @@
 """main.py -- the single-instance runner CLI's `run`/`init` commands are thin wrappers
-around. Covers the two real bugs the plan for this work found (`_load_jar_path` never
-actually checked the jar existed; `labels` was never threaded into
-`run_control_loop`, silently disabling the `{config_dir}/labels.json` override
-mechanism -- CLAUDE.md Open item 11) plus the new config-dir scaffolding this module
-adds to close that gap safely.
+around. Covers `_load_jar_path` checking the jar exists, `labels` being threaded into
+`run_control_loop` (so the `{config_dir}/labels.json` override takes effect), and
+the config-dir scaffolding.
 """
 
 from __future__ import annotations
@@ -125,7 +123,7 @@ async def test_run_async_scaffolds_bundled_ibcontroller_toml_is_inert(
 async def test_run_async_passes_config_and_labels_into_run_control_loop(
     tmp_path, monkeypatch
 ):
-    """Regression test for CLAUDE.md Open item 11: today's `control_loop.
+    """Regression test: `control_loop.
     run_control_loop`'s own default (`labels=None` -> `load_labels()`, no
     `config_dir`) never sees a user's `{config_dir}/labels.json` override.
     `run_async` must load labels *with* `config_dir` and actually pass them through."""

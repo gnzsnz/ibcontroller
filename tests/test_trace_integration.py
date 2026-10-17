@@ -59,7 +59,7 @@ async def test_config_log_dir_reaches_a_real_dispatcher(
 
     async with FakeCommandServer(sock_path, responder):
         async with FakeEventServer(event_sock_path, []):
-            # exactly the wiring launcher.launch_instance uses (2026-09-08):
+            # exactly the wiring launcher.launch_instance uses:
             # configure_trace owns the files, the Dispatcher emits into the
             # instance-scoped loggers
             configure_trace(
@@ -90,7 +90,7 @@ async def test_config_log_dir_reaches_a_real_dispatcher(
 async def test_config_password_never_reaches_trace_file_as_plaintext(
     monkeypatch, sock_path, event_sock_path, tmp_path
 ):
-    """The real incident this project hit (2026-09-05): a plaintext password
+    """The real incident this project hit: a plaintext password
     landed in cmd-paper.jsonl via set_text's own value argument. Runs the exact real
     path -- a real Config's Secret-wrapped password, through a real Dispatcher,
     into a real set_text call -- and asserts the actual bytes on disk."""

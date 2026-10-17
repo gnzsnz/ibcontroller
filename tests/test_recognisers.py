@@ -105,11 +105,10 @@ def test_is_credential_entry_false_when_none_flagged():
 
 
 def test_is_credential_entry_false_for_a_stale_not_showing_credential_field():
-    """The real case this gating exists for: confirmed live (2026-09-05) that
-    Gateway keeps the original login frame alive (not disposed) after a real
-    login completes -- its password field still reports `credential_field`,
-    but `showing=False`. Without gating on `showing`, this would stay
-    permanently True for the rest of the process's life."""
+    """The case this gating exists for: Gateway keeps the original login frame
+    alive (not disposed) after a real login completes -- its password field
+    still reports `credential_field`, but `showing=False`. Without gating on
+    `showing`, this would stay permanently True for the rest of the process's life."""
     components = [_component(credential_field=True, showing=False)]
     assert is_credential_entry(components) is False
 
@@ -120,11 +119,10 @@ def test_dismiss_rule_requires_at_least_one_match_field():
 
 
 def test_declarative_dismiss_recognises_by_text_via_accessible_name():
-    """The real field this data lands in -- confirmed live against the actual dialog,
-    not assumed: `ComponentLookup.describe()`'s `text` field only ever comes from
-    `JTextComponent`, and `JLabel` isn't one, so a label's displayed text never
-    reaches `component.text` at all. It surfaces via `accessible_name` instead
-    (Swing's default `AccessibleJLabel` behavior)."""
+    """The field this data lands in: `ComponentLookup.describe()`'s `text` field
+    only ever comes from `JTextComponent`, and `JLabel` isn't one, so a
+    label's displayed text never reaches `component.text` at all. It surfaces
+    via `accessible_name` instead (Swing's default `AccessibleJLabel` behavior)."""
     recognizer = DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)
     event = _event("IBKR Gateway")
     matching = [
@@ -235,8 +233,7 @@ async def test_declarative_dismiss_handle_clicks_configured_button(
 async def test_declarative_dismiss_handle_scopes_click_to_the_recognised_window(
     sock_path, event_sock_path
 ):
-    """Regression test for a real, live-caught bug (2026-09-06, reproduced twice
-    on a genuinely fresh settings directory): the old unscoped click landed on
+    """Regression test: an unscoped click lands on
     the wrong of two simultaneously-open, identically-labeled "OK" buttons (this
     dialog's own, versus the Global Configuration dialog's, which had just been
     asked to close but hadn't finished disposing yet). `handle` must pass the
@@ -266,7 +263,7 @@ async def test_declarative_dismiss_handle_scopes_click_to_the_recognised_window(
 async def test_declarative_dismiss_handle_logs_with_rule_name(
     sock_path, event_sock_path, tmp_path
 ):
-    """Integration check that the logging (2026-09-05) actually reaches a real
+    """Integration check that the logging actually reaches a real
     file, not just that the call site exists -- same file-based pattern as
     test_logging_setup.py (caplog can't see it: configure_logging disables
     propagation to the root logger on purpose)."""
@@ -282,7 +279,7 @@ async def test_declarative_dismiss_handle_logs_with_rule_name(
         finally:
             await dispatcher.stop()
 
-    # Records reach the file via configure_logging's listener thread (2026-09-08);
+    # Records reach the file via configure_logging's listener thread;
     # draining it is what guarantees they've been written before we read.
     stop_logging()
     log_text = (tmp_path / "test.log").read_text()
@@ -296,7 +293,7 @@ async def test_login_failed_recognises_by_title():
 
 
 async def test_login_failed_handle_dismisses_then_raises(sock_path, event_sock_path):
-    """Gitea #62: "Login failed" is IB's own wording for a server disconnect,
+    """ "Login failed" is IB's own wording for a server disconnect,
     not rejected credentials -- so it's `TransientLoginError` (unbounded
     in-process relaunch), not `CredentialsRejectedError`."""
     async with (
@@ -956,7 +953,7 @@ async def test_handle_window_opened_dispatches_when_no_credential_field(
 async def test_handle_window_opened_scopes_dump_to_the_window_id(
     sock_path, event_sock_path
 ):
-    """Regression test for a real, live-caught bug (2026-09-06): dumping by
+    """Regression test: dumping by
     title alone can aggregate several simultaneously-open windows sharing
     that title (the persisting login frame, the real main window, a fresh
     popup) into one response -- large enough on a live account to corrupt
@@ -989,7 +986,7 @@ async def test_handle_window_opened_scopes_dump_to_the_window_id(
 async def test_handle_window_opened_treats_a_vanished_window_as_unhandled(
     sock_path, event_sock_path
 ):
-    """The consistent-with-writes choice (2026-09-06, per the user's own call):
+    """The consistent-with-writes choice:
     `dump` raises `WindowGoneError` the same way the write commands do when
     their `window_id` no longer resolves (the window closed between
     recognition and this command arriving -- a real, expected race). Caught
@@ -1024,7 +1021,7 @@ async def test_handle_window_opened_treats_a_vanished_window_as_unhandled(
 async def test_watch_for_unprompted_windows_dispatches_a_window_that_arrives_late(
     sock_path, event_sock_path
 ):
-    """The real scenario this function exists for (2026-09-05): a pop-up that
+    """The real scenario this function exists for: a pop-up that
     opens *after* Login's own active sequence has already finished watching.
     Confirms the background watcher still catches and dismisses it."""
     calls = []
@@ -1072,7 +1069,7 @@ async def test_watch_for_unprompted_windows_dispatches_a_window_that_arrives_lat
 async def test_watch_for_unprompted_windows_survives_a_failed_action(
     sock_path, event_sock_path, caplog, error
 ):
-    """L5-dialogs F1: a click that fails on one window (closed first, stale
+    """A click that fails on one window (closed first, stale
     label) is logged; the next window is still handled."""
     clicks = []
 
@@ -1125,7 +1122,7 @@ async def test_watch_for_unprompted_windows_propagates_a_login_outcome(
     sock_path, event_sock_path
 ):
     """The boundary catches agent errors only: a login-outcome signal still
-    ends the watcher (L6 relies on it, #62)."""
+    ends the watcher (L6 relies on it)."""
 
     def responder(request):
         if request.get("cmd") == "dump":
@@ -1251,7 +1248,7 @@ def test_too_many_failed_login_attempts_recognises_by_text():
 async def test_too_many_failed_login_attempts_disabled_raises_login_failed(
     sock_path, event_sock_path
 ):
-    """Gitea #62: this state won't resolve itself, so it must stop the
+    """This state won't resolve itself, so it must stop the
     container (77), not wait out `mfa_timeout` and exit 69 (retry)."""
     calls: list[str] = []
 

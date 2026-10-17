@@ -26,7 +26,7 @@ background task, so a real dialog occurrence is never handled twice at once.
 
 1. The 2FA close handling, internal to this module (`_after_mfa_closed`).
    The wait for the 2FA dialog to close has no cap (IB closes an unanswered
-   dialog by itself, after 200 s to 352 s observed on Gateway 10.51); elapsed time since
+   dialog by itself, after 200 s or more); elapsed time since
    login started is then compared with `mfa_timeout` (IB's own limit). Closed
    before it, with `relogin_after_mfa_timeout` enabled: arms the shorter
    `mfa_exit_interval` watchdog and raises `MfaTimeoutError` if login still
@@ -53,10 +53,6 @@ the splash/"Authenticating..." window's own `WINDOW_CLOSED` event instead,
 the one signal that's correct in both trading modes without needing to know
 which one it is. On live-mode TWS, `_poll_tws_2fa_frame` also watches the login
 frame for the 2FA heading (no window event announces it) to set `MFA_IN_PROGRESS`.
-
-**Not live-validated against real IBKR servers:** "too many failed login
-attempts" carries real account-level risk for no safe benefit -- built and
-unit-tested against synthetic timing/dialogs instead.
 """
 
 from __future__ import annotations
@@ -110,7 +106,7 @@ class LoginError(TransientError):
 class CredentialsRejectedError(IBControllerError):
     """A real credential/account rejection (wrong password, wrong username for
     the trading mode, a known non-brokerage reason). Exits 77: no retry, because
-    of account-lockout risk (gitea #60/#62). Not raised for a bug in a
+    of account-lockout risk. Not raised for a bug in a
     recogniser, which propagates as whatever exception it actually is."""
 
     exit_code: ClassVar[int] = 77  # EX_NOPERM
@@ -138,7 +134,7 @@ class TransientLoginError(TransientError):
     server failed" reason not in `known_reasons` -- e.g. a stale restart token).
     `run_control_loop` catches it and relaunches (bounded by `restart_cap`) with a
     full fresh login, the same shape as a scheduled `ShutdownCause.COLD_RESTART`,
-    matching IBC's unconditional cold-restart for these dialogs (gitea #62).
+    matching IBC's unconditional cold-restart for these dialogs.
     Never reaches `cli.py` under normal operation."""
 
 
@@ -421,7 +417,7 @@ class LoginManager:
         `mfa_exit_interval` watchdog (see `_after_mfa_closed`) -- it is never
         itself a terminal signal. The close alone triggers that handling: on
         TWS the login frame turns into the 2FA frame in place, so a
-        `window_opened` for it may never arrive (observed live on 10.51),
+        `window_opened` for it may never arrive,
         while its `window_closed` (with a null `window_id`) does.
 
         Deliberately does *not* fall back to the shared recogniser registry
@@ -487,8 +483,8 @@ class LoginManager:
 
                 if window.window_id is None:
                     # No window_id to scope menu_item_exists to (real
-                    # window_opened events always carry one -- confirmed live
-                    # -- but WindowInfo's own type doesn't guarantee it); can't
+                    # window_opened events always carry one, but WindowInfo's own
+                    # type doesn't guarantee it); can't
                     # be the main window without one, keep looping.
                     continue
 
@@ -502,7 +498,7 @@ class LoginManager:
                     continue  # short-lived intermediate window closed already
                 if exists:
                     self.state = LoginState.LOGGED_IN
-                    # Keep the window_id this same check just validated (#40);
+                    # Keep the window_id this same check just validated;
                     # None means "no scoping available, fall back".
                     self.main_window_id = window.window_id
                     logger.info("IBController > login completed")

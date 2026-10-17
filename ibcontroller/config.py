@@ -161,7 +161,7 @@ def _expand_user(raw: object) -> str:
     """Expands `~` regardless of source (factory default, TOML file, env var, CLI) --
     without this, a bare `Path(...)` downstream treats a literal `~` as a relative path
     component and creates a `~` directory instead of expanding to the home directory
-    (gitea #57). Single point of truth for every path-typed Config field, so no
+    Single point of truth for every path-typed Config field, so no
     consumption site needs its own `.expanduser()` call."""
     return str(Path(str(raw)).expanduser())
 
@@ -177,8 +177,7 @@ def _default_time_zone() -> str | None:
     as a fallback for a deployment that sets a real system timezone but not
     `TZ` itself. `None` (neither resolves) is a safe no-op: the `time_zone`
     Config field's IBC_TIME_ZONE env var can still override either way, and
-    an unresolved value simply leaves jts.ini's TimeZone key untouched
-    (gitea #68)."""
+    an unresolved value simply leaves jts.ini's TimeZone key untouched."""
     tz = os.environ.get("TZ")
     if tz:
         return tz
@@ -305,8 +304,8 @@ class Config:
     # _detect_tws_version), channel-aware via tws_channel below.
     tws_version: str | None = None
     # Filters auto-detection to installs carrying this channel (see
-    # launcher._detect_tws_version); "stable"/"latest" as directly observed on real
-    # installs (not a strict enum). Defaults to "stable", the safer pick when several
+    # launcher._detect_tws_version); "stable"/"latest" are the known
+    # values (not a strict enum). Defaults to "stable", the safer pick when several
     # channels are installed side by side.
     tws_channel: str = "stable"
     tws_path: str | None = ts.option(default=None, converter=_optional_path_converter)
@@ -327,7 +326,7 @@ class Config:
     existing_session_action: ExistingSessionAction = ExistingSessionAction.MANUAL
 
     # jts.ini's TimeZone (IANA name, e.g. "Europe/Zurich") -- written by
-    # launcher._ensure_jts_ini. Auto-detected (gitea #68) so a Docker deployment
+    # launcher._ensure_jts_ini. Auto-detected so a Docker deployment
     # needs no setup: the container's own TZ env var, then /etc/localtime's
     # zoneinfo symlink target; None (unresolved) leaves the jts.ini key untouched.
     time_zone: str | None = ts.option(factory=_default_time_zone)
@@ -336,7 +335,7 @@ class Config:
     # IBC: LoginDialogDisplayTimeout
     login_dialog_display_timeout: float = 60.0
     # IBC: SecondFactorAuthenticationTimeout. IB's own limit for an unanswered 2FA
-    # dialog (it closed it after 200 s and 352 s on Gateway 10.51); only classifies
+    # dialog; only classifies
     # the dialog's close.
     mfa_timeout: float = 180.0
     # IBC: ReloginAfterSecondFactorAuthenticationTimeout
@@ -390,23 +389,18 @@ class Config:
         factory=lambda: str(resolve_app_dirs()[1]), converter=_expand_user
     )
     # Logging level for ibcontroller's own log file (not the raw wire trace).
-    # Was previously unannotated (`log_level = logging.INFO`), which meant attrs
-    # never turned it into a real field at all -- not configurable, silently fixed
-    # at INFO, confirmed live via attrs.fields(Config).
     log_level: int = ts.option(default=logging.INFO, converter=_log_level_converter)
     # Where ibcontroller's own log (configure_logging) and Gateway/TWS's raw console
     # output (configure_gateway_stdout) go -- "std" (console only) or "file" (only
     # gateway-{instance}.log/ibcontroller-{instance}.log under log_dir), never both.
-    # Default is "std", not "file": this project's live-testing workflow relies on
-    # seeing logger output in the terminal during real login/restart sessions, and
-    # "std" is also what a Docker deployment wants with zero configuration (`docker
-    # logs` captures stdout/stderr, not files written inside the container). "file"
-    # is the explicit opt-in for a headless/service deployment that wants a
-    # persistent log file instead. Does not affect configure_trace's NDJSON wire
-    # trace, which stays file-only regardless (gitea #26).
+    # Default is "std": logger output stays visible in the terminal, and a Docker
+    # deployment needs no configuration (`docker logs` captures stdout/stderr, not
+    # files written inside the container). "file" is the opt-in for a headless/service
+    # deployment that wants a persistent log file. Does not affect configure_trace's
+    # NDJSON wire trace, which stays file-only regardless.
     log_sink: LogSink = LogSink.STD
-    # Rotation (gitea #32) -- only respected when log_sink="file"; log_max_bytes=0
-    # disables rotation (unbounded files, the old behaviour). Defaults (10 MiB x 5
+    # Rotation -- only respected when log_sink="file"; log_max_bytes=0
+    # disables rotation (unbounded files). Defaults (10 MiB x 5
     # backups) apply identically to ibcontroller's own log/trace files and, via
     # launcher.py's -D props, to the Java agent's log file.
     log_max_bytes: int = ts.option(default=10_485_760, converter=int)
@@ -425,7 +419,7 @@ class Config:
 def _format_config(config: Config) -> list[str]:
     """One `key=value` line per `Config` field, sorted by name -- credentials already
     masked (`Secret.__str__` returns `'*******'` unconditionally, even for `None`), for
-    startup/diagnostic display (gitea #45)."""
+    startup/diagnostic display."""
     return [
         f"{f.name}={getattr(config, f.name)!s}"
         for f in sorted(attrs.fields(type(config)), key=lambda f: f.name)
@@ -469,10 +463,9 @@ def load_config(
     else:
         _reject_credentials_in_file(_raw_toml, _config_file)
 
-    # section=None -- the TOML file is flat, no [section] headers (see
-    # config_old.py's docstring). TomlFormat("") looks up settings[""] instead of
-    # returning the top-level dict, so it silently discards the whole file --
-    # confirmed live.
+    # section=None -- the TOML file is flat, no [section] headers. TomlFormat("")
+    # looks up settings[""] instead of returning the top-level dict, so it silently
+    # discards the whole file.
     CONF_FORMATS = {"*.toml": TomlFormat(None)}
     # A caller-supplied log_dir (platform dirs in production, a tmp dir in tests) is
     # a low-priority DEFAULT -- first in the loader list, so every later loader wins

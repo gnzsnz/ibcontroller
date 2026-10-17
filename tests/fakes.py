@@ -90,9 +90,8 @@ class FakeProcess:
 
     def terminate(self) -> None:
         # Matches real asyncio.subprocess.Process: signalling an OS PID that
-        # no longer exists raises ProcessLookupError -- this is exactly the
-        # real, live-caught bug clean_shutdown's "already exited" branch had
-        # to stop hitting (2026-09-06).
+        # no longer exists raises ProcessLookupError, which clean_shutdown's
+        # "already exited" branch must not hit.
         if self.returncode is not None:
             raise ProcessLookupError()
         self.terminated = True

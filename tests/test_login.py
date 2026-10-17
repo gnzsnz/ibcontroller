@@ -6,10 +6,9 @@ pattern for this -- avoids any race with a fake event *socket* server that would
 otherwise dump every scripted message at once, well before a later step in the
 sequence has its own listener connected.
 
-**`LoginManager` no longer takes a registry at all (2026-09-05, a real bug fixed,
-not a design choice from the start)** -- reacting to existing-session/login-failed/
-non-brokerage dialogs is entirely `recognisers.watch_for_unprompted_windows`'s job
-now, run as a separate concurrent task. The tests for those scenarios run both
+**`LoginManager` takes no registry** -- reacting to existing-session/login-failed/
+non-brokerage dialogs is entirely `recognisers.watch_for_unprompted_windows`'s job,
+run as a separate concurrent task. The tests for those scenarios run both
 `LoginManager.run()` and the watcher together, matching how they're actually meant
 to be wired -- see `test_login_failed_is_raised_by_the_watcher_not_by_run` for why
 `CredentialsRejectedError` no longer propagates from `run()` itself."""
@@ -101,9 +100,9 @@ def _window_event(
 
 # Gateway's real login-completion signal (`login.py`'s `_wait_for_outcome_gateway`,
 # ported from IBC's `SplashFrameHandler`) -- a `window_closed` event whose title has
-# already relabelled to this by the time it fires, confirmed live 2026-09-06/07.
+# already relabelled to this by the time it fires.
 # The class is arbitrary (matching is by title only, same as IBC's own
-# `titleContains` check) -- this mirrors the real one seen in live/paper testing.
+# `titleContains` check) -- this mirrors the real one.
 _SPLASH_CLASS = "twslaunch.feature.welcome.C"
 
 
@@ -120,7 +119,7 @@ def _tracking_responder(
     """`dump` needs a `components` key (empty is fine -- these tests recognise
     existing-session/login-failed by event title, not component content);
     `menu_item_exists` needs `exists`/`enabled` keys (`login.py`'s TWS
-    main-window detection, 2026-09-09 -- default `True` matches every
+    main-window detection -- default `True` matches every
     existing TWS test's own fed "main window" event); everything else just
     needs `{"ok": True}`. Commands in `not_found_cmds` answer `not_found`."""
 
@@ -189,8 +188,7 @@ async def test_happy_path_fills_credentials_and_reaches_logged_in(
 async def test_fill_credentials_scopes_every_action_to_the_login_frame(
     sock_path, event_sock_path, tmp_path
 ):
-    """Regression test for a known, previously-worked-around gap (Build plan
-    step 4/5): the login frame's FIX Login and IB API sections both carry
+    """Regression test: the login frame's FIX Login and IB API sections both carry
     Username/Password pairs with identical accessible names at once. Every
     click/set_text `_fill_credentials` sends should now be scoped to the
     login frame's own `window_id`, captured from the event that recognised
@@ -231,10 +229,10 @@ async def test_fill_credentials_scopes_every_action_to_the_login_frame(
 async def test_restart_expected_true_skips_fill_even_with_no_marker_file(
     sock_path, event_sock_path, tmp_path
 ):
-    """2026-09-07: Gateway can delete the marker quickly as part of a
+    """Gateway can delete the marker quickly as part of a
     successful silent relogin, so a check done *after* relaunch can find it
     already gone. `control_loop.py` passes the answer it had before
-    relaunching instead; LoginManager never checks the disk (L1 F8)."""
+    relaunching instead; LoginManager never checks the disk."""
     calls: list[dict] = []
     responder = _tracking_responder(calls)
 
@@ -351,7 +349,7 @@ async def test_login_frame_never_appears_raises_login_frame_timeout_error(
 ):
     """`LoginFrameTimeoutError`, not the generic `LoginError` -- matches IBC's
     own error code 1112 and is what `control_loop.run_control_loop` matches
-    on to always relaunch (gitea #60), regardless of any config."""
+    on to always relaunch, regardless of any config."""
     async with (
         FakeCommandServer(sock_path, lambda _req: {"ok": True}),
         FakeEventServer(event_sock_path, []),
@@ -371,7 +369,7 @@ async def test_login_frame_never_appears_raises_login_frame_timeout_error(
 async def test_existing_session_handled_by_watcher_while_login_still_waits(
     sock_path, event_sock_path, tmp_path
 ):
-    """Confirms the real, corrected wiring: `LoginManager.run()`'s own filter
+    """`LoginManager.run()`'s own filter
     never captures the "Existing session detected" event at all (it just keeps
     waiting past it) -- the separate, concurrently-running watcher handles it,
     and `run()` only resolves once the main window it's actually watching for
@@ -422,8 +420,8 @@ async def test_existing_session_handled_by_watcher_while_login_still_waits(
 async def test_login_failed_is_raised_by_the_watcher_not_by_run(
     sock_path, event_sock_path, tmp_path
 ):
-    """The real behavioural consequence of the fix: `TransientLoginError`
-    (gitea #62 -- "Login failed" is IB's wording for a server disconnect, not
+    """`TransientLoginError` ("Login failed" is IB's wording for a server
+    disconnect, not
     rejected credentials) never propagates from `LoginManager.run()` (its own
     filter never captures "Login failed" at all) -- it propagates from the
     separate watcher task instead, since that's the only thing left
@@ -461,15 +459,15 @@ async def test_login_failed_is_raised_by_the_watcher_not_by_run(
             await dispatcher.stop()
 
 
-# --- login/2FA timeout + retry (2026-09-05) ----------------------------------
+# --- login/2FA timeout + retry ----------------------------------
 
 
 async def test_run_uses_config_sourced_timeouts_when_not_overridden(
     sock_path, event_sock_path, tmp_path
 ):
     """`login_timeout` defaults from `Config.login_dialog_display_timeout`
-    (IBC's own real setting) when `run()` isn't given an explicit value --
-    confirmed here by NOT passing the argument."""
+    (IBC's own setting) when `run()` isn't given an explicit value
+    (the test passes no argument)."""
     calls: list[dict] = []
     responder = _tracking_responder(calls)
     async with (
@@ -553,7 +551,7 @@ async def test_gateway_mfa_watchdog_raises_when_main_window_never_appears(
 ):
     """Ported from IBC's `restartAfterTime` -- IBC exits/restarts the JVM if
     login hasn't completed within `mfa_exit_interval` of 2FA closing. Raises
-    `MfaTimeoutError`, distinct from the generic `LoginError` (gitea #60) --
+    `MfaTimeoutError`, distinct from the generic `LoginError` --
     `Config.mfa_timeout_action` decides whether `control_loop.run_control_loop`
     lets this propagate (`exit`) or relaunches on it (`restart`)."""
     responder = _tracking_responder([])
@@ -692,10 +690,9 @@ async def test_mfa_late_close_relogin_disabled_does_nothing(
             # IBC exactly) -- `task` may already be done by this point, so
             # `cancel()` can be a no-op. `contextlib.suppress`, not
             # `pytest.raises(asyncio.CancelledError)`: the latter hangs when
-            # the awaited task did *not* raise CancelledError (a real,
-            # empirically-confirmed pytest/asyncio interaction, not a
-            # production bug -- found live while building this test, not
-            # assumed). `pytest.raises` around `await task` is only safe when
+            # the awaited task did *not* raise CancelledError (a
+            # pytest/asyncio interaction, not a production bug).
+            # `pytest.raises` around `await task` is only safe when
             # the task is genuinely still running and cancellation is certain
             # to raise, as in this file's other cancel-then-await tests.
             task.cancel()
@@ -812,7 +809,7 @@ async def test_schedule_retry_fires_a_background_task(
 
 
 async def test_run_cancels_pending_retry_when_it_ends(sock_path, event_sock_path):
-    """A retry still sleeping its cooldown must not outlive `run()` (#104)."""
+    """A retry still sleeping its cooldown must not outlive `run()`."""
     async with (
         FakeCommandServer(sock_path, _tracking_responder([])),
         FakeEventServer(event_sock_path, []),
@@ -933,14 +930,11 @@ async def test_too_many_failed_attempts_dialog_triggers_retry_via_watcher(
     assert dismiss_calls
 
 
-# --- TWS path (2026-09-07) ---------------------------------------------------
+# --- TWS path ---------------------------------------------------
 #
-# `_wait_for_outcome_tws` is today's original logic, completely untouched by the
-# Gateway fix above -- but until now it was only ever exercised implicitly,
-# since every test in this file defaulted to `program=Program.GATEWAY`. Still not
-# validated against a real TWS install (CLAUDE.md's own disclosed gap), but at
-# least the code path itself is now covered: main-window-open (same title as
-# the login frame, different class) is the terminal signal, exactly as before.
+# `_wait_for_outcome_tws`: main-window-open (same title as the login frame,
+# different class) is the terminal signal. Tests default to
+# `program=Program.GATEWAY`, so these select `Program.TWS` explicitly.
 
 _TWS_LOGIN_CLASS = "twslaunch.tws.LoginFrame"
 _TWS_MAIN_CLASS = "twslaunch.tws.MainFrame"
@@ -992,10 +986,9 @@ async def test_tws_happy_path_fills_credentials_and_reaches_logged_in(
 async def test_tws_skips_intermediate_window_then_matches_main_window_by_menu_item(
     sock_path, event_sock_path, tmp_path
 ):
-    """Real bug, live-caught 2026-09-09 against an actual TWS install: the old
-    predicate matched the main window by *title*, mirroring Gateway's "same
-    title as the login frame" heuristic -- wrong for TWS, whose real main
-    window title is account-specific ("DU6351764 Interactive Brokers
+    """Matching the TWS main window by *title* (Gateway's "same title as the
+    login frame" heuristic) is wrong: its real main window title is
+    account-specific ("DU6351764 Interactive Brokers
     (Simulated Trading)"), and a real run also opens an intermediate window
     ("Downloading settings from server") in between. Reproduces both: an
     intermediate window carrying no File/Lock Application menu item is
@@ -1111,7 +1104,7 @@ async def test_run_raises_when_scheduled_retry_fails(
     sock_path, event_sock_path, program, login_event
 ):
     """A retry whose click hits a closed frame ends `run()` with that error
-    instead of leaving the outcome wait pending (F13)."""
+    instead of leaving the outcome wait pending."""
     clicks = 0
 
     def responder(request):
@@ -1152,7 +1145,7 @@ async def test_outcome_wait_has_no_overall_deadline(
     sock_path, event_sock_path, program, login_event
 ):
     """No outcome event ever arrives (e.g. no network): `run()` stays pending
-    past `mfa_timeout` instead of raising, as IBC does (#104)."""
+    past `mfa_timeout` instead of raising, as IBC does."""
     async with (
         FakeCommandServer(sock_path, _tracking_responder([])),
         FakeEventServer(event_sock_path, []),
@@ -1175,7 +1168,7 @@ async def test_outcome_wait_has_no_overall_deadline(
 async def test_gateway_unanswered_2fa_closing_after_the_deadline_relogs_in(
     sock_path, event_sock_path, monkeypatch
 ):
-    """#61: IB closes an unanswered 2FA dialog after the login deadline. The close
+    """IB closes an unanswered 2FA dialog after the login deadline. The close
     wait is uncapped, so the late branch runs through the real wait and, with
     relogin on, re-submits the credentials and reaches `LOGGED_IN`."""
     monkeypatch.setattr("ibcontroller.login._IBC_RELOGIN_DELAY_SECONDS", 0.01)
@@ -1296,7 +1289,7 @@ async def _late_close_run(
 async def test_tws_late_2fa_close_without_login_form_does_not_relogin(
     sock_path, event_sock_path, monkeypatch
 ):
-    """The 2FA close is reported while the frame still shows 2FA (live TWS, #61):
+    """The 2FA close is reported while the frame still shows 2FA :
     no credentials are refilled and the wait continues."""
     calls: list[dict] = []
     responder = _tracking_responder(calls, not_found_cmds=frozenset({"get_text"}))

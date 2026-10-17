@@ -17,17 +17,16 @@ sync means console output can't be lost in a dying process. `stop_logging()`
 drains and joins the listener threads; call it at the final shutdown path
 (control_loop) and in any test that needs to read a file it wrote.
 
-**`sink` ("std" or "file") is exclusive, not additive (gitea #26).** Both
+**`sink` ("std" or "file") is exclusive, not additive.** Both
 `configure_logging` and `configure_gateway_stdout` take a `sink` parameter:
 `"std"` attaches only a console `StreamHandler`, `"file"` attaches only the
 queued file handler -- never both. This exists for Docker deployments, where
 output belongs on stdout/stderr (`docker logs`) rather than inside the
-container's filesystem; `configure_gateway_stdout` in particular used to be
-file-only unconditionally, meaning Gateway/TWS's own log lines were invisible
-outside a file no `docker logs` call would ever show. `configure_trace`'s
-NDJSON wire trace is deliberately untouched by this -- it stays file-only
-regardless of `sink`, since it's meant to be tailed as two per-instance files,
-not mixed into a formatted stdout stream.
+container's filesystem; `configure_gateway_stdout` in particular would
+otherwise write Gateway/TWS's own log lines only to a file that
+`docker logs` never shows. `configure_trace`'s NDJSON wire trace is untouched
+by this -- it stays file-only regardless of `sink`, since it's meant to be
+tailed as two per-instance files, not mixed into a formatted stdout stream.
 
 **Sanitization is a separate concern, already solved elsewhere, not this module's
 job.** `secret.py`'s `Secret` protects a value at its own origin (`config.py`'s
@@ -179,8 +178,7 @@ def configure_logging(
     accumulating them (previous "app" listeners are stopped first).
 
     **`filename` exists for the instance-isolation design principle.**
-    All of ibcontroller's files live flat in one shared `log_dir` (2026-09-08:
-    the old per-instance `log_dir/{instance}` subdirectory was removed), so two
+    All of ibcontroller's files live flat in one shared `log_dir`, so two
     instances never collide because every filename carries the instance name --
     `launcher.py`'s `launch_instance` passes
     `filename=f"ibcontroller-{instance}.log"`, keeping the file self-identifying
@@ -240,10 +238,9 @@ def configure_trace(
     is ever emitted (and no files created). When enabled, each stream gets its
     own `FileHandler` (`cmd-{instance}.jsonl`/`events-{instance}.jsonl` under
     `trace_dir`, created here) with a message-only formatter, behind its own
-    QueueHandler/QueueListener pair -- file open is `"w"` (truncate on start,
-    2026-09-05 per the user's own steer: a trace file only makes sense for the
-    current session, stale lines from long-dead instances must not survive a
-    relaunch).
+    QueueHandler/QueueListener pair -- file open is `"w"` (truncate on start:
+    a trace file only makes sense for the current session, stale lines from
+    long-dead instances must not survive a relaunch).
 
     Safe to call more than once for the same instance -- previous listeners for
     that instance are stopped first. Reconfiguring a different instance leaves

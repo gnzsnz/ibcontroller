@@ -1,4 +1,4 @@
-"""errors.py -- the exit-code contract (gitea #60) read off the exception hierarchy."""
+"""errors.py -- the exit-code contract read off the exception hierarchy."""
 
 from __future__ import annotations
 

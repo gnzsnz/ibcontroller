@@ -256,7 +256,7 @@ async def test_sweep_settings_tree_dumps_each_path_and_reports_missing_ones(
 async def test_watch_for_diagnostics_survives_a_failed_dump(
     sock_path, event_sock_path, caplog
 ):
-    """L6 F6: a dump failing with an agent error is logged; the next window
+    """A dump failing with an agent error is logged; the next window
     is still dumped."""
     dumps = []
 

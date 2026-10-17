@@ -78,7 +78,7 @@ def test_run_without_config_auto_scaffolds_then_fails_clearly(tmp_path, monkeypa
 def test_run_shows_general_hint_not_credentials_hint_for_other_config_errors(
     tmp_path, monkeypatch
 ):
-    """Gitea #63: the credentials hint must only show up for a real
+    """The credentials hint must only show up for a real
     missing-credentials failure, not every `ConfigError` (e.g. a bad
     `trading_mode` value, credentials fine)."""
     app_dir = tmp_path / "app"
@@ -129,7 +129,7 @@ def test_run_reports_shutdown_cause_on_success(tmp_path, monkeypatch):
 def test_run_exit_code_matches_shutdown_cause_contract(
     tmp_path, monkeypatch, cause, expected_exit_code
 ):
-    """The exit-code contract agreed in gitea #60 -- a supervisor (Docker
+    """The exit-code contract: a supervisor (Docker
     restart policy, systemd) tells a clean stop from a real failure apart by
     exit code alone, not by the `stopped: <CAUSE>` line."""
     app_dir = tmp_path / "app"
@@ -157,7 +157,7 @@ def test_run_exit_code_matches_shutdown_cause_contract(
         (CredentialsRejectedError("bad credentials"), 77),  # EX_NOPERM
         (MfaTimeoutError("mfa_exit_interval watchdog fired"), 75),  # EX_TEMPFAIL
         (AgentClientError("socket closed"), 69),  # EX_UNAVAILABLE
-        (LoginError("login stalled"), 69),  # EX_UNAVAILABLE, gitea #60 gap 3
+        (LoginError("login stalled"), 69),  # EX_UNAVAILABLE
     ],
 )
 def test_run_exit_code_matches_exception_contract(
@@ -292,7 +292,7 @@ def test_version_prints_something():
 
 
 def test_run_labels_error_exits_78_with_labels_hint(tmp_path, monkeypatch):
-    """Gitea #93: a malformed `labels.json` is a config error pointing at
+    """A malformed `labels.json` is a config error pointing at
     `labels.json`, not at `ibcontroller.toml`."""
     app_dir = tmp_path / "app"
     monkeypatch.setenv("IBC_APP_DIR", str(app_dir))
@@ -313,7 +313,7 @@ def test_run_labels_error_exits_78_with_labels_hint(tmp_path, monkeypatch):
 
 
 def test_run_launcher_error_exits_78_without_config_hint(tmp_path, monkeypatch):
-    """Gitea #110: a launcher error is not a config-file problem, so no
+    """A launcher error is not a config-file problem, so no
     `ibcontroller.toml` / `ibcontroller init` hint."""
     app_dir = tmp_path / "app"
     monkeypatch.setenv("IBC_APP_DIR", str(app_dir))

@@ -240,7 +240,7 @@ def _ensure_jts_ini(
     Gateway shows a login form with a structure this project doesn't expect
     and can't find the trading mode selector in.
 
-    `time_zone` (`Config.time_zone`, gitea #68) is written as `TimeZone`
+    `time_zone` (`Config.time_zone`) is written as `TimeZone`
     under `[Logon]` only when resolved. Whether it overwrites an existing
     line depends on where the value came from: if it matches what
     `_default_time_zone` would auto-detect right now, it's treated as a
@@ -703,7 +703,7 @@ def build_launch_plan(
 
     vm_options.extend(_read_i4j_vmoptions(install4j_dir))
 
-    # Agent-side logging (java.util.logging, AgentMain.configureLogging, 2026-09-08):
+    # Agent-side logging (java.util.logging, AgentMain.configureLogging):
     # its own per-instance file under the same shared log dir Python uses, so the
     # streams (ibcontroller-{instance}.log / gateway-{instance}.log / this file)
     # never share a file.
@@ -986,11 +986,9 @@ async def launch_instance(
     process = await asyncio.create_subprocess_exec(
         *plan.command,
         cwd=plan.program_path,
-        # Matches the real native install4j launcher (its classpath/JRE paths
-        # are relative to program_path, e.g. "./jars/...", confirmed via the
-        # installed .app's i4jlauncher.config) -- without this, relative paths
-        # install4j itself writes (e.g. restarter.log) land wherever
-        # ibcontroller was invoked from instead.
+        # Matches the native install4j launcher, whose classpath/JRE paths are relative
+        # to program_path (e.g. "./jars/..."); without this, relative paths install4j
+        # itself writes (e.g. restarter.log) land in the invoking directory.
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         limit=_STDOUT_LINE_LIMIT,

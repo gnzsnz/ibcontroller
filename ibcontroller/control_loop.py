@@ -22,7 +22,7 @@ return_when=FIRST_COMPLETED)`), all converging on one exit path:
 - **PROCESS_CLOSED** / **PROCESS_EXITED**: `launched.process.wait()` returns
   -- `PROCESS_CLOSED` for returncode 0 (Gateway/TWS chose to exit: a manual
   File>Close, auto-logoff), `PROCESS_EXITED` otherwise (crash, kill). Either
-  can be a scheduled daily restart (confirmed live: it kills the whole JVM,
+  can be a scheduled daily restart (it kills the whole JVM,
   not an in-place UI restart), decided by the `autorestart` marker. Raced
   against every phase of the cycle, not just the post-login `READY` wait, so
   a process dying during login or settings application is classified the
@@ -259,7 +259,7 @@ async def run_control_loop(
     "Restart in progress" window with a clean exit and no marker on TWS is a
     File > Logout: relaunch with a full fresh login (`restart_hash=None`).
 
-    More cases relaunch (IBC parity, see #60): `LoginFrameTimeoutError` (the login
+    More cases relaunch (IBC parity): `LoginFrameTimeoutError` (the login
     frame itself never appeared -- IBC error code 1112, always relaunched, not
     gated by any config) keeps the current `restart_hash`, matching
     `ibcstart.sh`'s no-op branch for 1112, so a frame timeout after a scheduled
@@ -269,7 +269,7 @@ async def run_control_loop(
     `EXIT`, the default, re-raises instead so the caller sees it.
     `recognisers.TransientLoginError` (a "Login failed"/"Login Error"
     dialog, or a Gateway "Connection to server failed" reason that isn't a
-    known credential/account one -- gitea #62) always relaunches with a full
+    known credential/account one) always relaunches with a full
     fresh login, matching IBC's own unconditional cold-restart for these
     dialogs.
 
@@ -413,11 +413,8 @@ async def _wait_for_first_completion(
     before the OS reaps the process and asyncio's child watcher sets
     `process.returncode` -- so on a real process exit, a dispatcher task
     noticing the dropped connection can be the one `asyncio.wait` reports as
-    first-completed, moments ahead of `process_done` itself (confirmed live,
-    2026-09-14: a real scheduled restart was misclassified `CONNECTION_LOST`
-    this way even after the Linux native-relaunch path was independently
-    closed off, i.e. the process really was exiting -- this race, not a
-    bypassed relaunch, was the cause).
+    first-completed, moments ahead of `process_done` itself, which would
+    misclassify a scheduled restart as `CONNECTION_LOST`.
 
     When that happens (some other task finished first and `returncode` isn't
     set yet), gives `process_done` a short bounded window to catch up before
@@ -481,7 +478,7 @@ async def _run_phase_watching_process(
     the same mechanism the READY-state wait already uses for `watcher`/
     `scheduled_shutdown`, extended to cover the phases that run before it.
 
-    `watcher`, when given, is raced too (gitea #62): a credential/transient
+    `watcher`, when given, is raced too: a credential/transient
     dialog caught by `recognisers.watch_for_unprompted_windows` during login
     must abort the phase immediately, not wait out `phase`'s own timeout.
     Not owned by this function -- it keeps running for the rest of the
@@ -558,7 +555,7 @@ async def _sleep_until_scheduled_shutdown(config: Config) -> ShutdownCause:
 
 async def _reap(task: asyncio.Task, name: str) -> None:
     """Cancels `task` and awaits it. A task that already died with an
-    exception is logged, not re-raised, so shutdown always proceeds (#97)."""
+    exception is logged, not re-raised, so shutdown always proceeds."""
     task.cancel()
     try:
         await task
@@ -675,7 +672,7 @@ async def _run_one_cycle(  # noqa: PLR0915
                 # `_run_phase_watching_process`'s watcher branch above) --
                 # a credential/transient dialog can show up after login
                 # completes too (e.g. a reconnect attempt), and must be
-                # classified the same way regardless of phase (gitea #62).
+                # classified the same way regardless of phase.
                 await watcher
             elif finished is scheduled_shutdown:
                 cause = scheduled_shutdown.result()

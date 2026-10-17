@@ -151,7 +151,7 @@ class AcceptIncomingConnectionLabels:
 class LoginFailedLabels:
     """The "Login failed" dialog -- despite the wording, IB reuses this
     title for a "server disconnected" condition, not rejected credentials
-    (IBC's own commit history, gitea #62). See
+    (per IBC's own commit history). See
     `recognisers.LoginFailedRecognizer`."""
 
     title: str
@@ -254,13 +254,9 @@ class SettingsLabels:
 
     `gateway_menu_path` is Gateway's `Configure/Settings`. TWS has no
     `Configure` menu at all; `open_settings_dialog` uses `tws_menu_path`
-    (`File/Global Configuration...`, Mosaic layout) -- live-confirmed
-    2026-09-16 as the real path, after `tws_menu_path_classic`
-    (`Edit/Global Configuration...`) produced a clean `ElementNotFoundError`
-    every run (Mosaic has no `Edit/Global Configuration...` item; earlier
-    mistaken for #40's wrong-frame race). `tws_menu_path_classic` is defined
-    but unused -- a real Classic/Mosaic fallback matching IBC's own
-    `GetConfigDialogTask` order is tracked separately as #39.
+    (`File/Global Configuration...`, Mosaic layout). Mosaic has no
+    `Edit/Global Configuration...` item, so `tws_menu_path_classic`
+    (Classic layout) is defined but unused.
 
     `controls` is a flat name -> widget-label map, deliberately decoupled
     from tree paths (which stay literal on each `settings.SettingEntry` in

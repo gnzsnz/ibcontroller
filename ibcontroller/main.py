@@ -11,7 +11,7 @@ the first time each is missing -- but only `ibcontroller.toml` is copied under i
 defaults to `None` (inert until a user points `[settings] file` at a renamed copy) and,
 more importantly, `labels.load_labels(config_dir=...)` applies `{config_dir}/
 labels.json` *unconditionally* the moment that exact filename exists -- auto-creating
-it live would be exactly the silent behavior-change . A user must deliberately rename it
+it live would be exactly the silent behavior change. A user must deliberately rename it
 to opt in.
 
 `ibcontroller.toml.example` itself ships with every key commented out, so copying it

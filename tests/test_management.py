@@ -47,15 +47,12 @@ def _launched(process, dispatcher, sock_path, event_sock_path) -> LaunchedInstan
 async def test_clean_shutdown_terminates_directly_when_process_already_exited(
     sock_path, event_sock_path
 ):
-    """Regression test for two real, live-caught bugs, both hit back to back
-    on 2026-09-06 testing the exact same scenario (the user closing Gateway
-    manually before `clean_shutdown` ever ran): first, a raw
-    `ConnectionResetError` from attempting `navigate_menu` over a dead
-    connection (the old `except AgentClientError` never caught it); then,
-    once that was fixed to check `returncode` first, a `ProcessLookupError`
-    from this same branch still calling `terminate()` on a process that no
-    longer has an OS PID to signal. Both are asserted here: no command sent,
-    and `terminate()` never called (the fake raises `ProcessLookupError` if
+    """Regression test for the user closing Gateway manually before
+    `clean_shutdown` ever ran: attempting `navigate_menu` over a dead
+    connection raises a raw `ConnectionResetError`, and calling `terminate()`
+    on a process that no longer has an OS PID raises `ProcessLookupError`.
+    The test asserts no command is sent
+    and `terminate()` is never called (the fake raises `ProcessLookupError` if
     it is, matching real `asyncio.subprocess.Process` behaviour)."""
     calls: list[dict] = []
 
@@ -168,7 +165,7 @@ async def test_clean_shutdown_skips_the_exit_wait_when_the_connection_is_broken(
     sock_path, event_sock_path, monkeypatch
 ):
     """A `ProtocolError` means the menu was never clicked: terminate at once
-    instead of waiting `timeout` for an exit that cannot come (#117)."""
+    instead of waiting `timeout` for an exit that cannot come."""
     async with (
         FakeCommandServer(sock_path, lambda _request: {"ok": True, "clicked": True}),
         FakeEventServer(event_sock_path, []),
@@ -238,12 +235,10 @@ async def test_clean_shutdown_terminates_when_the_agent_never_answers(
 
 
 async def test_clean_shutdown_uses_tws_menu_path_for_tws(sock_path, event_sock_path):
-    """Real, live-caught bug (2026-09-09, an audit prompted by two other
-    hardcoded-label bugs the same day): the graceful-shutdown menu path used
-    to be a hardcoded `"File/Close"`/`"File/Exit"` ternary directly in
-    `clean_shutdown`, not sourced from `labels.json` like every other
-    user-facing string this project matches or clicks against. Confirms
-    `program=Program.TWS` selects `labels.shutdown.tws_menu_path`, not Gateway's."""
+    """The graceful-shutdown menu path comes from `labels.json`, not a
+    hardcoded `"File/Close"`/`"File/Exit"` ternary in `clean_shutdown`.
+    Confirms `program=Program.TWS` selects `labels.shutdown.tws_menu_path`, not
+    Gateway's."""
     calls: list[dict] = []
 
     def responder(request):
@@ -273,7 +268,7 @@ async def test_clean_shutdown_scopes_navigate_menu_to_main_window(
     sock_path, event_sock_path
 ):
     """The unscoped menu-bar search can resolve a frame other than TWS's main
-    window, whose menu has no `File/Exit` (#76) -- `main_window_id` must reach
+    window, whose menu has no `File/Exit` -- `main_window_id` must reach
     the agent."""
     calls: list[dict] = []
 
@@ -302,7 +297,7 @@ async def test_clean_shutdown_scopes_navigate_menu_to_main_window(
 
 def test_launcher_no_longer_imports_ui_layers():
     """L1 stays below L5-1: `clean_shutdown` moved to Management so `launcher`
-    no longer needs `actions` or `labels` (#79)."""
+    no longer needs `actions` or `labels`."""
     tree = ast.parse(Path(launcher.__file__).read_text())
     imported = {
         node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)

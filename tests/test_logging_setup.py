@@ -27,11 +27,11 @@ def test_configure_logging_sets_up_console_handler():
 def test_configure_logging_adds_queued_file_handler_when_log_dir_given(tmp_path):
     configure_logging(log_dir=tmp_path, sink="file")
     logger = logging.getLogger("ibcontroller")
-    # The file handler is behind a QueueHandler (module docstring, 2026-09-08):
+    # The file handler is behind a QueueHandler (see module docstring):
     # the logger itself sees no FileHandler -- that lives on the listener thread.
     assert any(isinstance(h, logging.handlers.QueueHandler) for h in logger.handlers)
     assert not any(isinstance(h, logging.FileHandler) for h in logger.handlers)
-    # sink="file" is exclusive -- no console handler either (gitea #26).
+    # sink="file" is exclusive -- no console handler either.
     assert not any(
         isinstance(h, logging.StreamHandler)
         and not isinstance(h, logging.handlers.QueueHandler)
@@ -52,7 +52,7 @@ def test_configure_logging_adds_queued_file_handler_when_log_dir_given(tmp_path)
 
 def test_configure_logging_std_sink_creates_no_file_even_with_log_dir(tmp_path):
     """sink="std" (the default) is exclusive -- log_dir is ignored, no file is
-    ever created, only the console handler (gitea #26)."""
+    ever created, only the console handler."""
     configure_logging(log_dir=tmp_path)
     logger = logging.getLogger("ibcontroller")
     assert any(isinstance(h, logging.StreamHandler) for h in logger.handlers)
@@ -163,7 +163,7 @@ def test_configure_logging_rotates_at_max_bytes(tmp_path):
 
 
 def test_configure_logging_max_bytes_zero_never_rotates(tmp_path):
-    """Default (max_bytes=0) is the old unbounded-file behaviour -- no
+    """Default (max_bytes=0) is unbounded-file behaviour -- no
     `.1`/`.2` backups ever appear, however much is written."""
     configure_logging(log_dir=tmp_path, sink="file")
     logger = logging.getLogger("ibcontroller")

@@ -256,13 +256,11 @@ async def test_apply_settings_resolves_literal_label_and_value(
 async def test_apply_settings_logs_each_entry_applied_and_skipped(
     sock_path, event_sock_path, tmp_path
 ):
-    """A real, previously-named gap (2026-09-07): `apply_settings_from_file` had
-    zero `logger.*` calls, so there was no way to confirm from a log which
-    entries actually applied vs. were silently skipped (a `None`-resolved
-    `value_from_config`, e.g. `read_only_api` left unset) -- only by eye in the
-    live dialog. File-based, not `caplog`, matching `test_recognisers.py`'s own
-    pattern -- `configure_logging` disables propagation to the root logger on
-    purpose."""
+    """`apply_settings_from_file` logs which entries applied and which were
+    skipped (a `None`-resolved `value_from_config`, e.g. `read_only_api` left
+    unset), so a log shows what actually happened. File-based, not `caplog`, matching
+    `test_recognisers.py`'s own pattern -- `configure_logging` disables
+    propagation to the root logger on purpose."""
     configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     responder = _tracking_responder([])
     async with (
@@ -292,7 +290,7 @@ async def test_apply_settings_logs_each_entry_applied_and_skipped(
         finally:
             await dispatcher.stop()
 
-    # Records reach the file via configure_logging's listener thread (2026-09-08);
+    # Records reach the file via configure_logging's listener thread;
     # draining it is what guarantees they've been written before we read.
     stop_logging()
     log_text = (tmp_path / "test.log").read_text()
@@ -306,7 +304,7 @@ async def test_apply_settings_logs_each_entry_applied_and_skipped(
 async def test_apply_settings_scopes_every_action_to_the_given_window_id(
     sock_path, event_sock_path
 ):
-    """`window_id` (2026-09-06) -- `apply_declarative_settings`
+    """`window_id` -- `apply_declarative_settings`
     always passes `open_settings_dialog`'s own return value here, scoping every
     `expand_tree`/`toggle` call to the one Configuration dialog that opened,
     instead of an unscoped, whole-JVM search."""
@@ -492,7 +490,7 @@ async def test_apply_settings_auto_restart_time_action(sock_path, event_sock_pat
             await dispatcher.stop()
 
     # The action's own label is tried first and the fake answers "ok", so the
-    # Auto Log Off fallback is never sent (#77).
+    # Auto Log Off fallback is never sent.
     assert {
         "cmd": "set_text_near_label",
         "label": "Set Auto Restart Time (HH:MM)",
@@ -583,7 +581,7 @@ async def test_apply_settings_auto_restart_time_none_skips_entry(
 async def test_apply_settings_auto_restart_time_bad_value_is_logged_and_skipped(
     sock_path, event_sock_path, tmp_path
 ):
-    """Per-entry isolation (2026-09-12, issue #1): a malformed entry no longer
+    """Per-entry isolation: a malformed entry no longer
     aborts the whole file -- it's logged and skipped, matching every other
     `SettingsError`/`ElementNotFoundError` case below."""
     configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
@@ -748,11 +746,10 @@ async def test_apply_settings_auto_logoff_time_bad_value_is_logged_and_skipped(
 async def test_apply_settings_multiple_entries_across_different_tree_paths(
     sock_path, event_sock_path
 ):
-    """The one previously-untested gap (TODO.md, 2026-09-06): every prior test
-    applied exactly one entry. This applies two entries -- `read_only_api`
-    (API/Settings) and `auto_restart_time` (Lock and Exit) -- in one
-    `settings_file`/one dialog session, confirming `expand_tree` is called
-    again for each entry's own `tree_path`, in order, not just once up front."""
+    """Two entries, `read_only_api` (API/Settings) and `auto_restart_time`
+    (Lock and Exit), applied in one `settings_file`/one dialog session:
+    `expand_tree` is called for each entry's own `tree_path`, in order, not
+    just once up front."""
     calls: list[dict] = []
     responder = _tracking_responder(calls)
     async with (
@@ -930,9 +927,8 @@ async def test_apply_settings_entry_needs_label_or_label_ref_is_logged_and_skipp
 async def test_apply_settings_entry_failure_does_not_block_later_entries(
     sock_path, event_sock_path, tmp_path
 ):
-    """Per-entry isolation (2026-09-12, issue #1) -- the real, live-caught bug:
-    an entry referencing a nonexistent Config field used to abort every entry
-    after it in the same file (see the module docstring's own note on this).
+    """Per-entry isolation: an entry referencing a nonexistent Config field must not
+    abort every entry after it in the same file (see the module docstring).
     Here the first entry is exactly that shape; the second entry's action
     must still run."""
     configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
@@ -1014,14 +1010,11 @@ async def test_open_settings_dialog_navigates_and_waits_for_configuration_window
 async def test_open_settings_dialog_uses_tws_mosaic_menu_path(
     sock_path, event_sock_path
 ):
-    """Real, live-caught bug (2026-09-09): TWS has no `Configure` menu at all --
+    """TWS has no `Configure` menu at all --
     `navigate_menu("Configure/Settings")` (Gateway's own path) fails with
-    `not_found` on a real TWS install. `program=Program.TWS` must select
-    `labels.settings.tws_menu_path` (`"File/Global Configuration..."`)
-    instead -- live-confirmed 2026-09-16 as the real Mosaic path, after
-    `tws_menu_path_classic` (`"Edit/Global Configuration..."`) produced a
-    clean `ElementNotFoundError` every run. Mosaic-only for now -- a real
-    Classic fallback is tracked separately as #39."""
+    `not_found` on TWS. `program=Program.TWS` must select
+    `labels.settings.tws_menu_path` (`"File/Global Configuration..."`, Mosaic
+    layout) instead; `tws_menu_path_classic` is not used."""
     calls: list[dict] = []
     responder = _tracking_responder(calls)
     async with (
@@ -1064,7 +1057,7 @@ async def test_open_settings_dialog_uses_tws_mosaic_menu_path(
 async def test_open_settings_dialog_retries_missing_menu_item_before_failing(
     sock_path, event_sock_path
 ):
-    """#37: a menu item missing because TWS hasn't finished populating its
+    """A menu item missing because TWS hasn't finished populating its
     menubar yet (not because the path is wrong) must be retried, not raised
     immediately -- `navigate_menu` (actions.py) now treats
     `ElementNotFoundError` as retriable, same as a disabled item."""
@@ -1116,11 +1109,11 @@ async def test_open_settings_dialog_retries_missing_menu_item_before_failing(
 async def test_open_settings_dialog_cleans_up_armed_wait_on_navigate_failure(
     sock_path, event_sock_path
 ):
-    """#38: when `navigate_menu` ultimately raises (the TWS Classic path
+    """When `navigate_menu` ultimately raises (the TWS Classic path
     exhausted here), the dialog-open `wait_for_event` future armed earlier
     must be cancelled and drained, not left running to its own `timeout` --
-    that leak is what produced #38's "Task exception was never retrieved"
-    warning. Confirmed here by asserting no task from this call is still
+    that leak produces a "Task exception was never retrieved"
+    warning. Asserts no task from this call is still
     pending immediately after it raises."""
     calls: list[dict] = []
 
@@ -1157,7 +1150,7 @@ async def test_open_settings_dialog_cleans_up_armed_wait_on_navigate_failure(
 async def test_open_settings_dialog_waits_for_splash_screen_to_close_first(
     sock_path, event_sock_path
 ):
-    """Regression test for a real, live-caught bug (2026-09-05): calling
+    """Regression test: calling
     navigate_menu("Configure/Settings") right after login returned successfully
     but never opened the dialog -- IBC's own SessionManager.awaitReady() blocks
     on the splash frame ("Starting application...") closing first. Confirms
@@ -1229,11 +1222,9 @@ async def test_open_settings_dialog_waits_for_splash_screen_to_close_first(
 
 
 async def test_close_settings_dialog_clicks_ok(sock_path, event_sock_path):
-    """Regression test for a real, live-caught bug (2026-09-06): this used to
-    click "Apply", which commits changes but never actually closes the
-    dialog -- confirmed against IBC's own source that "OK" (not "Apply") is
-    the real commit-and-close button, matching every one of IBC's own
-    `ConfigureXXXTask`s."""
+    """Regression test: "Apply" commits changes but never closes the dialog,
+    so "OK" must be clicked. "OK" is the commit-and-close button in IBC's own
+    source, matching every one of IBC's `ConfigureXXXTask`s."""
     calls: list[dict] = []
     responder = _tracking_responder(calls)
     async with (
@@ -1451,7 +1442,7 @@ async def test_apply_declarative_settings_applies_builtin_with_no_settings_file(
 async def test_apply_declarative_settings_applies_builtin_when_user_file_missing(
     sock_path, event_sock_path, caplog
 ):
-    """Issues #27/#30: a `Config.settings_file` that fails to load (missing
+    """A `Config.settings_file` that fails to load (missing
     here) used to abort the whole function before `open_settings_dialog` ever
     ran, silently skipping the built-in `read_only_api` entry too. Now the
     load failure is isolated and the built-in entry still applies."""
@@ -1511,7 +1502,7 @@ async def test_apply_declarative_settings_applies_builtin_when_user_file_missing
 async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
     sock_path, event_sock_path, monkeypatch
 ):
-    """Real, live-caught bug's fix (2026-09-12, issue #1): a `finally` around
+    """A `finally` around
     `apply_settings_from_file` now guarantees `close_settings_dialog` runs even
     when applying entries fails outright -- before this fix, the Configuration
     dialog was left open on the live Gateway for good. Forces an exception past
@@ -1570,13 +1561,13 @@ async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
 async def test_apply_declarative_settings_passes_second_factor_timeout(
     monkeypatch,
 ):
-    """#37 follow-up: `open_settings_dialog`'s own `timeout` default (180.0)
+    """`open_settings_dialog`'s own `timeout` default (180.0)
     must not be relied on silently -- it needs to track
     `Config.mfa_timeout` (the same field
     `login.py` already reads), so a deployment that changes one also
     changes the other.
 
-    Also covers #40: `main_window_id` (`LoginManager.main_window_id`) must
+    Also covers `main_window_id` (`LoginManager.main_window_id`) must
     reach `open_settings_dialog` unchanged, so `navigate_menu` scopes to the
     already-validated main window instead of a global search."""
     captured: dict[str, object] = {}

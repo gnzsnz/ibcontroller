@@ -1,8 +1,7 @@
 """Root of the exception hierarchy for failures that end a run or a cycle.
 
-Each exit-code group is a base class carrying its `exit_code` (BSD sysexits, the
-contract from gitea #60), so `cli.py` reads the code off the exception instead of
-keeping a list of leaf types:
+Each exit-code group is a base class carrying its `exit_code` (BSD sysexits), so
+`cli.py` reads the code off the exception instead of keeping a list of leaf types:
 
 - `ConfigError` (`config.py`): 78, deployment error, do not retry.
 - `login.CredentialsRejectedError`: 77, credentials rejected, do not retry.

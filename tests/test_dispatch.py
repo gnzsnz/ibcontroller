@@ -1,5 +1,4 @@
-"""Unit tests for dispatch.py -- no live Gateway needed (CLAUDE.md's "Working
-method": unit tests at each layer, once that layer is validated). Runs a real
+"""Unit tests for dispatch.py -- no live Gateway needed. Runs a real
 `Dispatcher` against the same fake Unix-socket server pattern agent_client.py's own
 tests use, so the queue/worker/fan-out logic gets real socket-level coverage."""
 
@@ -202,11 +201,11 @@ async def test_overflow_ends_the_event_reader(sock_path, event_sock_path, caplog
 
 async def test_event_arrivals_logged_at_debug(sock_path, event_sock_path, caplog):
     """Every arriving event message is logged at DEBUG as one human-readable line
-    (2026-09-08) -- IBC's own always-on per-window-event one-liner
-    (`TwsListener.logWindow`), mapped onto this project's level-based logging at its
-    single event chokepoint. Independent of trace mode (the structured NDJSON
-    mirror, gated by configure_trace); `_window_events` fan-out is unaffected. At the
-    INFO default these lines never appear (DEBUG is filtered at the logger level)."""
+    -- IBC's own always-on per-window-event one-liner
+       (`TwsListener.logWindow`), mapped onto this project's level-based logging at its
+       single event chokepoint. Independent of trace mode (the structured NDJSON
+       mirror, gated by configure_trace); `_window_events` fan-out is unaffected. At the
+       INFO default these lines never appear (DEBUG is filtered at the logger level)."""
     scripted = [
         {"type": "hello", "protocol_version": 1},
         {"type": "snapshot", "windows": []},
@@ -262,7 +261,7 @@ async def test_trace_mode_writes_both_files(sock_path, event_sock_path, tmp_path
     """Replaces the socat watch-relay workflow: one JSONL line per command
     (sent/result) and one per raw event message, independent of the typed
     `_window_events` fan-out. Tracing itself is configured through
-    logging_setup.configure_trace (2026-09-08); the Dispatcher only emits into
+    logging_setup.configure_trace; the Dispatcher only emits into
     the instance-scoped loggers."""
     trace_dir = tmp_path / "trace"
     configure_trace(instance="paper", enabled=True, trace_dir=trace_dir)
@@ -311,11 +310,10 @@ async def test_trace_mode_writes_both_files(sock_path, event_sock_path, tmp_path
 async def test_trace_mode_truncates_stale_files_on_start(
     sock_path, event_sock_path, tmp_path
 ):
-    """A trace file only makes sense for the current running session (2026-09-05,
-    per the user's own steer) -- stale content from a long-dead earlier instance
-    must not survive a fresh run, unlike the old append-mode behaviour that let
-    cmd-paper.jsonl grow across every relaunch all session. configure_trace opens
-    the files in "w" mode (2026-09-08), truncating on configure rather than on the
+    """A trace file only makes sense for the current running session --
+    stale content from a long-dead earlier instance must not survive a fresh run,
+    so cmd-paper.jsonl does not grow across relaunches. configure_trace opens
+    the files in "w" mode, truncating on configure rather than on the
     Dispatcher's first write."""
     trace_dir = tmp_path / "trace"
     trace_dir.mkdir()

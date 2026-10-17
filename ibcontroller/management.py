@@ -26,7 +26,7 @@ async def clean_shutdown(
     logged_in: bool,
     labels: ShutdownLabels,
     main_window_id: str | None = None,
-    timeout: float = 8.0,  # measured shutdown p99 4.3 s, max 4.9 s (#117)
+    timeout: float = 8.0,  # measured shutdown p99 4.3 s, max 4.9 s
 ) -> None:
     """Shutdown is not a process signal if login has completed -- invokes the
     app's own File -> Exit (TWS) / File -> Close (Gateway) menu item first, so
@@ -43,7 +43,7 @@ async def clean_shutdown(
     `main_window_id` (`LoginManager.main_window_id`) scopes the menu lookup
     to the main window's own menu bar, matching IBC's `StopTask`. The
     unscoped search can resolve another frame's menu bar, which has no exit
-    item (#76). `None` (Gateway) keeps the unscoped search.
+    item. `None` (Gateway) keeps the unscoped search.
 
     Uses `navigate_menu`, not `click`: "Close"/"Exit" are menu items, not
     ordinary buttons -- `click`'s `findByAccessibleName` lookup can never
