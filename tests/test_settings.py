@@ -1630,3 +1630,77 @@ async def test_apply_declarative_settings_runs_after_apply_before_close(monkeypa
     )
 
     assert order == ["apply", "after:w9", "close"]
+
+
+def _patch_dialog_steps(monkeypatch) -> list[str]:
+    """Replaces the open/apply/close steps with recorders; returns the call log."""
+    order: list[str] = []
+
+    async def _open(*_args, **_kwargs):
+        order.append("open")
+        return "w9"
+
+    async def _apply(*_args, **_kwargs):
+        order.append("apply")
+
+    async def _close(*_args, **_kwargs):
+        order.append("close")
+
+    monkeypatch.setattr(settings, "open_settings_dialog", _open)
+    monkeypatch.setattr(settings, "apply_settings_from_file", _apply)
+    monkeypatch.setattr(settings, "close_settings_dialog", _close)
+    return order
+
+
+async def test_apply_declarative_settings_skips_dialog_when_no_value_resolves(
+    monkeypatch, caplog
+):
+    """With every entry resolving to `None` the dialog is never opened."""
+    order = _patch_dialog_steps(monkeypatch)
+    session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
+
+    with caplog.at_level(logging.INFO, logger="ibcontroller.settings"):
+        await apply_declarative_settings(
+            None,  # type: ignore[arg-type]
+            LABELS,
+            _config(settings_file=None),
+            session,  # type: ignore[arg-type]
+        )
+
+    assert order == []
+    assert "no settings to apply" in caplog.text
+
+
+async def test_apply_declarative_settings_opens_dialog_for_after_apply_hook(
+    monkeypatch,
+):
+    """The `after_apply` hook needs the dialog open even with nothing to set."""
+    order = _patch_dialog_steps(monkeypatch)
+    session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
+
+    async def _after(_window_id):
+        order.append("after")
+
+    await apply_declarative_settings(
+        None,  # type: ignore[arg-type]
+        LABELS,
+        _config(settings_file=None),
+        session,  # type: ignore[arg-type]
+        after_apply=_after,
+    )
+
+    assert order == ["open", "apply", "after", "close"]
+
+
+def test_any_value_to_apply_counts_an_unresolvable_entry():
+    """An entry naming an unknown config field still reaches the per-entry
+    error handling."""
+    bad = SettingEntry(
+        tree_path="API/Settings",
+        action="toggle",
+        label="X",
+        value_from_config="no_such_field",
+    )
+
+    assert settings._any_value_to_apply([bad], _config()) is True
+    assert settings._any_value_to_apply([], _config()) is False

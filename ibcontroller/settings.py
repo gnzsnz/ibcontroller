@@ -275,6 +275,18 @@ def _resolve_value(entry: SettingEntry, config: Config) -> bool | str | None:
     return entry.value
 
 
+def _any_value_to_apply(entries: list[SettingEntry], config: Config) -> bool:
+    """True if any entry resolves to a value. An entry whose value cannot be
+    resolved counts as one, so the per-entry error handling reports it."""
+    for entry in entries:
+        try:
+            if _resolve_value(entry, config) is not None:
+                return True
+        except SettingsError:
+            return True
+    return False
+
+
 async def _await_menu_ready(
     dispatcher: Dispatcher,
     labels: SettingsLabels,
@@ -539,7 +551,10 @@ async def apply_declarative_settings(
 
     A `config.settings_file` that fails to load (`SettingsError`) is logged
     and treated as absent, so a typo'd path cannot take the load-bearing
-    built-in entries down with it."""
+    built-in entries down with it.
+
+    Returns without opening the dialog when no entry resolves to a value and
+    there is no `after_apply` hook."""
     builtin_settings = await load_builtin_settings_file()
     user_settings = None
     if config.settings_file is not None:
@@ -553,6 +568,9 @@ async def apply_declarative_settings(
                 exc,
             )
     merged = merge_settings_files(builtin_settings, user_settings)
+    if after_apply is None and not _any_value_to_apply(merged, config):
+        logger.info("IBController > settings: no settings to apply")
+        return
     # open_settings_dialog -> apply_settings_from_file -> close_settings_dialog
     window_id = await open_settings_dialog(
         dispatcher,
