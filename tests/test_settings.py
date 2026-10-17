@@ -15,9 +15,12 @@ from typed_settings.types import Secret
 from ibcontroller import settings
 from ibcontroller.agent_client import (
     AgentCommandConnection,
+    AgentError,
     AgentEventConnection,
     ElementNotFoundError,
+    ProtocolError,
     WindowEvent,
+    WindowGoneError,
     WindowInfo,
 )
 from ibcontroller.config import Config, Program, TradingMode
@@ -1704,3 +1707,93 @@ def test_any_value_to_apply_counts_an_unresolvable_entry():
 
     assert settings._any_value_to_apply([bad], _config()) is True
     assert settings._any_value_to_apply([], _config()) is False
+
+
+def _two_toggle_entries() -> SettingsFile:
+    return SettingsFile(
+        settings=[
+            SettingEntry(
+                tree_path="API/Settings", action="toggle", label="A", value=True
+            ),
+            SettingEntry(
+                tree_path="API/Settings", action="toggle", label="B", value=True
+            ),
+        ]
+    )
+
+
+async def test_apply_settings_agent_error_on_one_entry_skips_only_that_entry(
+    monkeypatch,
+):
+    """An exception inside the agent for one widget costs that entry only."""
+    toggled: list[str] = []
+
+    async def _toggle(_dispatcher, label, _value, **_kwargs):
+        if label == "A":
+            raise AgentError("boom")
+        toggled.append(label)
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(settings, "toggle", _toggle)
+    monkeypatch.setattr(settings, "expand_tree", _noop)
+
+    await apply_settings_from_file(
+        None,  # type: ignore[arg-type]
+        LABELS,
+        _config(),
+        _two_toggle_entries(),
+    )
+
+    assert toggled == ["B"]
+
+
+async def test_apply_settings_window_gone_ends_the_loop(monkeypatch):
+    """A vanished dialog stops the remaining entries and propagates."""
+    toggled: list[str] = []
+
+    async def _toggle(_dispatcher, label, _value, **_kwargs):
+        toggled.append(label)
+        raise WindowGoneError("gone")
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(settings, "toggle", _toggle)
+    monkeypatch.setattr(settings, "expand_tree", _noop)
+
+    with pytest.raises(WindowGoneError):
+        await apply_settings_from_file(
+            None,  # type: ignore[arg-type]
+            LABELS,
+            _config(),
+            _two_toggle_entries(),
+        )
+
+    assert toggled == ["A"]
+
+
+@pytest.mark.parametrize("error", [WindowGoneError("gone"), ProtocolError("closed")])
+async def test_apply_declarative_settings_skips_ok_when_dialog_or_agent_gone(
+    monkeypatch, error
+):
+    """The original error reaches the caller; no "OK" click is attempted on a
+    window or connection that no longer exists."""
+    order = _patch_dialog_steps(monkeypatch)
+
+    async def _apply(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(settings, "apply_settings_from_file", _apply)
+    session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
+
+    with pytest.raises(type(error)):
+        await apply_declarative_settings(
+            None,  # type: ignore[arg-type]
+            LABELS,
+            _config(settings_file=None, read_only_api=False),
+            session,  # type: ignore[arg-type]
+        )
+
+    assert order == ["open"]

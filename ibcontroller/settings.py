@@ -72,7 +72,12 @@ from ibcontroller.actions import (
     type_text_near_label,
     wait_for_window,
 )
-from ibcontroller.agent_client import ElementNotFoundError
+from ibcontroller.agent_client import (
+    AgentError,
+    ElementNotFoundError,
+    ProtocolError,
+    WindowGoneError,
+)
 from ibcontroller.config import Config, Program
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.errors import IBControllerError
@@ -406,9 +411,10 @@ async def apply_settings_from_file(  # noqa: PLR0912 -- per-entry try/except (be
     value), scopes every action below to the one Configuration dialog it
     opened.
 
-    Each entry's own `SettingsError`/`ElementNotFoundError` is caught,
-    logged, and skipped independently, so one bad entry costs exactly that
-    entry, not the ones after it."""
+    Each entry's own `SettingsError`/`ElementNotFoundError`/`AgentError` is
+    caught, logged, and skipped independently, so one bad entry costs exactly
+    that entry, not the ones after it. `WindowGoneError` and `ProtocolError`
+    (the dialog or the agent is gone) propagate and end the loop."""
     for entry in settings_file.settings:
         try:
             value = _resolve_value(entry, config)
@@ -519,7 +525,7 @@ async def apply_settings_from_file(  # noqa: PLR0912 -- per-entry try/except (be
                     "'toggle'/'type_text'/'type_text_near_label'/"
                     "'auto_restart_time'/'auto_logoff_time' are supported"
                 )
-        except (SettingsError, ElementNotFoundError) as exc:
+        except (SettingsError, ElementNotFoundError, AgentError) as exc:
             logger.error(
                 "IBController > settings: entry %s (%s) failed -- skipping: %s",
                 entry.tree_path,
@@ -553,6 +559,10 @@ async def apply_declarative_settings(
     and treated as absent, so a typo'd path cannot take the load-bearing
     built-in entries down with it.
 
+    The "OK" click always runs, committing the entries applied so far, except
+    when the dialog or the agent is gone (`WindowGoneError`/`ProtocolError`),
+    which is re-raised without it.
+
     Returns without opening the dialog when no entry resolves to a value and
     there is no `after_apply` hook."""
     builtin_settings = await load_builtin_settings_file()
@@ -579,6 +589,7 @@ async def apply_declarative_settings(
         timeout=config.mfa_timeout,
         main_window_id=session.main_window_id,
     )
+    dialog_gone = False
     try:
         await apply_settings_from_file(
             dispatcher,
@@ -589,8 +600,14 @@ async def apply_declarative_settings(
         )
         if after_apply is not None:
             await after_apply(window_id)
+    except (WindowGoneError, ProtocolError):
+        dialog_gone = True  # nothing left to click "OK" on
+        raise
     finally:
-        await close_settings_dialog(dispatcher, labels.settings, window_id=window_id)
+        if not dialog_gone:
+            await close_settings_dialog(
+                dispatcher, labels.settings, window_id=window_id
+            )
     if user_settings is not None:
         logger.info(
             "IBController > declarative settings applied (built-in + %s)",
