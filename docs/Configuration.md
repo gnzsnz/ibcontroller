@@ -259,3 +259,13 @@ carries worked entries, including commented ones for the API socket port
 `send_market_data_in_lots_us_stocks`, all on the `API/Settings` panel. The port and
 client ID are text fields found by their label (`type_text_near_label`), so their
 `value` is a string.
+
+When no entry resolves to a value (the default configuration), the Global Configuration
+dialog is not opened. If one entry fails (a missing control, an agent error), the others are
+still applied and "OK" commits them. If the dialog closes under the program, the step ends
+without clicking "OK".
+
+Only the TWS Mosaic layout is supported: the dialog is opened with
+`File > Global Configuration...`. On the TWS Classic layout that menu item does not exist, no
+setting is applied (including `read_only_api`), and the attempt waits for `mfa_timeout`
+(default 180s) before giving up and logging the failure. Gateway is not affected.

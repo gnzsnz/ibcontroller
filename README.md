@@ -355,6 +355,10 @@ are applied once, right after login, from two layers combined into one list:
   entries for the API socket port, the master API client ID and "Send market data in lots
   for US stocks" under `API/Settings`).
 
+When no entry resolves to a value (the default), the dialog is not opened. Only the TWS Mosaic
+layout is supported: on TWS Classic no setting is applied and the attempt waits for
+`mfa_timeout` (default 180s) before failing. Gateway is not affected.
+
 An entry looks like this:
 
 ```toml
