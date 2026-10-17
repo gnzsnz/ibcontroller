@@ -510,6 +510,42 @@ or both.
   instances (e.g. `paper` and `live`) can run in parallel and each tail its own files
   without interleaving, even if copied or globbed out of their directory.
 
+## Finding the TWS / Gateway installation
+
+ibcontroller does not install anything: it launches the TWS or Gateway you already
+installed with IBKR's own installer, using that install's jars and bundled JRE. It
+resolves the installation in three steps.
+
+1. **Install root** (`tws_path`). Unless set, it defaults to:
+
+   | OS | Default root |
+   | --- | --- |
+   | macOS | `~/Applications` |
+   | Linux | `~/Jts` |
+
+2. **Version** (`tws_version`). A pinned `tws_version` is used as-is. Otherwise
+   ibcontroller scans the root, picks the greatest installed version and logs the
+   choice; `tws_channel` narrows the scan first. See "`tws_version` auto-detection"
+   above.
+
+3. **Install directory.** Version and `program` select the directory below the root:
+
+   | OS | Gateway | TWS |
+   | --- | --- | --- |
+   | macOS | `IB Gateway <version>/` | `Trader Workstation <version>/` |
+   | Linux | `ibgateway/<version>/` | `<version>/` |
+
+   A directory counts as an installation only if it has a `jars/` subfolder. The
+   classpath is built from those jars plus the install's `.install4j/i4jruntime.jar`,
+   and the JVM options come from its `ibgateway.vmoptions` / `tws.vmoptions`.
+
+If nothing matches, ibcontroller exits with an error naming `tws_path` and
+`tws_channel`. A `program = "tws"` request with no TWS install falls back to a
+Gateway install; the reverse does not (details above).
+
+Settings (`tws_settings_path`) are separate from the install root: each instance
+defaults to its own `~/Jts/<instance>`, so `paper` and `live` do not share state.
+
 ## Exit codes
 
 `ibcontroller run` exits with a [BSD sysexits](https://man.freebsd.org/cgi/man.cgi?query=sysexits)
