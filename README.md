@@ -333,6 +333,10 @@ rule is not supported. Good for any pop-up that's always handled the same
 simple way; a dialog needing real logic (parsing a value out of its text, retrying,
 raising an error) isn't expressible this way and needs actual code.
 
+Login-outcome dialogs ("Login failed", "Unrecognized Username or Password", the connection
+and too-many-attempts warnings) are always handled first. A `dismiss_rules` entry that
+matches one of them never runs, so a credential rejection still exits with code 77.
+
 ### `ibkr_settings.toml` — Global Configuration settings
 
 Global Configuration settings (the "Configure" / "Settings" dialog inside Gateway/TWS)

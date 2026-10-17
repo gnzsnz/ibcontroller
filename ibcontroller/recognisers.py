@@ -714,14 +714,28 @@ def build_default_registry(
     session: SessionState,
     schedule_retry: Callable[[float], None],
 ) -> RecognizerRegistry:
-    """Declarative rules first, hand-written built-ins as the fallback --
-    the registry's documented priority order. `session` is read-only;
-    `schedule_retry` is `TooManyFailedLoginAttemptsRecognizer`'s retry hook."""
+    """Login-outcome recognisers first, then declarative rules, then the other
+    built-ins as the fallback. A declarative rule cannot shadow a dialog that
+    carries a login outcome. `session` is read-only; `schedule_retry` is
+    `TooManyFailedLoginAttemptsRecognizer`'s retry hook."""
     declarative: list[Recognizer] = [
         DeclarativeDismissRecognizer(rule) for rule in labels.dismiss_rules
     ]
+    login_outcomes: list[Recognizer] = [
+        NotCurrentlyAvailableRecognizer(labels.not_currently_available),
+        LoginFailedRecognizer(labels.login_failed),
+        LoginErrorRecognizer(labels.login_error),
+        UnrecognizedCredentialsRecognizer(labels.unrecognized_credentials),
+        GatewayConnectionFailedRecognizer(labels.gateway_connection_failed),
+        TooManyFailedLoginAttemptsRecognizer(
+            labels.too_many_failed_login_attempts,
+            config.relogin_after_mfa_timeout,
+            schedule_retry,
+        ),
+    ]
     return RecognizerRegistry(
         [
+            *login_outcomes,
             *declarative,
             ExistingSessionRecognizer(
                 labels.existing_session,
@@ -735,16 +749,6 @@ def build_default_registry(
             AcceptIncomingConnectionsRecognizer(
                 labels.accept_incoming_connection,
                 config.accept_incoming_connections,
-            ),
-            NotCurrentlyAvailableRecognizer(labels.not_currently_available),
-            LoginFailedRecognizer(labels.login_failed),
-            LoginErrorRecognizer(labels.login_error),
-            UnrecognizedCredentialsRecognizer(labels.unrecognized_credentials),
-            GatewayConnectionFailedRecognizer(labels.gateway_connection_failed),
-            TooManyFailedLoginAttemptsRecognizer(
-                labels.too_many_failed_login_attempts,
-                config.relogin_after_mfa_timeout,
-                schedule_retry,
             ),
             ExitProgressRecognizer(labels.shutdown),
         ]
