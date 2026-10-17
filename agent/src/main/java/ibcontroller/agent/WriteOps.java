@@ -59,14 +59,11 @@ final class WriteOps {
     /**
      * Resolves an optional {@code windowId} (from {@code EventBridge}'s registry) to the live
      * {@link Window} it names, or {@code null} when {@code windowId} itself is {@code null} --
-     * every scoped lookup in this file goes through here first, before ever touching the EDT,
-     * so a stale ID fails fast with a distinguishable error rather than silently falling back to
-     * an unscoped (and, per the bug this whole mechanism exists to fix, potentially wrong) search.
-     * See {@code EventBridge.java}'s own docstring for why this mechanism exists at all.
+     * every scoped lookup in this file goes through here first, before touching the EDT, so a
+     * stale ID fails fast with a distinguishable error rather than falling back to an unscoped
+     * (and possibly wrong) search. See {@code EventBridge.java} for why window IDs exist.
      *
-     * <p>Package-visible (2026-09-06), not private -- {@code Protocol.dumpResponse} reuses
-     * this exact same resolution for the read side ({@code ComponentLookup.dump}'s scoped
-     * overload) instead of duplicating the same two lines a second time.
+     * <p>Package-visible: {@code Protocol.dumpResponse} reuses it for the read side.
      */
     static Window resolveScope(String windowId) {
         if (windowId == null) {
@@ -135,60 +132,24 @@ final class WriteOps {
     }
 
     /**
-     * Confirmed live (2026-09-05, real Gateway 10.50) that menu items are genuinely
-     * unreachable via {@link ComponentLookup#findByAccessibleName} -- a {@code JMenu}'s
-     * dropdown items live in a {@code JPopupMenu} that isn't part of the ordinary AWT
-     * container tree {@code Window.getComponents()} walks while the menu is closed. This
-     * is why {@code launcher.py}'s {@code clean_shutdown} silently fell through to its
-     * hard-kill fallback instead of clicking "File &gt; Close" -- {@code click} was the
-     * wrong primitive for a menu-item target, not a bug in {@code click} itself.
+     * Clicks the menu item at {@code path} ({@code "File/Exit"}). Menu items are unreachable
+     * via {@link ComponentLookup#findByAccessibleName}: a {@code JMenu}'s items live in a
+     * {@code JPopupMenu} outside the AWT container tree while the menu is closed.
      *
-     * <p>Ported from IBC's own {@code SwingUtils.findMenuItem(JMenuBar, String[])} --
-     * {@code MenuElement.getSubElements()} walks the menu's own structural model
-     * directly (not the AWT container tree), which reflects the full menu regardless of
-     * whether it's currently open, since Swing menus normally have their items added at
-     * construction time, not lazily on first open. No need to {@code doClick()} an
-     * intermediate menu to "open" it first (confirmed by this working end to end
-     * against a real Gateway; ibctl's own equivalent does open each intermediate menu,
-     * possibly a defensive workaround for something version-specific -- not needed here).
+     * <p>Ported from IBC's {@code SwingUtils.findMenuItem(JMenuBar, String[])}.
+     * {@code MenuElement.getSubElements()} walks the menu's structural model, which holds the
+     * full menu whether or not it is open, so intermediate menus need no {@code doClick()}.
      *
-     * <p><b>A single {@code doClick()} on the resolved leaf, matching IBC's own
-     * {@code Utils.invokeMenuItem} exactly -- confirmed still correct 2026-09-05, after a
-     * real live failure of "Configure/Settings" briefly suggested otherwise.</b> The
-     * apparent failure (path resolution and the click both "succeeded", but the
-     * Configuration dialog never opened) was chased down two Java-side theories first --
-     * clicking every intermediate segment, then doing so with a real elapsed-time gap
-     * between clicks -- neither of which survived a clean re-test. The actual cause,
-     * confirmed by the user's own direct manual testing: the "This is not a brokerage
-     * account" warning dialog was still open at the moment Configure/Settings was
-     * attempted -- Gateway won't open Global Configuration while it is (confirmed both
-     * directions live: blocked while open, works immediately once closed). That's a
-     * sequencing problem one layer up, but not the one originally guessed (a Python-side
-     * wait with a guessed grace period before ever attempting the menu): checked IBC's
-     * own {@code Utils.invokeMenuItem} (`IBC/src/ibcalpha/ibc/Utils.java`) directly and
-     * found the real, grounded mechanism -- it checks {@code menuItem.isEnabled()}
-     * before clicking, and retries (250ms pause) if it isn't, rather than clicking
-     * unconditionally. That's the actual reason the earlier failure was silent: a
-     * disabled {@code AbstractButton}'s {@code doClick()} is a no-op in Swing
-     * ({@code DefaultButtonModel.setPressed()} bails out on {@code !isEnabled()}) -- no
-     * exception, no action fired, so our own unconditional {@code doClick()} reported
-     * success while nothing happened. Ported the same check here: this method now
-     * reports whether it actually clicked, and the retry loop itself lives in Python
-     * (`actions.navigate_menu`) -- matching IBC's shape (find + check + retry) but split
-     * across the RPC boundary, since this method must stay non-blocking on the agent
-     * side and Python already owns polling for other things (`launcher.py`'s
-     * `_wait_for_ready`).
+     * <p>A single {@code doClick()} on the resolved leaf, as in IBC's {@code
+     * Utils.invokeMenuItem}. A disabled button's {@code doClick()} is a silent no-op in Swing
+     * (a blocking modal can disable the item), so this returns {@code false} when the item is
+     * disabled instead of clicking. The retry loop lives in Python ({@code
+     * actions.navigate_menu}), which keeps this method non-blocking.
      *
-     * <p><b>{@code windowId} (2026-09-16, #40).</b> Previously always used the unscoped
-     * {@link #findMenuBar()} -- "first displayable {@code JFrame} with a menu bar" -- which
-     * can pick the wrong frame when more than one is displayable at once (TWS's login/shell
-     * frame alongside the real main window), a live-only failure the unscoped search can't
-     * tell apart from "menu not populated yet". {@code windowId}, when given, resolves via
-     * {@link #resolveScope} and uses the scoped {@link #findMenuBar(Window)} instead --
-     * matching IBC's own {@code Utils.invokeMenuItem(mainForm, path)}, always scoped to its
-     * {@code MainWindowManager}-tracked main window, never a global search. {@code null}
-     * keeps the old unscoped search (Python's {@code LoginManager.main_window_id} is
-     * {@code None} on the Gateway path, which has no such ambiguity to begin with).
+     * <p>{@code windowId}, when given, searches that window's menu bar only (as IBC scopes to
+     * its main window). {@code null} uses {@link #findMenuBar()}, the first displayable
+     * {@code JFrame} with a menu bar, which can pick the wrong frame when several are
+     * displayable (such as TWS's login frame beside the main window).
      */
     static boolean navigateMenu(String path, String windowId) {
         Window scope = resolveScope(windowId);
@@ -229,28 +190,11 @@ final class WriteOps {
     }
 
     /**
-     * Diagnostic, read-only, 2026-09-06 -- does {@code path} resolve to a real
-     * {@code JMenuItem} in {@code windowId}'s own menu bar, and is it currently
-     * enabled, without ever clicking it? Ported from IBC's own
-     * {@code GatewayMainWindowFrameHandler}/{@code MainWindowFrameHandler}, whose
-     * {@code recogniseWindow} checks are existence only
-     * ({@code SwingUtils.findMenuItemInAnyMenuBar(window, path) != null}, no
-     * {@code isEnabled()}). Reports both anyway, not just existence, per the user's own
-     * live observation (2026-09-06): the non-brokerage popup blocks Configure/Settings
-     * from actually opening while it's on screen, which -- since the item is already
-     * *in* the tree the whole time, `main window`-or-not -- suggests IBC's
-     * existence-only check might be riding on the item also being *disabled* while a
-     * blocking modal owns the window, not just "does the main window exist yet." Built
-     * to test a real, live-caught bug in {@code login.py}'s own main-window detection
-     * (main architecture document L6/Appendix D): whether a candidate window that opens
-     * <em>before</em> 2FA completes already has this item existing/enabled (meaning
-     * title/class matching alone is genuinely insufficient) or gains one or both only
-     * later (meaning some later signal, not captured by {@code window_opened} alone, is
-     * the real one to watch for) -- not guessed, tested against a real live login, and
-     * against a real 2FA/blocking-dialog window the same way. Unlike
-     * {@link #navigateMenu}, {@code windowId} here is required, not optional scoping: a
-     * global search would defeat the entire point of asking "does *this specific*
-     * window have it yet."
+     * Read-only: does {@code path} resolve to a {@code JMenuItem} in {@code windowId}'s menu
+     * bar, and is it enabled? Never clicks. IBC's {@code MainWindowFrameHandler} checks
+     * existence only ({@code SwingUtils.findMenuItemInAnyMenuBar}); enabled is reported too
+     * because a blocking modal disables the item. Unlike {@link #navigateMenu}, {@code windowId}
+     * is required: the question is about one specific window.
      */
     static boolean[] menuItemExists(String path, String windowId) {
         Window scope = resolveScope(windowId);
@@ -287,16 +231,11 @@ final class WriteOps {
      * in-process just like IBC's own. No need to {@code doClick()} through intermediate
      * tree nodes first.
      *
-     * <p><b>2026-09-06:</b> now takes an optional {@code windowId} -- when given (Python already
-     * has it, captured from the same {@code window_opened} event that told it the Configuration
-     * dialog appeared), this resolves straight to that exact {@link JDialog} via {@code
-     * EventBridge}'s registry, matching IBC's own direct-object-reference approach for real. When
-     * {@code null} (an older, not-yet-migrated caller), falls back to the original title-based
-     * search below -- IBC gets its own direct {@code JDialog} reference from {@code ConfigDialogManager},
-     * populated by its window-open handler; before this, our agent had no equivalent, so the
-     * config dialog was found fresh on each call by title instead, matching IBC's own
-     * {@code GlobalConfigurationDialogHandler.recogniseWindow} logic ({@code
-     * title.contains("Configuration")}) rather than its actual object-reference mechanism.
+     * <p>{@code windowId}, when given (captured from the Configuration dialog's {@code
+     * window_opened} event), resolves straight to that {@link JDialog} via {@code EventBridge}'s
+     * registry, as IBC uses the {@code ConfigDialogManager} reference. When {@code null}, the
+     * dialog is found by title ({@code title.contains("Configuration")}), as IBC's {@code
+     * GlobalConfigurationDialogHandler.recogniseWindow} does.
      */
     static void selectConfigSection(String path, String windowId) {
         String[] parts = path.split("/");
@@ -396,9 +335,8 @@ final class WriteOps {
         return null;
     }
 
-    /** Scoped variant (2026-09-06, diagnostic use) -- {@code scope}'s own menu bar only,
-     * no fallback to the global search, since precision is the entire point of passing a
-     * specific window in the first place (see {@link #menuItemExists}). {@code null} if
+    /** Scoped variant: {@code scope}'s own menu bar only, with no fallback to the global
+     * search, so a caller asking about one window never gets another's. {@code null} if
      * {@code scope} isn't a {@code JFrame} or has no menu bar (e.g. a dialog). */
     private static JMenuBar findMenuBar(Window scope) {
         return scope instanceof JFrame frame ? frame.getJMenuBar() : null;
@@ -427,10 +365,8 @@ final class WriteOps {
 
     /**
      * Ported from IBC's own {@code ConfigureAutoLogoffOrRestartTimeTask.java} -- the "Lock and
-     * Exit" time field genuinely has no accessible name at all (confirmed live, 2026-09-06,
-     * against a real Gateway 10.50 dump: {@code accessible_name=null} on the one
-     * {@code JTextField} in that panel), so {@link #setText} (accessible-name-based) can never
-     * target it. IBC finds it by *position* instead: locate the label above it by its own text
+     * Exit" time field has no accessible name, so {@link #setText} (accessible-name-based)
+     * cannot target it. IBC finds it by *position* instead: locate the label above it by its own text
      * ({@code "Set Auto Log Off Time (HH:MM)"} or {@code "Set Auto Restart Time (HH:MM)"}), walk
      * up two container ancestors from that label, then take the Nth {@code JTextField} found
      * within that container (index 0 for this one -- there's only one in that panel, but the

@@ -17,32 +17,25 @@ import java.util.logging.SimpleFormatter;
 import java.util.function.Consumer;
 
 /**
- * Entry point (Java Agent document, sec 01-02; CLAUDE.md's Build plan, Phase 1).
+ * Entry point (Java Agent document, sec 01-02).
  *
- * <p>Phase 1 step 3: becomes the JVM's {@code main()}, like IBC (sec 02, decided: B) --
- * reflectively invokes TWS/Gateway's own entry point ({@code ibgateway.GWClient} or
- * {@code jclient.LoginFrame}) after both sockets are up. The classpath that makes those classes
- * visible at all is assembled by {@code scripts/launch-agent.sh} (this phase's stand-in for
- * Python's future {@code launcher.py}, grounded in IBC's own
- * {@code resources/scripts/ibcstart.sh}), not by this class -- this project never bundles
- * Gateway/TWS's jars itself.
+ * <p>Becomes the JVM's {@code main()}, like IBC -- reflectively invokes TWS/Gateway's own entry
+ * point ({@code ibgateway.GWClient} or {@code jclient.LoginFrame}) after both sockets are up.
+ * The classpath that makes those classes visible is assembled by {@code launcher.py}, not by
+ * this class -- this project never bundles Gateway/TWS's jars itself.
  *
  * <p>Deliberately not replicated: IBC's command-line credential passthrough. ibcontroller
  * drives login through the agent's own commands ({@code set_text}/{@code click}, WriteOps), not
  * command-line arguments, so the entry point is always invoked with no arguments -- Gateway/TWS
  * shows its own ordinary login window.
  *
- * <p>Phase 1 step 6: {@link EventBridge#install} runs before {@link #launchEntryPoint} below --
- * the IBC ordering lesson (the listener must be installed before the target app creates any
- * window, or the first one is missed).
+ * <p>{@link EventBridge#install} runs before {@link #launchEntryPoint}: the listener must exist
+ * before the target app creates any window, or the first one is missed.
  *
- * <p>2026-09-09: {@link #launchEntryPoint} runs on its own thread, not inline in {@code main()} --
- * found live-testing TWS (not Gateway): {@code jclient.LoginFrame.main()} doesn't reliably return
- * within a normal ready-timeout window the way {@code ibgateway.GWClient.main()} does, and the
- * command accept loop must not be gated behind it returning. Matches IBC's own real ordering
- * ({@code IbcTws.load()} starts its command server before invoking its TWS/Gateway entry point)
- * and the event-accept thread's existing "don't gate on the entry point" shape, just applied to
- * the command socket too.
+ * <p>{@link #launchEntryPoint} runs on its own thread, not inline in {@code main()}:
+ * {@code jclient.LoginFrame.main()} may not return promptly, and the command accept loop must
+ * not wait on it. IBC's {@code IbcTws.load()} likewise starts its command server before invoking
+ * the entry point.
  */
 public final class AgentMain {
 
@@ -61,13 +54,9 @@ public final class AgentMain {
         }
         String commandSocketPath = args[0];
         String entryPointClass = args.length > 1 ? args[1] : null;
-        // Passed through to the entry point's own main(String[]) as args[0] -- confirmed
-        // live, 2026-09-09: jclient.LoginFrame.main() (TWS) silently exits(0) within under a
-        // second with no window at all unless its settings directory is given this way, not
-        // just via -DjtsConfigDir; ibgateway.GWClient.main() tolerates its absence but IBC's
-        // own IbcTws.java passes it identically to both (startTws()/startGateway(), each doing
-        // twsArgs[0] = getTWSSettingsDirectory()), so this matches IBC's real call shape for
-        // both entry points rather than special-casing TWS alone.
+        // Passed to the entry point's main(String[]) as args[0]: jclient.LoginFrame.main() (TWS)
+        // exits silently without it, even with -DjtsConfigDir. IBC passes it to both entry points
+        // (startTws()/startGateway(): twsArgs[0] = getTWSSettingsDirectory()), so this does too.
         String[] entryPointArgs =
                 args.length > 2 ? new String[] {args[2]} : new String[0];
         String eventSocketPath = deriveEventSocketPath(commandSocketPath);
@@ -89,14 +78,8 @@ public final class AgentMain {
         eventAcceptThread.start();
 
         if (entryPointClass != null) {
-            // Run in its own thread rather than blocking main() here -- GWClient.main() returns
-            // fast enough that this was never observed, but jclient.LoginFrame.main() (TWS) does
-            // not reliably return within a normal ready-timeout window, and the command accept
-            // loop below must not wait on it: IBC's own IbcTws.load() starts its command server
-            // before invoking its TWS/Gateway entry point for exactly this reason (checked
-            // directly, 2026-09-09), and this project's own event-accept thread already follows
-            // that same "don't gate on the entry point" rule -- this brings the command socket in
-            // line with it.
+            // Own thread: jclient.LoginFrame.main() (TWS) may not return promptly, and the
+            // command accept loop below must not wait on it (as with the event-accept thread).
             Thread entryPointThread =
                     new Thread(
                             () -> {
@@ -128,16 +111,16 @@ public final class AgentMain {
 
     /**
      * Configures java.util.logging from JVM system properties set by
-     * {@code launcher.py} (2026-09-08): {@code -Dibcontroller.logfile=<path>} routes
+     * {@code launcher.py}: {@code -Dibcontroller.logfile=<path>} routes
      * agent-side logs to a dedicated per-instance file (separate from Python's own
      * {@code ibcontroller-{instance}.log} and from Gateway's stdout drain, so the
      * three streams never interleave); {@code -Dibcontroller.log.level=<LEVEL>}
      * mirrors Python's own {@code Config.log_level} (INFO default). Both are set by
      * Python and read here -- the agent never invents paths or levels itself. When
      * {@code ibcontroller.logfile} is absent (e.g. {@code make run}), logs go to
-     * stderr only, same as before this mechanism existed.
+     * stderr only.
      *
-     * <p>Rotation (gitea #32): {@code -Dibcontroller.logfile.maxbytes=<N>} and
+     * <p>Rotation: {@code -Dibcontroller.logfile.maxbytes=<N>} and
      * {@code -Dibcontroller.logfile.backupcount=<N>} mirror Python's own
      * {@code log_max_bytes}/{@code log_backup_count}. {@code FileHandler}'s own
      * fd can't be rotated externally (the JVM keeps writing to a renamed/unlinked
@@ -189,15 +172,9 @@ public final class AgentMain {
     }
 
     /**
-     * Refuses to start rather than silently taking over an already-live socket path --
-     * confirmed 2026-09-05: the previous version of this method unconditionally
-     * {@code deleteIfExists}'d the path first, so reusing the same {@code --instance}
-     * name for two concurrently-running agents (e.g. launching both live and paper
-     * with {@code --instance=prod} instead of two distinct names) let the second one
-     * silently unlink the first's socket file and bind its own in its place -- the
-     * first agent's JVM kept running, but its command socket became unreachable via
-     * that shared path, with no error raised anywhere. Same treatment applies to the
-     * event socket, for free, since both go through this one method.
+     * Refuses to start rather than take over a live socket path: two agents sharing an
+     * {@code --instance} name would otherwise let the second unlink the first's socket file,
+     * leaving the first unreachable with no error. Applies to the command and event sockets.
      */
     private static ServerSocketChannel bind(String socketPath) throws Exception {
         Path path = Path.of(socketPath);
@@ -210,9 +187,7 @@ public final class AgentMain {
                                 + " agent instance is using this --instance name. Use a"
                                 + " different --instance, or stop that instance first.");
             }
-            // Stale leftover from an unclean shutdown (the owning process died before
-            // reaching main()'s own cleanup) -- confirmed above that nothing is
-            // listening, so it's safe to remove and take the path over ourselves.
+            // Stale leftover from an unclean shutdown: nothing is listening, so reuse the path.
             Files.delete(path);
         }
         ServerSocketChannel server = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
@@ -221,12 +196,9 @@ public final class AgentMain {
     }
 
     /**
-     * Confirmed by attempting a real client connection, not by inspecting the file
-     * alone -- a Unix domain socket's directory entry can outlive the process that
-     * created it (exactly the unclean-shutdown case above), so the file merely
-     * existing proves nothing on its own. Connecting successfully means something is
-     * actually listening; any failure (connection refused, or anything else) means
-     * it isn't.
+     * Checks by attempting a client connection: a Unix domain socket's file can outlive the
+     * process that created it, so its existence proves nothing. A successful connect means
+     * something is listening; any failure means nothing is.
      */
     private static boolean isAlive(Path path) {
         try (SocketChannel probe = SocketChannel.open(StandardProtocolFamily.UNIX)) {

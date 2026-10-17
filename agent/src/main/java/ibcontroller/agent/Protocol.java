@@ -19,8 +19,7 @@ import java.util.logging.Logger;
 /**
  * Command-socket accept loop and JSON Lines dispatch (Java Agent document sec 06-07).
  *
- * <p>Current scope (Phase 1 step 2): {@code ping} only. Every other command in sec 07 lands
- * with the step that implements it (ComponentLookup, WriteOps, EventBridge).
+ * <p>Read commands delegate to {@link ComponentLookup}, write commands to {@link WriteOps}.
  */
 final class Protocol {
 
@@ -281,9 +280,8 @@ final class Protocol {
         }
     }
 
-    /** Diagnostic-only (2026-09-06), see {@link WriteOps#menuItemExists} -- {@code window_id}
-     * is required here, not optional scoping like everything else in this file, since the
-     * whole point is asking about one specific window. */
+    /** See {@link WriteOps#menuItemExists}. {@code window_id} is required here, not optional
+     * scoping as elsewhere in this file, since the question is about one specific window. */
     private static Map<String, Object> menuItemExistsResponse(Map<String, Object> request) {
         Object path = request.get("path");
         String windowId = windowId(request);
@@ -404,9 +402,8 @@ final class Protocol {
             return out.toString();
         }
 
-        // Plain instanceof, not switch pattern matching (Java 21+) -- this needs to run on
-        // whatever JRE Gateway/TWS actually bundles, confirmed as low as Java 17 (Gateway
-        // 10.50). instanceof pattern variables (Java 16+) are fine; switch patterns aren't.
+        // Plain instanceof, not switch pattern matching (Java 21+): the agent runs on the JRE
+        // Gateway/TWS bundles, which can be Java 17. instanceof patterns (Java 16+) are fine.
         private static void writeValue(Object value, StringBuilder out) {
             if (value == null) {
                 out.append("null");

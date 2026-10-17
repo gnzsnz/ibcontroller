@@ -18,59 +18,36 @@ import javax.swing.text.JTextComponent;
  * <p>Every read happens on the EDT via {@code invokeAndWait} (sec 03) -- reads are as
  * EDT-sensitive as writes; Swing components should never be touched off the EDT.
  *
- * <p>{@code dump}'s shape is a flat list of components, not a nested tree -- matching jauto's own
- * {@code list_ui_components} precedent (Java Agent document sec 07, {@code poc/jauto_dump.py}).
+ * <p>{@code dump}'s shape is a flat list of components, not a nested tree.
  */
 final class ComponentLookup {
 
     private ComponentLookup() {}
 
     /**
-     * A real, live-caught crash (2026-09-09): {@code dump}'s {@code text} field used to be a
-     * component's entire {@code getText()} with no cap at all -- fine for the short strings
-     * every recogniser actually matches against ("This is not a brokerage account", a dialog
-     * title, ...), but Gateway's own {@code File > Gateway Logs > View Logs} window (and,
-     * separately, an oversized menu the same day) renders its whole log file into a single
-     * {@code JTextComponent}. {@code recognisers.handle_window_opened} calls {@code dump}
-     * unconditionally on every unprompted window (its own docstring already names a related,
-     * narrower instance of this same class of bug -- aggregating multiple windows into one
-     * dump, fixed by window-ID scoping, 2026-09-06) -- one such window with megabytes of log
-     * text in it produced a JSON response line past Python's {@code asyncio} stream reader's
-     * default 64 KiB limit, crashing the read loop outright (a real traceback, not a guess).
-     * Capped here, at the source, rather than only raising the Python-side buffer limit --
-     * the buffer bump (agent_client.py) is real defense in depth for many small components
-     * summing past the limit, but only this cap actually bounds a single pathological field.
-     * 2000 characters is generous for every real recogniser match (all well under a few
-     * hundred characters) and small enough that even a window full of large text components
-     * stays comfortably inside any reasonable line-length budget.
+     * Cap on a {@code dump} {@code text} field. Some windows (such as the log viewer) render a
+     * whole file into one {@code JTextComponent}, which would push a response line past the
+     * client's stream read limit. Only this cap bounds a single oversized field; the client's
+     * larger buffer covers many small components summing past the limit. Recogniser matches
+     * are far shorter than 2000 characters.
      */
     private static final int MAX_TEXT_LENGTH = 2000;
 
     /**
      * Dumps every displayable window, or only those whose title contains {@code titleFilter}
-     * (case-insensitive) if it's non-null. Window-vs-window disambiguation belongs to a real
-     * recogniser eventually (Python-side L5); this is the bootstrap version for empirical
-     * exploration against a real Gateway.
+     * (case-insensitive) if it's non-null.
      *
-     * <p><b>2026-09-06, a real live-caught bug's fix:</b> a title filter can match more than
-     * one window at once (the persisting login frame, the real main window, and a fresh popup
-     * can all share "IBKR Gateway") -- on a live account, whose main window carries far more
-     * real data than paper's, aggregating all of them into one response was large enough to
-     * exceed the wire protocol's read-buffer limit outright, corrupting the shared command
-     * connection and, with it, the graceful shutdown that needed the same connection
-     * afterward. See {@link #dump(String, Window)} for the fix: scope to one resolved window
-     * (from {@code EventBridge}'s registry) instead of matching by title at all, whenever a
-     * caller has a `window_id` to give -- the same mechanism already built for
-     * {@link WriteOps}'s write commands, extended to this read one.
+     * <p>A title filter can match several windows at once (the login frame, the main window and
+     * a popup can share a title), and aggregating them can exceed the client's read limit. Prefer
+     * {@link #dump(String, Window)}, scoped to one window resolved from {@code EventBridge}'s
+     * registry.
      */
     static List<Object> dump(String titleFilter) {
         return dump(titleFilter, null);
     }
 
-    /** Scoped to `scope` alone when given -- ignores `titleFilter` entirely in that case,
-     * since a resolved window is strictly more precise than a title match could ever be.
-     * `scope == null` keeps the original title-filtered-or-global scan. See this method's
-     * unscoped overload for the bug this exists to fix. */
+    /** Scoped to `scope` alone when given, ignoring `titleFilter` (a resolved window is more
+     * precise than a title match). `scope == null` gives the title-filtered-or-global scan. */
     static List<Object> dump(String titleFilter, Window scope) {
         List<Object> result = new ArrayList<>();
         runOnEdt(
@@ -98,15 +75,9 @@ final class ComponentLookup {
     }
 
     /**
-     * Confirmed 2026-09-05 (real Gateway 10.50, the "This is not a brokerage account"
-     * warning dialog): the previous version of this method only checked {@code
-     * JFrame}/{@code Frame}, never {@code JDialog}/{@code Dialog} -- {@code
-     * window instanceof JFrame} is false for any dialog, so {@code title} stayed {@code
-     * null} regardless of the dialog's actual title, and {@code dump}'s window filter
-     * silently matched zero components for any dialog window, every time. {@code
-     * Frame}/{@code Dialog} (the AWT base classes both {@code JFrame}/{@code JDialog}
-     * extend) each have their own {@code getTitle()}, so checking those two covers both
-     * Swing and plain-AWT windows of either kind uniformly.
+     * Title of a frame or dialog, {@code null} for other windows. Checks the AWT base classes
+     * {@code Frame}/{@code Dialog}, which each have their own {@code getTitle()}, so Swing and
+     * plain-AWT windows of either kind are covered.
      */
     private static String extractTitle(Window window) {
         if (window instanceof java.awt.Frame frame) {
@@ -127,10 +98,7 @@ final class ComponentLookup {
         }
     }
 
-    // Diagnostic fields (showing, visible, parent_class) added 2026-09-04 after set_text landed
-    // in the wrong (FIX Login) Username/Password pair despite isShowing() preference -- that
-    // assumption was wrong, or incomplete, and needs real data to replace with something correct,
-    // not a second guess.
+    // showing, visible and parent_class let a caller tell apart components that share a name.
     private static Map<String, Object> describe(Component component, Component parent) {
         Map<String, Object> entry = new LinkedHashMap<>();
         entry.put("class", component.getClass().getName());
@@ -186,12 +154,9 @@ final class ComponentLookup {
      * #dump}, which shows a length-only placeholder for diagnostics. Searches only {@code
      * scope}'s tree when given, every open window when {@code null}.
      *
-     * <p>Confirmed empirically (2026-09-04, real Gateway 10.50 login window) that more than one
-     * component can share an accessible name -- Gateway's login window carries both an IB API
-     * and a FIX Login section's Username/Password fields in the same tree, only one actually
-     * showing at a time. Prefers a currently-{@code isShowing()} match over the first match in
-     * document order for exactly that reason -- not yet proven this always picks the right one,
-     * only that picking blindly by document order would sometimes be wrong.
+     * <p>More than one component can share an accessible name (Gateway's login window holds
+     * both an IB API and a FIX Login Username/Password pair, one showing at a time), so a
+     * currently-{@code isShowing()} match is preferred over the first in document order.
      */
     static String getText(String target, Window scope) {
         String[] result = new String[1];
@@ -224,19 +189,12 @@ final class ComponentLookup {
     }
 
     /**
-     * Scoped to {@code scope}'s own component tree when given, matching every one of IBC's own
-     * lookup helpers (checked directly against IBC's source, 2026-09-06: {@code
-     * SwingUtils.findButton}/{@code findCheckBox}/{@code findTextField} etc. all take an explicit
-     * container reference, never search across every open window) -- {@code scope == null} keeps
-     * this method's original global {@code Window.getWindows()} scan, for callers that don't yet
-     * have a window ID to pass.
+     * Scoped to {@code scope}'s own component tree when given, as IBC's lookup helpers are
+     * ({@code SwingUtils.findButton}/{@code findCheckBox}/{@code findTextField} take an explicit
+     * container). {@code scope == null} scans every {@code Window.getWindows()}.
      *
-     * <p>This scoping is what a real, live-caught bug needed (2026-09-06): a declarative dismiss
-     * rule's "OK" click, resolved via the old unscoped search, landed on a different, simultaneously-
-     * showing "OK" button belonging to the Global Configuration dialog (which the same commit had
-     * just been told to close, but hadn't finished disposing yet) instead of the actual popup it was
-     * meant to dismiss -- two windows, two "OK"-labeled buttons, no way to tell them apart without a
-     * scope.
+     * <p>Scoping matters when two windows show buttons with the same label (for example "OK"):
+     * an unscoped search can pick the wrong one.
      */
     static Component findByAccessibleName(String target, Window scope) {
         if (scope != null) {
@@ -298,11 +256,8 @@ final class ComponentLookup {
     }
 
     /**
-     * Collects every accessible name in a component tree -- for enriching error
-     * messages when a target isn't found (2026-09-08). Mirrors the traversal
-     * shape of {@code collectMatches} but only records names, not components.
-     * Case-insensitive, matching {@code findByAccessibleName}'s own matching
-     * convention.
+     * Collects every accessible name in a component tree, to list the available names in a
+     * not-found error. Same traversal as {@code collectMatches}, recording names only.
      */
     static List<String> collectAccessibleNames(Component root) {
         List<String> names = new ArrayList<>();
@@ -340,8 +295,8 @@ final class ComponentLookup {
     }
 
     /** A caller passed a {@code window_id} that no longer resolves to a live window -- it
-     * closed between Python recognising it and this command actually reaching the agent. A
-     * real, expected race (EventBridge.java's own docstring), not a bug -- distinguished from
+     * closed between Python recognising it and this command actually reaching the agent. An
+     * expected race (see EventBridge.java), not a bug -- distinguished from
      * {@link ElementNotFoundException} (a window's own component tree doesn't have what was
      * asked for) since the caller's own retry/error-handling logic differs: a gone window means
      * "nothing left to act on here", not "check the label spelling". */
@@ -362,12 +317,10 @@ final class ComponentLookup {
             Thread.currentThread().interrupt();
             throw new RuntimeException("EDT dispatch interrupted", e);
         } catch (InvocationTargetException e) {
-            // Re-throw the action's own unchecked exception unchanged, not wrapped -- since
-            // 2026-09-08 findByName throws from inside the EDT lambda, and Protocol.java's
-            // error mapping relies on the exception type (ElementNotFoundException etc.)
-            // surviving the EDT boundary. Errors and checked Throwables (impossible for a
-            // Runnable) keep the original generic re-wrap, so Protocol's `catch
-            // (RuntimeException)` still catches everything the way it always did.
+            // Re-throw the action's own unchecked exception unchanged: Protocol.java's error
+            // mapping relies on the exception type (ElementNotFoundException etc.) surviving
+            // the EDT boundary. Anything else is wrapped, so `catch (RuntimeException)` still
+            // catches everything.
             Throwable cause = e.getCause();
             if (cause instanceof RuntimeException runtimeException) {
                 throw runtimeException;

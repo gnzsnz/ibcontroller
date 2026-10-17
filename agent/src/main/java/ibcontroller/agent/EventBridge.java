@@ -27,9 +27,8 @@ import java.util.logging.Logger;
 
 /**
  * {@code AWTEventListener} install and NDJSON event forwarding over the event socket (Java
- * Agent document sec 04, sec 05, sec 07). Currently {@code window_opened}/{@code window_closed}
- * only -- the 2FA relabel detection (poll or {@code PropertyChangeListener}) is a separate,
- * still-open question, Phase 1 step 7.
+ * Agent document sec 04, sec 05, sec 07). Bridges {@code window_opened}/{@code window_closed}
+ * only.
  *
  * <p>The {@code AWTEventListener} callback runs on the EDT -- it must never block on socket I/O,
  * so it only enqueues (a bounded queue; a full queue is reported via an {@code overflow}
@@ -48,17 +47,13 @@ final class EventBridge {
     private static final AtomicBoolean overflowed = new AtomicBoolean();
 
     /**
-     * Assigns each open window an opaque, stable ID -- the direct analog of IBC's own
-     * {@code WindowHandler} callbacks receiving the literal {@code Window} object reference
-     * (checked against IBC's real source, 2026-09-06: {@code SwingUtils.findButton}/
-     * {@code findCheckBox}/{@code findTextField} etc. all take an explicit container/window
-     * reference, never search across every open window). Our own JSON-over-socket boundary
-     * can't hand Python a live Java object, so this is the next best thing: an ID Python can
-     * echo back on a later command, which {@link #resolveWindow} turns back into the literal
-     * object -- {@code WriteOps} then scopes its component search to just that window, instead
-     * of the old {@code ComponentLookup.findByAccessibleName}'s global {@code Window.getWindows()}
-     * scan (the confirmed root cause of a real, live-caught bug, 2026-09-06: a declarative
-     * dismiss rule's "OK" click landed on the wrong of two simultaneously-open "OK" buttons).
+     * Assigns each open window an opaque, stable ID, the analog of IBC's {@code WindowHandler}
+     * callbacks receiving the {@code Window} object (its {@code SwingUtils.findButton}/
+     * {@code findCheckBox}/{@code findTextField} take an explicit container). The JSON socket
+     * cannot hand Python a Java object, so Python echoes the ID back on a later command and
+     * {@link #resolveWindow} maps it to the window. {@code WriteOps} then scopes its component
+     * search to that window instead of scanning every {@code Window.getWindows()}, which can
+     * hit the wrong one of two simultaneously open "OK" buttons.
      *
      * <p>{@code Window}/{@code Component} don't override {@code equals}/{@code hashCode}, so a
      * plain identity comparison is already what a {@code Map} keyed on them gives us -- no need
@@ -88,9 +83,9 @@ final class EventBridge {
     private EventBridge() {}
 
     /**
-     * Installed once, at agent startup, before the target app creates any window -- the IBC
-     * ordering lesson (Java Agent document sec 01/04). Must be called before the entry point is
-     * launched, not after; {@link AgentMain} enforces that ordering, not this method.
+     * Installed once, at agent startup, before the target app creates any window (a listener
+     * installed later misses the first one, as in IBC). Must be called before the entry point
+     * is launched; {@link AgentMain} enforces that ordering, not this method.
      */
     static void install() {
         Toolkit.getDefaultToolkit()
