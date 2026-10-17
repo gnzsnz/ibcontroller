@@ -1,5 +1,5 @@
-"""settings.py -- L5's Settings domain, alongside `login.py` (Login) and the
-not-yet-built `management.py` (Management).
+"""settings.py -- L5's Settings domain, alongside `login.py` (Login) and
+`management.py` (Management).
 
 Drives IBKR's Global Configuration dialog: open it, navigate to a section,
 set a value, repeat for every declared setting, then click "OK" once to

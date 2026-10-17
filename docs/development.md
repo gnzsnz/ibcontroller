@@ -153,6 +153,12 @@ Any contribution must follow this separation of concerns.
 
 ### L1 Process (`launcher.py`)
 
+`launcher.py` starts one TWS/Gateway instance and hands it over attached. It resolves the install,
+channel, JRE, JVM options and per-instance settings directory, then spawns the JVM with the Java
+agent as its entry point (L2), drains the JVM's output, and waits for the agent to answer `ping`.
+It returns a running instance with a started `Dispatcher` (L4). `control_loop.py` (L6) owns the
+relaunch decision.
+
 - **Owns:** TWS/Gateway install discovery (macOS and Linux, channel filtering), JRE selection, the
   JVM command line, the per-instance settings directory (including reading Gateway/TWS's
   `autorestart` marker) and socket paths, native-restart prevention, spawning the JVM with the
@@ -170,6 +176,13 @@ Any contribution must follow this separation of concerns.
 
 ### L2 Java agent (`agent/`)
 
+The agent is a small Java component that runs inside the TWS/Gateway JVM, loaded by L1, which makes
+`AgentMain` the JVM's `main()`. It installs an AWT window listener, binds two Unix sockets, then
+starts the real TWS/Gateway entry point. It gives Python the same reach IBC has, `setText()` and
+`doClick()` on the live Swing components and every window as it opens, and decides nothing: all login,
+dialog and lifecycle logic stays in Python. Every command in the protocol below has a typed
+`Request` class in L3, and every error code has an exception class.
+
 - **Owns:** everything inside the TWS/Gateway JVM: starting the entry point, the AWT window
   listener and window-ID registry, the command socket (request/response, one client at a time),
   the event socket (`hello`, `snapshot`, `window_opened`/`window_closed`, `keepalive`, `overflow`),
@@ -181,7 +194,53 @@ Any contribution must follow this separation of concerns.
   events newer than the snapshot; the snapshot lists exactly the windows in the window-ID registry
   (between `WINDOW_OPENED` and `WINDOW_CLOSED`).
 
+**Command socket.** One JSON request line, one JSON response line, one client at a time. A response
+is `{"ok": true, ...}` or `{"ok": false, "error": "<code>", "detail": "..."}`. `window_id` is
+optional wherever it is listed and scopes the lookup to one window; a closed window answers
+`window_gone`.
+
+| Command               | Request fields                                   | Response (besides `ok`)          | EDT dispatch                       |
+| --------------------- | ------------------------------------------------ | -------------------------------- | ---------------------------------- |
+| `ping`                | none                                             | `version`, `uptime_s`            | none                               |
+| `dump`                | `window` (title filter), `window_id`             | `components`                     | wait                               |
+| `get_text`            | `target`, `window_id`                            | `value`                          | wait; refuses a password field     |
+| `set_text`            | `target`, `value`, `window_id`                   | none                             | wait                               |
+| `set_checkbox`        | `target`, `checked`, `window_id`                 | none                             | wait; clicks only if state differs |
+| `click`               | `target`, `window_id`                            | none                             | click deferred; effect unconfirmed |
+| `navigate_menu`       | `path` (`File/Exit`), `window_id`                | `clicked`                        | click deferred; disabled item: `clicked` false |
+| `expand_tree`         | `path`, `window_id`                              | none                             | wait                               |
+| `set_text_near_label` | `label`, `index`, `value`, `window_id`           | none                             | wait                               |
+| `menu_item_exists`    | `path`, `window_id` (**required**)               | `exists`, `enabled`              | wait; never clicks                 |
+
+Errors on the command socket:
+
+| Code                       | L3 exception             | Meaning                                                                 |
+| -------------------------- | ------------------------ | ----------------------------------------------------------------------- |
+| `not_found`                | `ElementNotFoundError`   | No component or menu path matches the target.                           |
+| `refused_credential_field` | `CredentialRefusedError` | `get_text` on a password field.                                         |
+| `bad_request`              | `BadRequestError`        | Malformed JSON or a missing or wrongly typed field; the connection stays usable. |
+| `unknown_command`          | `UnknownCommandError`    | The `cmd` is not in the table above.                                    |
+| `agent_error`              | `AgentError`             | Any other failure inside the agent. L3 maps an unrecognised code here too. |
+| `window_gone`              | `WindowGoneError`        | The `window_id` no longer resolves: the window closed after the caller learned of it. |
+
+**Event socket.** Push only, one JSON line per message. Ids never repeat, so a client applies events
+idempotently.
+
+| Message    | Shape                                                    | When                                                                      |
+| ---------- | -------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `hello`    | `{"type":"hello","protocol_version":1}`                  | On connect. Logged, never checked.                                        |
+| `snapshot` | `{"type":"snapshot","windows":[...]}`                    | Right after `hello`: the windows in the registry.                         |
+| `event`    | `{"type":"event","seq":N,"kind":"window_opened","window":{...}}` | Each window open or close. `kind` is `window_opened` or `window_closed`. |
+| `overflow` | `{"type":"overflow","from_seq":N}`                       | The agent's queue dropped events. Never silent.                           |
+| `keepalive`| `{"type":"keepalive","ts":...}`                          | Every 30 s, to tell a quiet agent from a dead one.                        |
+
 ### L3 Agent client (`agent_client.py`)
+
+L3 is the Python mirror of L2's wire protocol. Each L2 command has one `Request` class, each L2 error
+code has one exception class, and each event socket message has one schema type. The two connections
+turn the agent's sockets into typed values and typed errors once, so the layers above never handle
+raw JSON dicts or error strings. L3 does framing, serialization and error mapping only; ordering and
+fan-out are L4's job.
 
 - **Owns:** the two socket connections, JSON line framing, the typed message schemas
   (`attrs`/`cattrs`), and the typed exceptions mapping L2's error codes.
@@ -199,6 +258,13 @@ Any contribution must follow this separation of concerns.
 
 ### L4 Dispatcher (`dispatch.py`)
 
+L4 is the single gateway between the layers above and one running agent. One `Dispatcher` per
+instance owns both L3 connections and serves the two directions. Commands go out through one FIFO
+worker, one on the wire at a time, because the wire has no request IDs. Events come in through one
+reader that keeps a registry of the open windows and fans each event out to ordered, buffered
+subscriptions. L4 also writes the optional wire trace and reports a lost connection to L6. It routes
+and records but never interprets: what a command or an event means is decided above.
+
 - **Owns:** one `Dispatcher` per instance: both L3 connections, command serialization (one FIFO
   worker, one command on the wire at a time), event fan-out, and the optional wire trace.
 - **Provides:** `send(request)`, `windows` (read-only registry of the open windows
@@ -214,6 +280,13 @@ Any contribution must follow this separation of concerns.
 
 ### L5-1 Actions (`actions.py`, `labels.py`)
 
+L5-1 is the vocabulary the domains use to act on the UI. Each action is a named, async operation
+(`click`, `type_text`, `navigate_menu`, ...) that builds the matching L3 `Request`, sends it through the
+`Dispatcher`, and adds only the policy that belongs above the wire: `click` tries candidate labels in
+order, `navigate_menu` retries a disabled item. `labels.py` supplies the matching UI text from
+`labels.json`, so no domain holds a literal. Domains never talk to L4 directly; the actions are their only
+way to the UI.
+
 - **Owns:** the action vocabulary (`click`, `type_text`, `toggle`, `navigate_menu`, `expand_tree`,
   `dump`, …), `wait_for_window` and the label data.
 - **Rules:** the only L5 code that calls `Dispatcher.send`; each action builds its L3 `Request`.
@@ -228,7 +301,27 @@ Any contribution must follow this separation of concerns.
   `load_labels` is strict: a wrong type or an empty candidate list raises `LabelsError`, a
   `ConfigError` (exit 78) naming the file and field; unknown keys are logged and ignored.
 
+**Action semantics, as callers rely on them.** What "the action returned" guarantees:
+
+| Action                              | Agent side (L2)                                    | Returns when                                               |
+| ----------------------------------- | -------------------------------------------------- | ---------------------------------------------------------- |
+| `type_text`, `type_text_near_label` | `setText` on the EDT, awaited                      | value set                                                  |
+| `toggle`                            | `doClick()` on the EDT, awaited, only if state differs | state set                                              |
+| `click`, `dismiss`                  | lookup awaited, `doClick()` deferred               | agent accepted the command; the effect has not happened yet |
+| `navigate_menu`                     | as `click`; `clicked` is false for a disabled item | accepted; Python retries a disabled item and an unresolved path |
+| `expand_tree`                       | selection on the EDT, awaited                      | panel swapped                                              |
+| `dump`, `menu_item_exists`, `read_text` | read on the EDT, awaited                       | value read                                                 |
+| `wait_for_window`                   | none (L4 registry and subscription)                | a matching window is open (or closed) now, or after waiting |
+
+After `click`, `dismiss` or `navigate_menu`, a step that depends on the effect waits for it with
+`wait_for_window`.
+
 ### L5 Domains
+
+The domains are where ibcontroller decides what to do on the TWS/Gateway UI: log in, handle windows nobody
+is waiting for, apply settings, shut down. Each domain acts on the UI only through L5-1 and reports its
+outcome to L6 as a return value or a typed exception. L6 decides what happens next. Domains do not
+call each other.
 
 | Domain     | Code                                                          | Role                                                                          |
 | ---------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------- |
@@ -244,10 +337,9 @@ Any contribution must follow this separation of concerns.
   - Report outcomes to L6 as return values or typed exceptions. L6 decides relaunch, exit or
     continue.
   - Outcome exceptions derive from `IBControllerError` (`errors.py`). Each exit-code group is a
-    base class carrying its `exit_code`: `ConfigError` 78, `CredentialsRejectedError` 77,
-    `MfaTimeoutError` 75, `InvalidSessionStateError` 76, `SessionCededError` 0 (a deliberate yield),
-    `TransientError` 69. A new exception picks its group by base class.
-    The login-outcome exceptions live in `login.py`, wherever the detecting recogniser lives.
+    base class carrying its `exit_code`, so a new exception picks its exit code by base class (the
+    codes are listed under L6). The login-outcome exceptions live in `login.py`, wherever the
+    detecting recogniser lives.
   - Login waits for its outcome with no overall deadline (as IBC); only `login_dialog_display_timeout`
     and the `mfa_exit_interval` watchdog raise. A retry (too-many-attempts cooldown, late 2FA close)
     only resubmits credentials, the original wait continues, and `run()` cancels a pending retry
@@ -256,14 +348,8 @@ Any contribution must follow this separation of concerns.
     (`build_default_registry`) and runs the settings sequence (`apply_declarative_settings`), one
     call per domain. A step that belongs to another domain (the diagnostic settings sweep) is
     passed in by L6 as a hook (`after_apply`).
-  - A domain reads the login session only through the read-only `SessionState` protocol
-    (`login.py`: `is_logged_in()`, `main_window_id`), never `LoginManager` itself.
-    `main_window_id` is the main frame's id on both programs: TWS takes it from the window that
-    shows `File/Lock Application`, Gateway from the non-login "IBKR Gateway" frame that shows
-    `Help/About Gateway` (menu probe, class names are obfuscated), captured when the splash
-    closes. It is `None` when no frame matches, and consumers then search unscoped.
-    `LoginState` is login-sequence progress only: `LOGGED_IN` is terminal for the cycle, a later
-    session loss does not change it, and failures leave as exceptions.
+  - A domain reads the login session only through the read-only `SessionState` protocol (see
+    Session state below), never `LoginManager` itself.
   - A recogniser acts only on the window it matched (`window_id`). The dialogs registry never acts
     on a window with a visible credential field.
 - **Known deviations:**
@@ -272,7 +358,24 @@ Any contribution must follow this separation of concerns.
   - Scheduled shutdown timing lives in L6 (`schedule.py` maths, `control_loop.py` trigger); the
     shutdown itself is Management's `clean_shutdown`.
 
+**Session state.** `LoginManager` owns the session facts. Other domains and L6 see only the
+`SessionState` protocol (`login.py`):
+
+- `is_logged_in()`: true once login has completed.
+- `main_window_id`: the id of the main frame, the scope for settings and shutdown. TWS takes it from the
+  window that shows `File/Lock Application`, Gateway from the non-login "IBKR Gateway" frame that shows
+  `Help/About Gateway` (a menu probe, because the class names are obfuscated). It is captured when the
+  splash closes and is `None` when no frame matches, and consumers then search unscoped.
+- `LoginState` is login-sequence progress only. `LOGGED_IN` is terminal for the cycle: a later session
+  loss does not change it, and failures leave as exceptions.
+
 ### L6 Control loop (`control_loop.py`)
+
+L6 supervises one instance. It runs one cycle per JVM: launch, login with the dialogs watcher, settings,
+ready, shutdown. It races every phase against process exit and connection loss, so a dying agent never
+leaves a cycle waiting. When a cycle ends, L6 classifies why (`ShutdownCause`) and decides whether to
+relaunch or stop. Cancellation is the only stop request, and every exit path reaches `clean_shutdown`, so
+a stopped cycle does not leave a JVM running.
 
 - **Owns:** one instance's lifecycle, one cycle per JVM: launch → login (with the dialogs watcher) →
   settings → ready → shutdown. Races every phase against process exit and connection loss,
@@ -286,6 +389,39 @@ Any contribution must follow this separation of concerns.
   relaunches with its hash; restart without it on TWS is a File > Logout and relaunches with a
   fresh login. No window seen falls back to the marker poll. Relaunches of laps that never reach
   READY are capped by `restart_cap`.
+
+**Relaunch policy.** `run_control_loop` decides after each cycle:
+
+| Cycle ends with                                                              | Relaunch      | Next login                    |
+| ---------------------------------------------------------------------------- | ------------- | ----------------------------- |
+| `PROCESS_CLOSED` or `PROCESS_EXITED`, `autorestart` marker present          | yes           | silent, `-Drestart=<hash>`    |
+| `PROCESS_CLOSED`, "Restart in progress" window, no marker, TWS (File > Logout) | yes         | full fresh login              |
+| `COLD_RESTART` (`cold_restart_time`)                                         | yes           | full fresh login              |
+| `LoginFrameTimeoutError` (the login frame never appeared)                    | yes           | keeps the current hash        |
+| `TransientLoginError` ("Login failed" or an unclassified connection failure) | yes          | full fresh login              |
+| `MfaTimeoutError` with `mfa_timeout_action=restart`                          | yes           | full fresh login              |
+| "Shutdown progress" window seen before the exit                              | no, stop      | —                             |
+| `REQUESTED`, `TIDY_CLOSEDOWN`                                                | no, stop      | —                             |
+| `CONNECTION_LOST`; process gone with no marker and no restart window         | no, stop      | —                             |
+| `MfaTimeoutError` with `mfa_timeout_action=exit` (default)                   | no, re-raised | —                             |
+
+A relaunch counts toward `restart_cap` and the count resets when a lap reaches READY. Every stop maps
+to an exit code in the table below.
+
+**Exit codes.** `cli.py` reads the exit code off the exception that ended the run, or off the
+`ShutdownCause` when none was raised (BSD sysexits; a supervisor decides retries from them):
+
+| Code | Source                                                     | Meaning                                              | Retry |
+| ---- | ---------------------------------------------------------- | ---------------------------------------------------- | ----- |
+| 0    | `REQUESTED`, `TIDY_CLOSEDOWN`, `PROCESS_CLOSED`, `SessionCededError` | Stopped on request, at the scheduled close-down, by File > Exit, or by yielding to another session | no |
+| 69   | `TransientError`, `PROCESS_EXITED`, `CONNECTION_LOST`      | Runtime failure: the agent, its connection, or the login flow | yes |
+| 70   | `RestartCapExceededError`                                  | `restart_cap` relaunches in a row never reached READY | no |
+| 75   | `MfaTimeoutError`                                          | Login did not complete after 2FA                     | per policy |
+| 76   | `InvalidSessionStateError`                                 | A dialog the `existing_session_action` rules out     | no |
+| 77   | `CredentialsRejectedError`                                 | Credentials rejected                                 | no |
+| 78   | `ConfigError`                                              | Deployment error (config, `labels.json`, launcher)   | no |
+
+Any other exception keeps its traceback and exits 1.
 
 ### L7 Control API (planned, not built)
 
