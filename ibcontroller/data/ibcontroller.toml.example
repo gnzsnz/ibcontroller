@@ -51,8 +51,9 @@
 # tws_channel = "stable"
 
 # Override the install path launcher.py would otherwise infer (env: IBC_TWS_PATH)
+# Default "~/Applications" (macOS), "~/Jts" (Linux)
 # tws_path = "~/Jts"
-# tws_path = ""
+# tws_path = "~/Applications"
 
 # Where TWS/Gateway itself stores its settings, deliberately NOT the same as tws_path
 # (the install location). None defaults, {instance}={program}-{trading_mode}
@@ -79,6 +80,13 @@
 # log_dir = "~/Library/Logs/ibcontroller"
 # log_dir = ""
 
+# Verbosity of ibcontroller's own log and the Java agent log: "debug", "info",
+# "warning" or "error", in any letter case; anything else is a config error.
+# "debug" adds the human-readable arrival line for every agent message. Independent
+# of trace_enabled below (env: IBC_LOG_LEVEL)
+# Default "info"
+# log_level = "info"
+
 # Where ibcontroller's own log and Gateway/TWS's own console output go: "std"
 # (console only) or "file" (only, under log_dir) -- exclusive, not both. Doesn't
 # affect the wire trace above, which stays file-only regardless of this setting.
@@ -98,7 +106,11 @@
 # Default 5
 # log_backup_count = 5
 
-# Trace - wire trace every message with agent, true/false
+# Raw wire trace: every command sent to and event received from the Java agent, written
+# as NDJSON to cmd-{instance}.jsonl and events-{instance}.jsonl under log_dir. Always
+# file, regardless of log_sink; rotated like the other files. Verbose -- enable for
+# troubleshooting. true/false; independent of log_level (env: IBC_TRACE_ENABLED)
+# Default false
 # trace_enabled = false
 
 # Diagnostics -- off by default. When enabled, logs a component structure dump
@@ -124,9 +136,9 @@
 # Default false
 # read_only_login = false
 
-# IBC: ReadOnlyApi -- true/false sets it
+# IBC: ReadOnlyApi -- true/false sets it; omit to leave the existing setting unchanged
 # (env: IBC_READ_ONLY_API)
-# Default "false"
+# Default None - not set
 # read_only_api = false
 
 # IBC: ExistingSessionDetectedAction -- how ibcontroller itself reacts to Gateway's
