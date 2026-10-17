@@ -427,6 +427,12 @@ Any other exception keeps its traceback and exits 1.
 
 The contract below is provisional: it fixes the boundaries, not the interface.
 
+L7 is the planned way to reach a running instance from outside the process. It would translate an
+external request (status, stop, restart, reconnect) into a call on L6 or on a Management operation,
+and return the instance state. It adds no behaviour of its own: L6 stays the only owner of the cycle,
+and the UI is reached only through Management. Nothing is built, and of the candidate operations
+below only stop exists today, as Management's graceful shutdown.
+
 - **Purpose:** let something outside the process observe a running instance and request lifecycle
   operations on it: an operator, a supervisor, a container health check.
 - **Owns:** the external interface: transport, access control, request validation, response
@@ -444,8 +450,17 @@ The contract below is provisional: it fixes the boundaries, not the interface.
   - Local-only by default. Remote access needs explicit configuration, like IBC's `BindAddress` and
     `ControlFrom`.
   - Never returns credentials. Diagnostic output follows the same redaction as `dump`.
-- **Candidate operations, not committed:** status; stop; restart and cold restart; IBC
-  `CommandServer` parity (`STOP`, `EXIT`, `RESTART`, `ENABLEAPI`, `RECONNECTDATA`,
-  `RECONNECTACCOUNT`); a diagnostic dump.
-- **Open questions:** transport and access control; which IBC commands to support; whether
-  user-authored rules and plugins attach at L7 or at L5.
+
+**Candidate operations, not committed**, aiming at parity with IBC's `CommandServer`:
+
+| Operation                         | Description                                                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Stop                              | Management's graceful shutdown works today. L6 stops by task cancellation only, so L7 needs an L6 entry point that requests it. |
+| Restart, cold restart             | Scheduled cold restart exists in L6. On demand needs a live check that `File/Restart...` exists on both programs and an L6 outcome for it. |
+| Reconnect data, reconnect account | Not built. Needs a key-event primitive in L2, L3 and L5-1, and a handler for the confirmation dialog.        |
+| Enable API                        | Not built, TWS only. Needs a decision: Management operation or Settings entry.                               |
+| Status                            | Not built. Startup state, login state and `main_window_id` are available; a session lost after login needs a new agent event. |
+| Diagnostic dump                   | `diagnostics.py` exists. Needs a Management wrapper so L7 does not reach L5-1.                               |
+
+**Open questions:** transport and access control; which IBC commands to support; whether
+user-authored rules and plugins attach at L7 or at L5.
