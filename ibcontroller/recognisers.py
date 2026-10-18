@@ -714,14 +714,15 @@ def build_default_registry(
     session: SessionState,
     schedule_retry: Callable[[float], None],
 ) -> RecognizerRegistry:
-    """Login-outcome recognisers first, then declarative rules, then the other
-    built-ins as the fallback. A declarative rule cannot shadow a dialog that
-    carries a login outcome. `session` is read-only; `schedule_retry` is
+    """Signal recognisers first (login outcomes and the exit progress windows),
+    then declarative rules, then the other built-ins as the fallback. A
+    declarative rule cannot shadow a dialog that carries a login outcome or
+    announces an exit. `session` is read-only; `schedule_retry` is
     `TooManyFailedLoginAttemptsRecognizer`'s retry hook."""
     declarative: list[Recognizer] = [
         DeclarativeDismissRecognizer(rule) for rule in labels.dismiss_rules
     ]
-    login_outcomes: list[Recognizer] = [
+    signals: list[Recognizer] = [
         NotCurrentlyAvailableRecognizer(labels.not_currently_available),
         LoginFailedRecognizer(labels.login_failed),
         LoginErrorRecognizer(labels.login_error),
@@ -732,10 +733,11 @@ def build_default_registry(
             config.relogin_after_mfa_timeout,
             schedule_retry,
         ),
+        ExitProgressRecognizer(labels.shutdown),
     ]
     return RecognizerRegistry(
         [
-            *login_outcomes,
+            *signals,
             *declarative,
             ExistingSessionRecognizer(
                 labels.existing_session,
@@ -750,7 +752,6 @@ def build_default_registry(
                 labels.accept_incoming_connection,
                 config.accept_incoming_connections,
             ),
-            ExitProgressRecognizer(labels.shutdown),
         ]
     )
 

@@ -1440,11 +1440,9 @@ def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
         for r in registry._registry
         if not isinstance(r, DeclarativeDismissRecognizer)
     }
-    # Declarative rules sit after the login-outcome recognisers, before the rest.
-    outcomes = len(_LOGIN_OUTCOME_TYPES)
-    assert all(
-        isinstance(r, _LOGIN_OUTCOME_TYPES) for r in registry._registry[:outcomes]
-    )
+    # Declarative rules sit after the signal recognisers, before the rest.
+    outcomes = len(_SIGNAL_TYPES)
+    assert all(isinstance(r, _SIGNAL_TYPES) for r in registry._registry[:outcomes])
     assert registry._registry[outcomes : outcomes + len(declarative)] == declarative
     assert {r.rule.name for r in declarative} == {
         rule.name for rule in LABELS.dismiss_rules
@@ -1464,13 +1462,14 @@ def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
     }
 
 
-_LOGIN_OUTCOME_TYPES = (
+_SIGNAL_TYPES = (
     NotCurrentlyAvailableRecognizer,
     LoginFailedRecognizer,
     LoginErrorRecognizer,
     UnrecognizedCredentialsRecognizer,
     GatewayConnectionFailedRecognizer,
     TooManyFailedLoginAttemptsRecognizer,
+    ExitProgressRecognizer,
 )
 
 
@@ -1499,6 +1498,30 @@ def test_declarative_rule_does_not_shadow_a_login_outcome_recogniser():
     event = _event("Unrecognized Username or Password")
     matched = next(r for r in registry._registry if r.recognises(event, []))
     assert isinstance(matched, UnrecognizedCredentialsRecognizer)
+
+
+def test_declarative_rule_does_not_shadow_the_exit_progress_recogniser():
+    """A rule matching an exit progress title would stop dispatch before the
+    exit is classified, so the exit that follows would go unrecognised."""
+    config = Config(
+        program=Program.GATEWAY,
+        tws_version="10.50",
+        trading_mode=TradingMode.PAPER,
+        userid=Secret("u"),
+        password=Secret("p"),
+        log_dir=f"{gettempdir()}/log",
+    )
+    rule = DismissRule(name="user-rule", match_title="Restart in progress", click="OK")
+    labels = attrs.evolve(LABELS, dismiss_rules=[*LABELS.dismiss_rules, rule])
+    registry = build_default_registry(
+        config,
+        labels,
+        types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False),  # type: ignore[arg-type]
+        lambda _s: None,
+    )
+    event = _event("Restart in progress")
+    matched = next(r for r in registry._registry if r.recognises(event, []))
+    assert isinstance(matched, ExitProgressRecognizer)
 
 
 def test_build_registry_binds_session_and_schedule_retry():

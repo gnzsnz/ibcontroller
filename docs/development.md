@@ -352,9 +352,9 @@ call each other.
     Session state below), never `LoginManager` itself.
   - A recogniser acts only on the window it matched (`window_id`). The dialogs registry never acts
     on a window with a visible credential field.
-  - The registry dispatches to the first matching recogniser: login-outcome recognisers, then
-    declarative `dismiss_rules`, then the other built-ins. A declarative rule cannot shadow a
-    dialog that carries a login outcome.
+  - The registry dispatches to the first matching recogniser: login-outcome and exit progress
+    recognisers, then declarative `dismiss_rules`, then the other built-ins. A declarative rule
+    cannot shadow a dialog that carries a login outcome or announces an exit.
 - **Known deviations:**
   - `recognisers.py` and `diagnostics.py` iterate `Dispatcher.subscribe()` directly instead of going
     through L5-1.

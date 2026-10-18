@@ -334,8 +334,9 @@ simple way; a dialog needing real logic (parsing a value out of its text, retryi
 raising an error) isn't expressible this way and needs actual code.
 
 Login-outcome dialogs ("Login failed", "Unrecognized Username or Password", the connection
-and too-many-attempts warnings) are always handled first. A `dismiss_rules` entry that
-matches one of them never runs, so a credential rejection still exits with code 77.
+and too-many-attempts warnings) and the "Shutdown progress" / "Restart in progress" windows
+are always handled first. A `dismiss_rules` entry that matches one of them never runs, so a
+credential rejection still exits with code 77 and a restart is still recognised as one.
 
 ### `ibkr_settings.toml` — Global Configuration settings
 
