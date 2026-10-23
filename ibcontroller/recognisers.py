@@ -41,6 +41,7 @@ from ibcontroller.config import (
     Config,
     ExistingSessionAction,
 )
+from ibcontroller.dialogs import DialogEntry, MatchGroup, run_steps
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import (
     AcceptIncomingConnectionLabels,
@@ -88,6 +89,17 @@ def _strip_html(text: str) -> str:
     """Strips HTML tags from an IB `JTextPane` message (always HTML, e.g.
     `<html>...<br><br>...</html>`), collapsing the whitespace left behind."""
     return re.sub(r"\s+", " ", _HTML_TAG_PATTERN.sub(" ", text)).strip()
+
+
+def _text_matches(match_text: str, value: str) -> bool:
+    """Case-insensitive. Raw match first; then HTML-stripped, since IB message
+    panes are HTML and a phrase copied from the screen can span a tag or hold
+    an entity (`&quot;`)."""
+    needle = match_text.casefold()
+    return (
+        needle in value.casefold()
+        or needle in html.unescape(_strip_html(value)).casefold()
+    )
 
 
 async def _dismiss(dispatcher: Dispatcher, label: str, window_id: str | None) -> None:
@@ -144,24 +156,13 @@ class DeclarativeDismissRecognizer:
         ):
             return False
         if rule.match_text is not None and not any(
-            self._text_matches(rule.match_text, value)
+            _text_matches(rule.match_text, value)
             for c in components
             for value in (c.accessible_name, c.text)
             if value is not None
         ):
             return False
         return True
-
-    @staticmethod
-    def _text_matches(match_text: str, value: str) -> bool:
-        """Case-insensitive. Raw match first; then HTML-stripped, since IB message
-        panes are HTML and a phrase copied from the screen can span a tag or hold
-        an entity (`&quot;`)."""
-        needle = match_text.casefold()
-        return (
-            needle in value.casefold()
-            or needle in html.unescape(_strip_html(value)).casefold()
-        )
 
     async def handle(
         self,
@@ -172,6 +173,68 @@ class DeclarativeDismissRecognizer:
         """Clicks `rule.click`, scoped to `event.window.window_id`."""
         await click(dispatcher, self.rule.click, window_id=event.window.window_id)
         logger.info("dismissed %s (declarative rule)", self.rule.name)
+
+
+class DialogRecognizer:
+    """One `Recognizer` per `dialogs.DialogEntry`, applying the steps of the
+    chosen `mode`. A mode with no steps matches nothing, so the dialog stays on
+    screen for the user. Any of the entry's match groups is enough; inside a
+    group every given field must match, ignoring case and HTML markup. `entry`
+    is public so a caller inspecting `RecognizerRegistry.handled` can identify
+    which entry fired, by name."""
+
+    def __init__(self, entry: DialogEntry, mode: str) -> None:
+        if mode not in entry.modes:
+            known = ", ".join(entry.modes)
+            raise ValueError(
+                f"dialog {entry.name!r} has no mode {mode!r}; modes: {known}"
+            )
+        self.entry = entry
+        self.mode = mode
+
+    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
+        if not self.entry.modes[self.mode]:
+            return False
+        return any(self._group_matches(g, event, components) for g in self.entry.match)
+
+    @staticmethod
+    def _group_matches(
+        group: MatchGroup, event: WindowEvent, components: list[Component]
+    ) -> bool:
+        if (
+            group.title is not None
+            and group.title.casefold() not in (event.window.title or "").casefold()
+        ):
+            return False
+        values = [
+            v for c in components for v in (c.accessible_name, c.text) if v is not None
+        ]
+        return all(
+            any(_text_matches(wanted, v) for v in values)
+            for wanted in (group.text, group.text_also)
+            if wanted is not None
+        )
+
+    async def handle(
+        self,
+        event: WindowEvent,
+        components: list[Component],
+        dispatcher: Dispatcher,
+    ) -> None:
+        """Runs the mode's steps, scoped to `event.window.window_id`. A failed
+        step is logged with the entry's name and re-raised for the caller."""
+        try:
+            await run_steps(
+                dispatcher,
+                self.entry.modes[self.mode],
+                window_id=event.window.window_id,
+            )
+        except AgentClientError as exc:
+            logger.warning(
+                "dialog %s (mode %s) failed: %s", self.entry.name, self.mode, exc
+            )
+            raise
+        logger.info("handled dialog %s (mode %s)", self.entry.name, self.mode)
 
 
 class TooManyFailedLoginAttemptsRecognizer:

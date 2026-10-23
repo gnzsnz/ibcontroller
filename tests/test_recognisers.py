@@ -27,6 +27,7 @@ from ibcontroller.config import (
     Program,
     TradingMode,
 )
+from ibcontroller.dialogs import ClickStep, DialogEntry, MatchGroup
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import DismissRule, LabelsError, load_labels
 from ibcontroller.logging_setup import configure_logging, stop_logging
@@ -39,6 +40,7 @@ from ibcontroller.login import (
 from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
     DeclarativeDismissRecognizer,
+    DialogRecognizer,
     ExistingSessionRecognizer,
     ExitKind,
     ExitProgressRecognizer,
@@ -373,6 +375,140 @@ async def test_declarative_dismiss_handle_logs_with_rule_name(
     stop_logging()
     log_text = (tmp_path / "test.log").read_text()
     assert "dismissed non_brokerage_account (declarative rule)" in log_text
+
+
+def _dialog(**overrides) -> DialogEntry:
+    base = dict(
+        name="blind_trading",
+        default="on",
+        match=[
+            MatchGroup(title="Order Preview", text="blind trading"),
+            MatchGroup(text="blind trading", text_also="Are you sure"),
+        ],
+        modes={"off": [], "on": [ClickStep(["Override and Transmit", "Yes"])]},
+    )
+    base.update(overrides)
+    return DialogEntry(**base)
+
+
+def test_dialog_recogniser_matches_any_group():
+    recognizer = DialogRecognizer(_dialog(), "on")
+    first = [_component(text="This is blind trading")]
+    assert recognizer.recognises(_event("Order Preview"), first) is True
+    # Second group: no title condition, two text conditions.
+    second = [
+        _component(text="blind trading"),
+        _component(accessible_name="Are you sure you want to submit this order?"),
+    ]
+    assert recognizer.recognises(_event("Whatever"), second) is True
+
+
+def test_dialog_recogniser_requires_every_field_in_a_group():
+    recognizer = DialogRecognizer(_dialog(), "on")
+    # Title matches, text does not: first group fails; second needs two texts.
+    assert (
+        recognizer.recognises(
+            _event("Order Preview"), [_component(text="something else")]
+        )
+        is False
+    )
+    # First text condition only: second group fails on `text_also`.
+    assert (
+        recognizer.recognises(_event("Whatever"), [_component(text="blind trading")])
+        is False
+    )
+
+
+def test_dialog_recogniser_matching_ignores_case_and_html():
+    recognizer = DialogRecognizer(_dialog(), "on")
+    markup = "<html><body>BLIND<br>TRADING warning</body></html>"
+    assert recognizer.recognises(_event("ORDER preview"), [_component(text=markup)])
+
+
+def test_dialog_recogniser_in_a_mode_without_steps_matches_nothing():
+    recognizer = DialogRecognizer(_dialog(), "off")
+    components = [_component(text="This is blind trading")]
+    assert recognizer.recognises(_event("Order Preview"), components) is False
+
+
+def test_dialog_recogniser_rejects_an_unknown_mode():
+    with pytest.raises(ValueError, match="maybe"):
+        DialogRecognizer(_dialog(), "maybe")
+
+
+async def test_dialog_recogniser_handle_runs_the_mode_steps_in_the_window(
+    sock_path, event_sock_path
+):
+    seen = []
+
+    def responder(request):
+        seen.append((request["target"], request.get("window_id")))
+        if request["target"] == "Override and Transmit":
+            return {"ok": False, "error": "not_found", "detail": "no such button"}
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            recognizer = DialogRecognizer(_dialog(), "on")
+            await recognizer.handle(
+                _event("Order Preview", window_id="w9"), [], dispatcher
+            )
+        finally:
+            await dispatcher.stop()
+
+    assert seen == [("Override and Transmit", "w9"), ("Yes", "w9")]
+
+
+async def test_dialog_recogniser_handle_logs_entry_and_mode(
+    sock_path, event_sock_path, tmp_path
+):
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await DialogRecognizer(_dialog(), "on").handle(
+                _event("Order Preview"), [], dispatcher
+            )
+        finally:
+            await dispatcher.stop()
+
+    stop_logging()
+    assert (
+        "handled dialog blind_trading (mode on)" in (tmp_path / "test.log").read_text()
+    )
+
+
+async def test_dialog_recogniser_failed_step_logs_the_entry_and_reraises(
+    sock_path, event_sock_path, tmp_path
+):
+    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
+    async with (
+        FakeCommandServer(
+            sock_path,
+            lambda _req: {"ok": False, "error": "not_found", "detail": "no button"},
+        ),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            with pytest.raises(ElementNotFoundError):
+                await DialogRecognizer(_dialog(), "on").handle(
+                    _event("Order Preview"), [], dispatcher
+                )
+        finally:
+            await dispatcher.stop()
+
+    stop_logging()
+    log_text = (tmp_path / "test.log").read_text()
+    assert "dialog blind_trading (mode on) failed" in log_text
+    assert "handled dialog" not in log_text
 
 
 async def test_login_failed_recognises_by_title():
