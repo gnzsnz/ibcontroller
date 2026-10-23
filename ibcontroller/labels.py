@@ -60,8 +60,15 @@ def _structure_str_list(value: Any, _type: Any) -> list[str]:
     return [_structure_str(item, str) for item in value]
 
 
+def _structure_str_or_list(value: Any, _type: Any) -> str | list[str]:
+    return value if isinstance(value, str) else _structure_str_list(value, _type)
+
+
 converter.register_structure_hook(str, _structure_str)
 converter.register_structure_hook_func(lambda t: t == list[str], _structure_str_list)
+converter.register_structure_hook_func(
+    lambda t: t == (str | list[str]), _structure_str_or_list
+)
 
 
 def _non_empty(instance: Any, attribute: attrs.Attribute[list[str]], value: list[str]):
@@ -198,7 +205,8 @@ class GatewayConnectionFailedLabels:
 class DismissRule:
     """One declarative "just dismiss this" recogniser: a dialog that's always
     recognised the same simple way (title-contains and/or text-contains) and
-    always dismissed the same simple way (click one button).
+    always dismissed the same simple way (click one button, or the first present
+    of several candidates).
 
     `recognisers.DeclarativeDismissRecognizer` implements the `Recognizer`
     Protocol generically for every rule here.
@@ -215,11 +223,15 @@ class DismissRule:
     on screen."""
 
     name: str
-    click: str
+    click: str | list[str]
     match_title: str | None = None
     match_text: str | None = None
 
     def __attrs_post_init__(self) -> None:
+        if not self.click:
+            raise LabelsError(
+                f"dismiss_rules entry {self.name!r}: click must not be empty"
+            )
         if self.match_title is None and self.match_text is None:
             raise LabelsError(
                 f"dismiss_rules entry {self.name!r} needs at least one of "

@@ -16,6 +16,7 @@ from ibcontroller.agent_client import (
     AgentCommandConnection,
     AgentEventConnection,
     Component,
+    ElementNotFoundError,
     WindowEvent,
     WindowInfo,
 )
@@ -229,6 +230,60 @@ async def test_declarative_dismiss_handle_clicks_configured_button(
             await dispatcher.stop()
 
     assert seen["target"] == "I understand and accept"
+
+
+async def test_declarative_dismiss_handle_tries_candidate_buttons_in_order(
+    sock_path, event_sock_path
+):
+    """A rule whose button differs per build lists candidates: the first one
+    present is clicked."""
+    rule = DismissRule(
+        name="blind_trading",
+        click=["Override and Transmit", "Yes"],
+        match_text="blind trading",
+    )
+    attempts = []
+
+    def responder(request):
+        attempts.append(request["target"])
+        if request["target"] == "Override and Transmit":
+            return {"ok": False, "error": "not_found", "detail": "no such button"}
+        return {"ok": True}
+
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await DeclarativeDismissRecognizer(rule).handle(
+                _event("Order Preview"), [], dispatcher
+            )
+        finally:
+            await dispatcher.stop()
+
+    assert attempts == ["Override and Transmit", "Yes"]
+
+
+async def test_declarative_dismiss_handle_raises_when_no_candidate_is_found(
+    sock_path, event_sock_path
+):
+    rule = DismissRule(name="r", click=["a", "b"], match_text="x")
+    async with (
+        FakeCommandServer(
+            sock_path,
+            lambda _req: {"ok": False, "error": "not_found", "detail": "gone"},
+        ),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            with pytest.raises(ElementNotFoundError):
+                await DeclarativeDismissRecognizer(rule).handle(
+                    _event("Any"), [], dispatcher
+                )
+        finally:
+            await dispatcher.stop()
 
 
 async def test_declarative_dismiss_handle_scopes_click_to_the_recognised_window(

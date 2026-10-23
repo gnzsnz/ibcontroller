@@ -199,6 +199,40 @@ def test_dismiss_rule_without_match_fields_raises_labels_error(tmp_path):
         load_labels(config_dir=tmp_path)
 
 
+def test_dismiss_rule_click_accepts_a_string_or_a_candidate_list(tmp_path):
+    _write_override(
+        tmp_path,
+        {
+            "dismiss_rules": [
+                {"name": "one", "click": "OK", "match_title": "A"},
+                {"name": "many", "click": ["Override", "Yes"], "match_title": "B"},
+            ]
+        },
+    )
+    rules = {r.name: r for r in load_labels(config_dir=tmp_path).dismiss_rules}
+    assert rules["one"].click == "OK"
+    assert rules["many"].click == ["Override", "Yes"]
+
+
+def test_dismiss_rule_click_rejects_an_empty_candidate_list(tmp_path):
+    _write_override(
+        tmp_path,
+        {"dismiss_rules": [{"name": "bad", "click": [], "match_title": "A"}]},
+    )
+    with pytest.raises(LabelsError, match=r"dismiss_rules entry 'bad'.*click"):
+        load_labels(config_dir=tmp_path)
+
+
+@pytest.mark.parametrize("click", [[1], ["OK", None], 5, {"a": "b"}])
+def test_dismiss_rule_click_rejects_non_string_candidates(tmp_path, click):
+    _write_override(
+        tmp_path,
+        {"dismiss_rules": [{"name": "bad", "click": click, "match_title": "A"}]},
+    )
+    with pytest.raises(LabelsError):
+        load_labels(config_dir=tmp_path)
+
+
 def test_invalid_json_raises_labels_error(tmp_path):
     _write_override(tmp_path, "{oops")
     with pytest.raises(LabelsError, match="invalid JSON"):
