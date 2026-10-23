@@ -16,6 +16,8 @@ from ibcontroller.dialogs import (
     DialogEntry,
     DialogsError,
     MatchGroup,
+    load_catalog,
+    parse_catalog,
     run_steps,
 )
 from ibcontroller.dispatch import Dispatcher
@@ -190,3 +192,125 @@ async def test_run_steps_rejects_an_unknown_step_type(sock_path, event_sock_path
                 await run_steps(dispatcher, ["click"], window_id=None)  # type: ignore[list-item]
         finally:
             await dispatcher.stop()
+
+
+_VALID = """
+[[dialog]]
+name = "warn"
+default = "on"
+match = [ { title = "Warning", text = "some phrase" }, { text = "other" } ]
+[dialog.modes]
+off = []
+on = [ { click = ["OK", "Yes"] }, { click = "Close" } ]
+"""
+
+
+def test_parse_catalog_builds_entries():
+    catalog = parse_catalog(_VALID, source="test.toml")
+    (entry,) = catalog.dialog
+    assert entry.name == "warn"
+    assert entry.default == "on"
+    assert entry.match == [
+        MatchGroup(title="Warning", text="some phrase"),
+        MatchGroup(text="other"),
+    ]
+    assert entry.modes == {
+        "off": [],
+        "on": [ClickStep(["OK", "Yes"]), ClickStep("Close")],
+    }
+
+
+def test_parse_catalog_rejects_invalid_toml():
+    with pytest.raises(DialogsError, match=r"test.toml.*invalid TOML"):
+        parse_catalog("[[dialog", source="test.toml")
+
+
+@pytest.mark.parametrize(
+    "toml",
+    [
+        _VALID + 'extra = "x"\n',  # unknown key on the entry
+        _VALID.replace('{ text = "other" }', '{ text = "other", regex = "x" }'),
+        _VALID.replace('{ click = "Close" }', '{ click = "Close", wait = 1 }'),
+        _VALID.replace('default = "on"', "default = 5"),
+        _VALID.replace('{ click = "Close" }', "{ click = 5 }"),
+        _VALID.replace('{ click = "Close" }', "{ click = [1] }"),
+    ],
+    ids=[
+        "entry-key",
+        "group-key",
+        "step-key",
+        "default-type",
+        "click-int",
+        "click-list",
+    ],
+)
+def test_parse_catalog_rejects_unknown_keys_and_wrong_types(toml):
+    with pytest.raises(DialogsError, match=r"test\.toml"):
+        parse_catalog(toml, source="test.toml")
+
+
+def test_parse_catalog_names_the_unknown_key():
+    toml = _VALID.replace('{ text = "other" }', '{ text = "other", regex = "x" }')
+    with pytest.raises(DialogsError, match=r"unknown key.*regex.*match\[1\]"):
+        parse_catalog(toml, source="test.toml")
+
+
+def test_parse_catalog_reports_the_entry_that_fails_validation():
+    toml = _VALID.replace('default = "on"', 'default = "maybe"')
+    with pytest.raises(DialogsError, match=r"dialog 'warn'.*'maybe'"):
+        parse_catalog(toml, source="test.toml")
+
+
+def test_parse_catalog_rejects_duplicate_names():
+    with pytest.raises(DialogsError, match=r"duplicate.*'warn'"):
+        parse_catalog(_VALID + _VALID, source="test.toml")
+
+
+def test_parse_catalog_accepts_an_empty_file():
+    assert parse_catalog("", source="test.toml").dialog == []
+
+
+def test_bundled_catalog_loads_with_the_expected_entries():
+    catalog = load_catalog()
+    entries = {e.name: e for e in catalog.dialog}
+    assert list(entries) == [
+        "non_brokerage_account",
+        "auto_restart_confirmation",
+        "password_expiry_warning",
+        "blind_trading",
+    ]
+    assert {n: e.default for n, e in entries.items()} == {
+        "non_brokerage_account": "on",
+        "auto_restart_confirmation": "on",
+        "password_expiry_warning": "off",  # nosec B105
+        "blind_trading": "off",
+    }
+
+
+def test_bundled_always_on_entries_keep_the_old_rules():
+    entries = {e.name: e for e in load_catalog().dialog}
+    brokerage = entries["non_brokerage_account"]
+    assert brokerage.match == [MatchGroup(text="This is not a brokerage account")]
+    assert brokerage.modes["on"] == [ClickStep(["I understand and accept"])]
+    restart = entries["auto_restart_confirmation"]
+    assert restart.match == [MatchGroup(text="trading platform restart automatically")]
+    assert restart.modes["on"] == [ClickStep(["OK"])]
+
+
+def test_bundled_blind_trading_has_both_ibc_variants_and_candidate_buttons():
+    entries = {e.name: e for e in load_catalog().dialog}
+    blind = entries["blind_trading"]
+    assert blind.match == [
+        MatchGroup(title="Order Preview", text="blind trading"),
+        MatchGroup(
+            text="blind trading",
+            text_also="Are you sure you want to submit this order?",
+        ),
+    ]
+    assert blind.modes["on"] == [ClickStep(["Override and Transmit", "Yes"])]
+    assert blind.modes["off"] == []
+
+
+def test_every_bundled_entry_has_an_off_and_an_on_mode():
+    for entry in load_catalog().dialog:
+        assert {"off", "on"} <= set(entry.modes), entry.name

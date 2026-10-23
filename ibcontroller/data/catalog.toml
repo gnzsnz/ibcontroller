@@ -1,0 +1,45 @@
+# Bundled dialog catalog: one [[dialog]] entry per pop-up ibcontroller knows how to
+# handle. An entry has a name, a default mode, match groups (any group matching is
+# enough; inside a group every field must match, ignoring case) and modes, each an
+# ordered list of steps run on the matched window. A mode with no steps leaves the
+# dialog to the user.
+#
+# Strings come from the dialogs' own text. Entries marked "unverified" come from
+# IBC's source and have not been checked against a live window.
+
+[[dialog]]
+name = "non_brokerage_account"
+default = "on"
+match = [ { text = "This is not a brokerage account" } ]
+[dialog.modes]
+off = []
+on = [ { click = ["I understand and accept"] } ]
+
+[[dialog]]
+name = "auto_restart_confirmation"
+default = "on"
+match = [ { text = "trading platform restart automatically" } ]
+[dialog.modes]
+off = []
+on = [ { click = ["OK"] } ]
+
+# Unverified (IBC: DismissPasswordExpiryWarning).
+[[dialog]]
+name = "password_expiry_warning"
+default = "off"
+match = [ { title = "Password Notice" } ]
+[dialog.modes]
+off = []
+on = [ { click = ["OK"] } ]
+
+# Unverified (IBC: AllowBlindTrading). IBC matches two variants of this dialog.
+[[dialog]]
+name = "blind_trading"
+default = "off"
+match = [
+  { title = "Order Preview", text = "blind trading" },
+  { text = "blind trading", text_also = "Are you sure you want to submit this order?" },
+]
+[dialog.modes]
+off = []
+on = [ { click = ["Override and Transmit", "Yes"] } ]
