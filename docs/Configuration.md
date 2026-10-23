@@ -40,7 +40,7 @@ Settings that drive the behaviour of `ibcontroller` itself.
 | `tws_channel` | `IBC_TWS_CHANNEL` | `"stable"`/`"latest"`; narrows auto-detection to installs carrying this update channel. Ignored when `tws_version` is set explicitly | `"stable"` |
 | `tws_path` | `IBC_TWS_PATH` | Override the install-path inference | `None` |
 | `tws_settings_path` | `IBC_TWS_SETTINGS_PATH` | Where TWS/Gateway stores its own settings (not the install dir); per instance | `None` (per-instance default) |
-| `settings_file` | `IBC_SETTINGS_FILE` | Extra declarative settings file, merged on top of the built-in settings -- see "Declarative settings" below | `None` |
+| `settings_file` | `IBC_SETTINGS_FILE` | Extra declarative settings file, merged on top of the built-in settings -- see "Declarative configuration" below | `None` |
 | (rejected) | `IBC_USERID` | Login user id; environment-variable-only, never from the config file. Also accepts `IBC_USERID_FILE` | (required) |
 | (rejected) | `IBC_PASSWORD` | Login password; environment-variable-only, never from the config file. Also accepts `IBC_PASSWORD_FILE` | (required) |
 | `trace_enabled` | `IBC_TRACE_ENABLED` | Verbose raw wire trace (`cmd-{instance}.jsonl` / `events-{instance}.jsonl` next to the log file) | `false` |
@@ -60,7 +60,7 @@ Settings related to TWS/ibgateway.
 | --- | --- | --- | --- |
 | `trading_mode` | `IBC_TRADING_MODE` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
 | `read_only_login` | `IBC_READ_ONLY_LOGIN` | TWS only (Gateway logs a warning and logs in normally). Clicks "Enter Read Only" on the 2FA frame instead of waiting for the push; no effect without 2FA (paper) | `false` |
-| `read_only_api` | `IBC_READ_ONLY_API` | `true`/`false` sets it; omit to leave the existing setting unchanged. Applied automatically -- see "Declarative settings" | `None` (unchanged) |
+| `read_only_api` | `IBC_READ_ONLY_API` | `true`/`false` sets it; omit to leave the existing setting unchanged. Applied automatically -- see "Declarative configuration" | `None` (unchanged) |
 | `accept_incoming_connections` | `IBC_ACCEPT_INCOMING_CONNECTIONS` | How to handle incoming API connection dialogs -- see below | `"manual"` |
 | `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | What to do when an existing session is detected -- see below | `"manual"` |
 | `auto_restart_time` | `IBC_AUTO_RESTART_TIME` | Daily auto-restart time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
@@ -242,7 +242,13 @@ cannot be enumerated, so extend `sweep_paths` to probe more nodes. Use it to
 learn a panel's layout before writing a declarative entry, and after a
 TWS/Gateway upgrade.
 
-## Declarative settings
+## Declarative configuration
+
+Two kinds of behaviour are described in data files rather than code: Global Configuration
+**settings** applied to TWS/Gateway at startup, and **dialogs** (pop-ups) that ibcontroller
+recognises and answers. Each has its own section below.
+
+### Settings
 
 `read_only_api` and `auto_restart_time` (and `auto_logoff_time`) are applied to
 TWS/Gateway through built-in declarative settings entries loaded automatically
@@ -269,3 +275,47 @@ Only the TWS Mosaic layout is supported: the dialog is opened with
 `File > Global Configuration...`. On the TWS Classic layout that menu item does not exist, no
 setting is applied (including `read_only_api`), and the attempt waits for `mfa_timeout`
 (default 180s) before giving up and logging the failure. Gateway is not affected.
+
+### Dialogs (dismiss rules)
+
+A dismiss rule says "when a window matches, click this button". Rules live in
+`labels.json` under `dismiss_rules` (bundled defaults, plus your own in
+`{config_dir}/labels.json`) and are checked on every window that opens. They suit any
+pop-up that is always handled the same simple way. A dialog that needs logic (parsing a
+value from its text, retrying, raising an error) needs code and is not expressible here.
+
+```json
+{
+  "dismiss_rules": [
+    {
+      "name": "my_custom_popup",
+      "match_title": "Some Notice",
+      "match_text": "some phrase",
+      "click": ["Override and Transmit", "Yes"]
+    }
+  ]
+}
+```
+
+| Key | Description |
+| --- | --- |
+| `name` | Rule name; the merge key (see below) and what the log line `dismissed <name> (declarative rule)` shows |
+| `match_title` | Substring of the window title |
+| `match_text` | Substring of any component's text or accessible name. HTML tags are removed and entities decoded before comparing, so copy the phrase as it shows on screen |
+| `click` | The button label, or a list of labels when the button differs per build. The first one present is clicked; a label that is not found moves on to the next |
+
+- At least one of `match_title`/`match_text` is required. If both are given, both must match.
+- `click` must not be empty. A malformed rule is a startup error (exit 78) that names the rule.
+- Matching is case-sensitive today.
+
+**Merging.** Rules are merged by `name`: a rule with a bundled rule's name replaces it, a
+rule with a new name is added, and bundled rules you do not name are kept (the
+non-brokerage-account warning, the auto-restart confirmation notice). Removing a bundled
+rule is not supported.
+
+**Order.** Login-outcome dialogs ("Login failed", "Unrecognized Username or Password", the
+connection and too-many-attempts warnings) and the "Shutdown progress" / "Restart in
+progress" windows are always handled first. A rule that matches one of them never runs, so
+a credential rejection still exits with code 77 and a restart is still recognised as one.
+Rules run before the other built-in handlers (existing session, re-login, incoming API
+connections).
