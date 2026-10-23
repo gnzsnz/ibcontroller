@@ -62,6 +62,7 @@ import attrs
 from ibcontroller.agent_client import AgentClientError, ProtocolError, WindowEvent
 from ibcontroller.config import Config, MfaTimeoutAction, Program
 from ibcontroller.diagnostics import sweep_settings_tree, watch_for_diagnostics
+from ibcontroller.dialogs import DialogCatalog
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.errors import IBControllerError
 from ibcontroller.labels import Labels
@@ -235,7 +236,7 @@ async def _apply_declarative_settings_or_log(
 
 
 async def run_control_loop(
-    config: Config, agent_jar: str | Path, *, labels: Labels
+    config: Config, agent_jar: str | Path, *, labels: Labels, dialogs: DialogCatalog
 ) -> ShutdownCause:
     """The outer loop -- ports IBC's own `ibcstart.sh` shape (a `while` loop
     wrapped around the entire JVM invocation) around one lap of
@@ -289,7 +290,12 @@ async def run_control_loop(
             lap = _Lap()
             try:
                 cause, settings_dir = await _run_one_cycle(
-                    config, agent_jar, labels, restart_hash=restart_hash, lap=lap
+                    config,
+                    agent_jar,
+                    labels,
+                    dialogs,
+                    restart_hash=restart_hash,
+                    lap=lap,
                 )
             except LoginFrameTimeoutError as exc:
                 budget.note(lap)
@@ -569,6 +575,7 @@ async def _run_one_cycle(  # noqa: PLR0915
     config: Config,
     agent_jar: str | Path,
     labels: Labels,
+    dialogs: DialogCatalog,
     *,
     restart_hash: str | None = None,
     lap: _Lap | None = None,
@@ -595,7 +602,9 @@ async def _run_one_cycle(  # noqa: PLR0915
         launched.dispatcher,
         restart_expected=restart_hash is not None,
     )
-    registry = build_default_registry(config, labels, manager, manager.schedule_retry)
+    registry = build_default_registry(
+        config, labels, dialogs, manager, manager.schedule_retry
+    )
 
     def note_exit_kind(recognizer: object, event: WindowEvent) -> None:
         if isinstance(recognizer, ExitProgressRecognizer):

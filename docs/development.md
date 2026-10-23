@@ -353,8 +353,10 @@ call each other.
   - A recogniser acts only on the window it matched (`window_id`). The dialogs registry never acts
     on a window with a visible credential field.
   - The registry dispatches to the first matching recogniser: login-outcome and exit progress
-    recognisers, then declarative `dismiss_rules`, then the other built-ins. A declarative rule
-    cannot shadow a dialog that carries a login outcome or announces an exit.
+    recognisers, then one `DialogRecognizer` per entry of the bundled dialog catalog
+    (`dialogs.py`, `data/catalog.toml`), then the other built-ins. A catalog entry cannot shadow
+    a dialog that carries a login outcome or announces an exit. L6 receives the catalog from
+    `main.run_async`, loaded once at startup.
 - **Known deviations:**
   - `recognisers.py` and `diagnostics.py` iterate `Dispatcher.subscribe()` directly instead of going
     through L5-1.

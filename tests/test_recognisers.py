@@ -8,7 +8,6 @@ import logging
 import types
 from tempfile import gettempdir
 
-import attrs
 import pytest
 from typed_settings.types import Secret
 
@@ -27,9 +26,15 @@ from ibcontroller.config import (
     Program,
     TradingMode,
 )
-from ibcontroller.dialogs import ClickStep, DialogEntry, MatchGroup
+from ibcontroller.dialogs import (
+    ClickStep,
+    DialogCatalog,
+    DialogEntry,
+    MatchGroup,
+    load_catalog,
+)
 from ibcontroller.dispatch import Dispatcher
-from ibcontroller.labels import DismissRule, LabelsError, load_labels
+from ibcontroller.labels import load_labels
 from ibcontroller.logging_setup import configure_logging, stop_logging
 from ibcontroller.login import (
     CredentialsRejectedError,
@@ -39,7 +44,6 @@ from ibcontroller.login import (
 )
 from ibcontroller.recognisers import (
     AcceptIncomingConnectionsRecognizer,
-    DeclarativeDismissRecognizer,
     DialogRecognizer,
     ExistingSessionRecognizer,
     ExitKind,
@@ -65,12 +69,26 @@ from tests.fakes import FakeCommandServer, FakeEventServer
 pytestmark = pytest.mark.asyncio
 
 LABELS = load_labels()
-_NON_BROKERAGE_RULE = next(
-    r for r in LABELS.dismiss_rules if r.name == "non_brokerage_account"
-)
-_AUTO_RESTART_RULE = next(
-    r for r in LABELS.dismiss_rules if r.name == "auto_restart_confirmation"
-)
+CATALOG = load_catalog()
+
+
+def _catalog_recognizer(name: str) -> DialogRecognizer:
+    """The bundled catalog entry `name`, in its default mode."""
+    entry = next(e for e in CATALOG.dialog if e.name == name)
+    return DialogRecognizer(entry, entry.default)
+
+
+def _simple(
+    *, click: str | list[str] = "OK", title: str | None = None, text: str | None = None
+) -> DialogRecognizer:
+    """A one-group, one-click dialog entry in its only mode."""
+    entry = DialogEntry(
+        name="test_entry",
+        default="on",
+        match=[MatchGroup(title=title, text=text)],
+        modes={"on": [ClickStep(click)]},
+    )
+    return DialogRecognizer(entry, "on")
 
 
 async def _start(cmd_sock, event_sock) -> Dispatcher:
@@ -117,17 +135,12 @@ def test_is_credential_entry_false_for_a_stale_not_showing_credential_field():
     assert is_credential_entry(components) is False
 
 
-def test_dismiss_rule_requires_at_least_one_match_field():
-    with pytest.raises(LabelsError, match=r"match_title.*match_text"):
-        DismissRule(name="bad", click="OK")
-
-
-def test_declarative_dismiss_recognises_by_text_via_accessible_name():
+def test_simple_dialog_recognises_by_text_via_accessible_name():
     """The field this data lands in: `ComponentLookup.describe()`'s `text` field
     only ever comes from `JTextComponent`, and `JLabel` isn't one, so a
     label's displayed text never reaches `component.text` at all. It surfaces
     via `accessible_name` instead (Swing's default `AccessibleJLabel` behavior)."""
-    recognizer = DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)
+    recognizer = _catalog_recognizer("non_brokerage_account")
     event = _event("IBKR Gateway")
     matching = [
         _component(
@@ -143,60 +156,55 @@ def test_declarative_dismiss_recognises_by_text_via_accessible_name():
     assert recognizer.recognises(event, not_matching) is False
 
 
-def test_declarative_dismiss_matches_a_phrase_spanning_an_html_tag():
+def test_simple_dialog_matches_a_phrase_spanning_an_html_tag():
     """IB message panes are HTML: a phrase copied from the screen can span a
     `<br>`/`<b>` that the raw text carries between its words."""
-    recognizer = DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)
-    assert _NON_BROKERAGE_RULE.match_text is not None
-    words = _NON_BROKERAGE_RULE.match_text.split(" ", 1)
+    recognizer = _catalog_recognizer("non_brokerage_account")
+    words = "This is not a brokerage account".split(" ", 1)
     markup = f"<html>{words[0]}<br> <b>{words[1]}</b></html>"
 
     assert recognizer.recognises(_event("IBKR Gateway"), [_component(text=markup)])
 
 
-def test_declarative_dismiss_matches_a_phrase_holding_an_html_entity():
+def test_simple_dialog_matches_a_phrase_holding_an_html_entity():
     """From a live 2FA dialog dump: the pane holds `&quot;` where the screen
     shows a quote, and a `<br>` mid-sentence."""
-    rule = DismissRule(
-        name="x", match_text='go to "authenticate" from the services screen', click="OK"
-    )
+    rule = _simple(text='go to "authenticate" from the services screen', click="OK")
     markup = (
         "<html><body>In the app go to &quot;authenticate&quot; from the "
         "services<br>screen.</body></html>"
     )
 
-    assert DeclarativeDismissRecognizer(rule).recognises(
-        _event("2FA"), [_component(text=markup)]
-    )
+    assert rule.recognises(_event("2FA"), [_component(text=markup)])
 
 
-def test_declarative_dismiss_also_matches_via_text_field():
+def test_simple_dialog_also_matches_via_text_field():
     """Robustness for a hypothetical future Gateway version rendering this as an
     actual text component instead of a plain label."""
-    recognizer = DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)
+    recognizer = _catalog_recognizer("non_brokerage_account")
     event = _event("IBKR Gateway")
     matching = [_component(text="This is not a brokerage account -- read carefully")]
 
     assert recognizer.recognises(event, matching) is True
 
 
-def test_declarative_dismiss_recognises_by_title():
-    rule = DismissRule(name="test_title", click="OK", match_title="Login failed")
-    recognizer = DeclarativeDismissRecognizer(rule)
+def test_simple_dialog_recognises_by_title():
+    rule = _simple(click="OK", title="Login failed")
+    recognizer = rule
     assert recognizer.recognises(_event("Login failed"), []) is True
     assert recognizer.recognises(_event("IBKR Gateway"), []) is False
 
 
-def test_declarative_dismiss_title_match_ignores_case():
-    rule = DismissRule(name="t", click="OK", match_title="Order Preview")
-    recognizer = DeclarativeDismissRecognizer(rule)
+def test_simple_dialog_title_match_ignores_case():
+    rule = _simple(click="OK", title="Order Preview")
+    recognizer = rule
     assert recognizer.recognises(_event("ORDER PREVIEW (paper)"), []) is True
     assert recognizer.recognises(_event("order preview"), []) is True
 
 
-def test_declarative_dismiss_text_match_ignores_case():
-    rule = DismissRule(name="t", click="OK", match_text="Blind Trading")
-    recognizer = DeclarativeDismissRecognizer(rule)
+def test_simple_dialog_text_match_ignores_case():
+    rule = _simple(click="OK", text="Blind Trading")
+    recognizer = rule
     assert recognizer.recognises(
         _event("Any"), [_component(text="Warning: BLIND TRADING is on")]
     )
@@ -205,26 +213,20 @@ def test_declarative_dismiss_text_match_ignores_case():
     )
 
 
-def test_declarative_dismiss_text_match_ignores_case_after_html_stripping():
-    rule = DismissRule(name="t", click="OK", match_text='are you "sure"')
+def test_simple_dialog_text_match_ignores_case_after_html_stripping():
+    rule = _simple(click="OK", text='are you "sure"')
     markup = "<html><body>ARE<br>YOU &quot;SURE&quot;?</body></html>"
-    assert DeclarativeDismissRecognizer(rule).recognises(
-        _event("Any"), [_component(text=markup)]
-    )
+    assert rule.recognises(_event("Any"), [_component(text=markup)])
 
 
-def test_declarative_dismiss_case_insensitive_match_still_rejects_other_text():
-    rule = DismissRule(name="t", click="OK", match_text="Blind Trading")
-    assert not DeclarativeDismissRecognizer(rule).recognises(
-        _event("Any"), [_component(text="something unrelated")]
-    )
+def test_simple_dialog_case_insensitive_match_still_rejects_other_text():
+    rule = _simple(click="OK", text="Blind Trading")
+    assert not rule.recognises(_event("Any"), [_component(text="something unrelated")])
 
 
-def test_declarative_dismiss_requires_both_when_both_given():
-    rule = DismissRule(
-        name="test_and", click="OK", match_title="Warning", match_text="specific text"
-    )
-    recognizer = DeclarativeDismissRecognizer(rule)
+def test_simple_dialog_requires_both_when_both_given():
+    rule = _simple(click="OK", title="Warning", text="specific text")
+    recognizer = rule
     # Title matches, text doesn't -- must not recognise (AND, not OR).
     assert (
         recognizer.recognises(_event("Warning"), [_component(text="unrelated")])
@@ -244,7 +246,7 @@ def test_declarative_dismiss_requires_both_when_both_given():
     )
 
 
-async def test_declarative_dismiss_handle_clicks_configured_button(
+async def test_simple_dialog_handle_clicks_configured_button(
     sock_path, event_sock_path
 ):
     seen = {}
@@ -259,7 +261,7 @@ async def test_declarative_dismiss_handle_clicks_configured_button(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            recognizer = DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)
+            recognizer = _catalog_recognizer("non_brokerage_account")
             await recognizer.handle(_event("IBKR Gateway"), [], dispatcher)
         finally:
             await dispatcher.stop()
@@ -267,43 +269,10 @@ async def test_declarative_dismiss_handle_clicks_configured_button(
     assert seen["target"] == "I understand and accept"
 
 
-async def test_declarative_dismiss_handle_tries_candidate_buttons_in_order(
+async def test_simple_dialog_handle_raises_when_no_candidate_is_found(
     sock_path, event_sock_path
 ):
-    """A rule whose button differs per build lists candidates: the first one
-    present is clicked."""
-    rule = DismissRule(
-        name="blind_trading",
-        click=["Override and Transmit", "Yes"],
-        match_text="blind trading",
-    )
-    attempts = []
-
-    def responder(request):
-        attempts.append(request["target"])
-        if request["target"] == "Override and Transmit":
-            return {"ok": False, "error": "not_found", "detail": "no such button"}
-        return {"ok": True}
-
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            await DeclarativeDismissRecognizer(rule).handle(
-                _event("Order Preview"), [], dispatcher
-            )
-        finally:
-            await dispatcher.stop()
-
-    assert attempts == ["Override and Transmit", "Yes"]
-
-
-async def test_declarative_dismiss_handle_raises_when_no_candidate_is_found(
-    sock_path, event_sock_path
-):
-    rule = DismissRule(name="r", click=["a", "b"], match_text="x")
+    rule = _simple(click=["a", "b"], text="x")
     async with (
         FakeCommandServer(
             sock_path,
@@ -314,14 +283,12 @@ async def test_declarative_dismiss_handle_raises_when_no_candidate_is_found(
         dispatcher = await _start(sock_path, event_sock_path)
         try:
             with pytest.raises(ElementNotFoundError):
-                await DeclarativeDismissRecognizer(rule).handle(
-                    _event("Any"), [], dispatcher
-                )
+                await rule.handle(_event("Any"), [], dispatcher)
         finally:
             await dispatcher.stop()
 
 
-async def test_declarative_dismiss_handle_scopes_click_to_the_recognised_window(
+async def test_simple_dialog_handle_scopes_click_to_the_recognised_window(
     sock_path, event_sock_path
 ):
     """Regression test: an unscoped click lands on
@@ -341,7 +308,7 @@ async def test_declarative_dismiss_handle_scopes_click_to_the_recognised_window(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            recognizer = DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)
+            recognizer = _catalog_recognizer("non_brokerage_account")
             await recognizer.handle(
                 _event("IBKR Gateway", window_id="w7"), [], dispatcher
             )
@@ -351,7 +318,7 @@ async def test_declarative_dismiss_handle_scopes_click_to_the_recognised_window(
     assert seen["window_id"] == "w7"
 
 
-async def test_declarative_dismiss_handle_logs_with_rule_name(
+async def test_simple_dialog_handle_logs_with_rule_name(
     sock_path, event_sock_path, tmp_path
 ):
     """Integration check that the logging actually reaches a real
@@ -365,7 +332,7 @@ async def test_declarative_dismiss_handle_logs_with_rule_name(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            recognizer = DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)
+            recognizer = _catalog_recognizer("non_brokerage_account")
             await recognizer.handle(_event("IBKR Gateway"), [], dispatcher)
         finally:
             await dispatcher.stop()
@@ -374,7 +341,7 @@ async def test_declarative_dismiss_handle_logs_with_rule_name(
     # draining it is what guarantees they've been written before we read.
     stop_logging()
     log_text = (tmp_path / "test.log").read_text()
-    assert "dismissed non_brokerage_account (declarative rule)" in log_text
+    assert "handled dialog non_brokerage_account (mode on)" in log_text
 
 
 def _dialog(**overrides) -> DialogEntry:
@@ -627,6 +594,7 @@ def test_not_currently_available_registered_before_login_failed():
             log_dir=f"{gettempdir()}/log",
         ),
         LABELS,
+        CATALOG,
         types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False),  # type: ignore[arg-type]
         lambda _s: None,
     )
@@ -1073,7 +1041,7 @@ async def test_registry_dispatch_returns_false_when_nothing_matches(
         dispatcher = await _start(sock_path, event_sock_path)
         try:
             registry = RecognizerRegistry(
-                [DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)]
+                [_catalog_recognizer("non_brokerage_account")]
             )
             handled = await registry.dispatch(
                 _event("Some Unrelated Window"), [], dispatcher
@@ -1126,7 +1094,7 @@ async def test_handle_window_opened_skips_dispatch_when_credential_field_present
         dispatcher = await _start(sock_path, event_sock_path)
         try:
             registry = RecognizerRegistry(
-                [DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)]
+                [_catalog_recognizer("non_brokerage_account")]
             )
             handled = await handle_window_opened(
                 registry, _event("IBKR Gateway"), dispatcher
@@ -1163,7 +1131,7 @@ async def test_handle_window_opened_dispatches_when_no_credential_field(
         dispatcher = await _start(sock_path, event_sock_path)
         try:
             registry = RecognizerRegistry(
-                [DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)]
+                [_catalog_recognizer("non_brokerage_account")]
             )
             handled = await handle_window_opened(
                 registry, _event("IBKR Gateway"), dispatcher
@@ -1232,7 +1200,7 @@ async def test_handle_window_opened_treats_a_vanished_window_as_unhandled(
         dispatcher = await _start(sock_path, event_sock_path)
         try:
             registry = RecognizerRegistry(
-                [DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)]
+                [_catalog_recognizer("non_brokerage_account")]
             )
             handled = await handle_window_opened(
                 registry, _event("IBKR Gateway", window_id="w7"), dispatcher
@@ -1259,7 +1227,7 @@ async def test_watch_for_unprompted_windows_dispatches_a_window_that_arrives_lat
                 "components": [
                     {
                         "class": "javax.swing.JLabel",
-                        "accessible_name": _NON_BROKERAGE_RULE.match_text,
+                        "accessible_name": "This is not a brokerage account",
                     }
                 ],
             }
@@ -1272,7 +1240,7 @@ async def test_watch_for_unprompted_windows_dispatches_a_window_that_arrives_lat
         dispatcher = await _start(sock_path, event_sock_path)
         try:
             registry = RecognizerRegistry(
-                [DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)]
+                [_catalog_recognizer("non_brokerage_account")]
             )
             watcher = asyncio.ensure_future(
                 watch_for_unprompted_windows(registry, dispatcher)
@@ -1305,7 +1273,7 @@ async def test_watch_for_unprompted_windows_survives_a_failed_action(
                 "components": [
                     {
                         "class": "javax.swing.JLabel",
-                        "accessible_name": _NON_BROKERAGE_RULE.match_text,
+                        "accessible_name": "This is not a brokerage account",
                     }
                 ],
             }
@@ -1322,7 +1290,7 @@ async def test_watch_for_unprompted_windows_survives_a_failed_action(
         dispatcher = await _start(sock_path, event_sock_path)
         try:
             registry = RecognizerRegistry(
-                [DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE)]
+                [_catalog_recognizer("non_brokerage_account")]
             )
             watcher = asyncio.ensure_future(
                 watch_for_unprompted_windows(registry, dispatcher)
@@ -1406,7 +1374,7 @@ def test_parse_wait_seconds_falls_back_to_buffer_when_unmatched():
 
 
 def test_auto_restart_confirmation_recognises_by_text():
-    recognizer = DeclarativeDismissRecognizer(_AUTO_RESTART_RULE)
+    recognizer = _catalog_recognizer("auto_restart_confirmation")
     event = _event("Warning")
     matching = [
         _component(
@@ -1420,7 +1388,7 @@ def test_auto_restart_confirmation_recognises_by_text():
 
 
 def test_auto_restart_confirmation_recognises_via_accessible_name_too():
-    recognizer = DeclarativeDismissRecognizer(_AUTO_RESTART_RULE)
+    recognizer = _catalog_recognizer("auto_restart_confirmation")
     event = _event("Warning")
     matching = [
         _component(
@@ -1438,7 +1406,7 @@ async def test_auto_restart_confirmation_dismisses_via_ok(sock_path, event_sock_
         calls.append(request)
         return {"ok": True}
 
-    recognizer = DeclarativeDismissRecognizer(_AUTO_RESTART_RULE)
+    recognizer = _catalog_recognizer("auto_restart_confirmation")
     async with (
         FakeCommandServer(sock_path, responder),
         FakeEventServer(event_sock_path, []),
@@ -1653,24 +1621,21 @@ def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
     registry = build_default_registry(
         config,
         LABELS,
+        CATALOG,
         session,  # type: ignore[arg-type]
         lambda _wait: None,
     )
-    declarative = [
-        r for r in registry._registry if isinstance(r, DeclarativeDismissRecognizer)
-    ]
+    declarative = [r for r in registry._registry if isinstance(r, DialogRecognizer)]
     hand_written_types = {
-        type(r)
-        for r in registry._registry
-        if not isinstance(r, DeclarativeDismissRecognizer)
+        type(r) for r in registry._registry if not isinstance(r, DialogRecognizer)
     }
-    # Declarative rules sit after the signal recognisers, before the rest.
+    # Catalog entries sit after the signal recognisers, before the rest.
     outcomes = len(_SIGNAL_TYPES)
     assert all(isinstance(r, _SIGNAL_TYPES) for r in registry._registry[:outcomes])
     assert registry._registry[outcomes : outcomes + len(declarative)] == declarative
-    assert {r.rule.name for r in declarative} == {
-        rule.name for rule in LABELS.dismiss_rules
-    }
+    assert [(r.entry.name, r.mode) for r in declarative] == [
+        (entry.name, entry.default) for entry in CATALOG.dialog
+    ]
     assert hand_written_types == {
         ExistingSessionRecognizer,
         ReloginRecognizer,
@@ -1709,13 +1674,17 @@ def test_declarative_rule_does_not_shadow_a_login_outcome_recogniser():
         password=Secret("p"),
         log_dir=f"{gettempdir()}/log",
     )
-    rule = DismissRule(
-        name="user-rule", match_title="Unrecognized Username", click="OK"
+    shadow = DialogEntry(
+        name="shadow",
+        default="on",
+        match=[MatchGroup(title="Unrecognized Username")],
+        modes={"on": [ClickStep("OK")]},
     )
-    labels = attrs.evolve(LABELS, dismiss_rules=[*LABELS.dismiss_rules, rule])
+    catalog = DialogCatalog(dialog=[shadow, *CATALOG.dialog])
     registry = build_default_registry(
         config,
-        labels,
+        LABELS,
+        catalog,
         types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False),  # type: ignore[arg-type]
         lambda _s: None,
     )
@@ -1735,11 +1704,17 @@ def test_declarative_rule_does_not_shadow_the_exit_progress_recogniser():
         password=Secret("p"),
         log_dir=f"{gettempdir()}/log",
     )
-    rule = DismissRule(name="user-rule", match_title="Restart in progress", click="OK")
-    labels = attrs.evolve(LABELS, dismiss_rules=[*LABELS.dismiss_rules, rule])
+    shadow = DialogEntry(
+        name="shadow",
+        default="on",
+        match=[MatchGroup(title="Restart in progress")],
+        modes={"on": [ClickStep("OK")]},
+    )
+    catalog = DialogCatalog(dialog=[shadow, *CATALOG.dialog])
     registry = build_default_registry(
         config,
-        labels,
+        LABELS,
+        catalog,
         types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False),  # type: ignore[arg-type]
         lambda _s: None,
     )
@@ -1764,6 +1739,7 @@ def test_build_registry_binds_session_and_schedule_retry():
     registry = build_default_registry(
         config,
         LABELS,
+        CATALOG,
         session,  # type: ignore[arg-type]
         retries.append,
     )

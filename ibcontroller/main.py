@@ -38,6 +38,7 @@ import anyio.to_thread
 from ibcontroller.app_dirs import resolve_app_dirs
 from ibcontroller.config import load_config
 from ibcontroller.control_loop import ShutdownCause, run_control_loop
+from ibcontroller.dialogs import load_catalog
 from ibcontroller.labels import load_labels
 from ibcontroller.launcher import LauncherError
 
@@ -136,11 +137,12 @@ async def run_async(
     labels = await anyio.to_thread.run_sync(
         functools.partial(load_labels, config_dir=config_dir)
     )
+    dialogs = await anyio.to_thread.run_sync(load_catalog)
     agent_jar_path = await anyio.to_thread.run_sync(_load_jar_path)
 
     loop = asyncio.get_running_loop()
     task = asyncio.ensure_future(
-        run_control_loop(config, agent_jar_path, labels=labels)
+        run_control_loop(config, agent_jar_path, labels=labels, dialogs=dialogs)
     )
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, task.cancel)

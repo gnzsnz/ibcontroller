@@ -289,11 +289,10 @@ US/Eastern invalidation window if that's the intent.
 ## Declarative configuration
 
 Beyond `ibcontroller.toml`, two things let you shape ibcontroller's behavior without
-writing any Python: **`labels.json`** (window/button text, plus simple pop-up dismissal
-rules) and **`ibkr_settings.toml`** (Global Configuration settings applied to Gateway/TWS
+writing any Python: **`labels.json`** (window/button text) and **`ibkr_settings.toml`** (Global Configuration settings applied to Gateway/TWS
 at startup). Each is covered below.
 
-### `labels.json` — window/button text and pop-up dismissal
+### `labels.json` — window/button text
 
 `{config_dir}/labels.json` (rename `labels.json.example` to activate) overrides one or
 more fields of the bundled default, field by field — you only need to include what
@@ -301,43 +300,26 @@ you're changing, not the whole file. Use it when a TWS/Gateway release renames a
 or dialog title ibcontroller matches against.
 
 A malformed file is rejected at startup (exit code 78) with a message naming the file and
-the field: a string where a list is expected, an empty list of titles or buttons, invalid
-JSON, or a `dismiss_rules` entry without `match_title`/`match_text`. A misspelled key is
+the field: a string where a list is expected, an empty list of titles or buttons, or
+invalid JSON. A misspelled key is
 logged as a warning and ignored, so check the log if an override seems to have no effect.
 
 `generic.dismiss_buttons` lists the buttons tried, in order, to close a pop-up no specific
 handler recognises (default `OK`, `Close`, `Dismiss`).
 
-The one part of `labels.json` that isn't just text is `dismiss_rules` — a list of
-"if a window matches, click this button" entries, checked on every window that opens.
-Each entry needs at least one of `match_title`/`match_text` (both, if given, must
-match; case is ignored); `click` is the button's label, or a list of labels when the button differs per
-build (the first one present is clicked). `match_text` also matches message text with HTML
-tags removed and entities decoded, so copy the phrase as it shows on screen.
-
-```json
-{
-  "dismiss_rules": [
-    {
-      "name": "my_custom_popup",
-      "match_title": "Some Notice",
-      "click": "OK"
-    }
-  ]
-}
-```
-
-`dismiss_rules` entries are merged by `name`: an entry with a bundled rule's name replaces
-that rule, an entry with a new name is added, and bundled rules (the non-brokerage-account
-warning, the auto-restart confirmation notice) you don't name are kept. Removing a bundled
-rule is not supported. Good for any pop-up that's always handled the same
-simple way; a dialog needing real logic (parsing a value out of its text, retrying,
-raising an error) isn't expressible this way and needs actual code.
+Pop-ups that are always handled the same simple way (match a window, click a button) are
+not in `labels.json`: they are entries of the bundled dialog catalog (`data/catalog.toml`).
+Today those are the non-brokerage-account warning and the auto-restart confirmation notice,
+both handled automatically; entries for the password-expiry notice and blind-trading
+confirmation ship switched off. Matching ignores case. Adding your own dialogs and switching
+catalog entries on or off arrives with the `ibcontroller.toml` sections for declarative
+configuration. A `dismiss_rules` key in `labels.json` is no longer read: it is logged as an
+unknown key and ignored.
 
 Login-outcome dialogs ("Login failed", "Unrecognized Username or Password", the connection
 and too-many-attempts warnings) and the "Shutdown progress" / "Restart in progress" windows
-are always handled first. A `dismiss_rules` entry that matches one of them never runs, so a
-credential rejection still exits with code 77 and a restart is still recognised as one.
+are always handled first, before catalog entries, so a credential rejection still exits with
+code 77 and a restart is still recognised as one.
 
 ### `ibkr_settings.toml` — Global Configuration settings
 

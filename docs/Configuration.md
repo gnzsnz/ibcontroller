@@ -276,46 +276,35 @@ Only the TWS Mosaic layout is supported: the dialog is opened with
 setting is applied (including `read_only_api`), and the attempt waits for `mfa_timeout`
 (default 180s) before giving up and logging the failure. Gateway is not affected.
 
-### Dialogs (dismiss rules)
+### Dialogs
 
-A dismiss rule says "when a window matches, click this button". Rules live in
-`labels.json` under `dismiss_rules` (bundled defaults, plus your own in
-`{config_dir}/labels.json`) and are checked on every window that opens. They suit any
-pop-up that is always handled the same simple way. A dialog that needs logic (parsing a
-value from its text, retrying, raising an error) needs code and is not expressible here.
+Pop-ups that are always handled the same simple way are entries of the bundled dialog
+catalog (`data/catalog.toml`). An entry names a dialog, says how to recognise it and what to
+do in each mode. They are checked on every window that opens, after the login-outcome and
+exit-progress dialogs.
 
-```json
-{
-  "dismiss_rules": [
-    {
-      "name": "my_custom_popup",
-      "match_title": "Some Notice",
-      "match_text": "some phrase",
-      "click": ["Override and Transmit", "Yes"]
-    }
-  ]
-}
-```
+| Entry | Default | Recognised by | Does |
+| --- | --- | --- | --- |
+| `non_brokerage_account` | on | text "This is not a brokerage account" | clicks "I understand and accept" |
+| `auto_restart_confirmation` | on | text "trading platform restart automatically" | clicks "OK" |
+| `password_expiry_warning` | off | title "Password Notice" | clicks "OK" |
+| `blind_trading` | off | "Order Preview" with "blind trading", or the confirmation text | clicks "Override and Transmit", else "Yes" |
 
-| Key | Description |
-| --- | --- |
-| `name` | Rule name; the merge key (see below) and what the log line `dismissed <name> (declarative rule)` shows |
-| `match_title` | Substring of the window title |
-| `match_text` | Substring of any component's text or accessible name. HTML tags are removed and entities decoded before comparing, so copy the phrase as it shows on screen |
-| `click` | The button label, or a list of labels when the button differs per build. The first one present is clicked; a label that is not found moves on to the next |
-
-- At least one of `match_title`/`match_text` is required. If both are given, both must match.
-- `click` must not be empty. A malformed rule is a startup error (exit 78) that names the rule.
-- Matching ignores case for both `match_title` and `match_text`.
-
-**Merging.** Rules are merged by `name`: a rule with a bundled rule's name replaces it, a
-rule with a new name is added, and bundled rules you do not name are kept (the
-non-brokerage-account warning, the auto-restart confirmation notice). Removing a bundled
-rule is not supported.
+- Matching ignores case. Message text is compared with HTML tags removed and entities
+  decoded, so a phrase can be copied as it shows on screen.
+- Candidate buttons are tried in order and the first one present is clicked.
+- An entry in a mode with no steps (`off`) leaves the dialog on screen for you.
+- `password_expiry_warning` and `blind_trading` come from IBC's source and have not been
+  checked against a live window.
+- Entries are fixed to their default mode for now. Switching an entry and adding your own
+  arrive with the `ibcontroller.toml` sections for declarative configuration.
+- A malformed catalog is a startup error (exit 78) that names the file and the entry.
+- `dismiss_rules` in `labels.json` is no longer read: it is logged as an unknown key and
+  ignored.
 
 **Order.** Login-outcome dialogs ("Login failed", "Unrecognized Username or Password", the
 connection and too-many-attempts warnings) and the "Shutdown progress" / "Restart in
-progress" windows are always handled first. A rule that matches one of them never runs, so
-a credential rejection still exits with code 77 and a restart is still recognised as one.
-Rules run before the other built-in handlers (existing session, re-login, incoming API
-connections).
+progress" windows are always handled first. A catalog entry that matches one of them never
+runs, so a credential rejection still exits with code 77 and a restart is still recognised
+as one. Catalog entries run before the other built-in handlers (existing session, re-login,
+incoming API connections).

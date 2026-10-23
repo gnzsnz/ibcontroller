@@ -8,7 +8,7 @@ import logging
 import pytest
 
 from ibcontroller.config import ConfigError
-from ibcontroller.labels import DismissRule, Labels, LabelsError, load_labels
+from ibcontroller.labels import Labels, LabelsError, load_labels
 
 
 def test_bundled_default_loads_and_structures():
@@ -32,15 +32,6 @@ def test_bundled_default_loads_and_structures():
     assert labels.gateway_connection_failed.known_reasons == [
         "has multiple Paper Trading users associated with it"
     ]
-    assert {rule.name for rule in labels.dismiss_rules} == {
-        "non_brokerage_account",
-        "auto_restart_confirmation",
-    }
-    non_brokerage = next(
-        r for r in labels.dismiss_rules if r.name == "non_brokerage_account"
-    )
-    assert non_brokerage.match_text == "This is not a brokerage account"
-    assert non_brokerage.click == "I understand and accept"
 
 
 def test_api_settings_controls_are_in_the_bundled_file():
@@ -61,53 +52,6 @@ def test_generic_dismiss_buttons_reject_empty_override(tmp_path):
     (tmp_path / "labels.json").write_text('{"generic": {"dismiss_buttons": []}}')
     with pytest.raises(LabelsError):
         load_labels(config_dir=tmp_path)
-
-
-def test_dismiss_rule_needs_at_least_one_match_field():
-    with pytest.raises(LabelsError):
-        DismissRule(name="bad", click="OK")
-
-
-def _bundled_rule_names():
-    return [r.name for r in load_labels(config_dir=None).dismiss_rules]
-
-
-def test_dismiss_rules_override_appends_new_name(tmp_path):
-    (tmp_path / "labels.json").write_text(
-        json.dumps(
-            {
-                "dismiss_rules": [
-                    {"name": "custom", "click": "OK", "match_title": "Custom Dialog"}
-                ]
-            }
-        )
-    )
-    labels = load_labels(config_dir=tmp_path)
-    assert [r.name for r in labels.dismiss_rules] == [*_bundled_rule_names(), "custom"]
-
-
-def test_dismiss_rules_override_replaces_same_name(tmp_path):
-    bundled = _bundled_rule_names()
-    (tmp_path / "labels.json").write_text(
-        json.dumps(
-            {
-                "dismiss_rules": [
-                    {"name": bundled[0], "click": "Nope", "match_title": "Other"}
-                ]
-            }
-        )
-    )
-    labels = load_labels(config_dir=tmp_path)
-    assert [r.name for r in labels.dismiss_rules] == bundled
-    assert labels.dismiss_rules[0].click == "Nope"
-
-
-def test_dismiss_rules_bundled_kept_without_override(tmp_path):
-    (tmp_path / "labels.json").write_text(
-        json.dumps({"login": {"login_buttons": ["X"]}})
-    )
-    labels = load_labels(config_dir=tmp_path)
-    assert [r.name for r in labels.dismiss_rules] == _bundled_rule_names()
 
 
 def test_no_config_dir_uses_bundled_default_only():
@@ -193,46 +137,6 @@ def test_empty_known_reasons_is_accepted(tmp_path):
     )
 
 
-def test_dismiss_rule_without_match_fields_raises_labels_error(tmp_path):
-    _write_override(tmp_path, {"dismiss_rules": [{"name": "bad", "click": "OK"}]})
-    with pytest.raises(LabelsError, match="dismiss_rules entry 'bad'"):
-        load_labels(config_dir=tmp_path)
-
-
-def test_dismiss_rule_click_accepts_a_string_or_a_candidate_list(tmp_path):
-    _write_override(
-        tmp_path,
-        {
-            "dismiss_rules": [
-                {"name": "one", "click": "OK", "match_title": "A"},
-                {"name": "many", "click": ["Override", "Yes"], "match_title": "B"},
-            ]
-        },
-    )
-    rules = {r.name: r for r in load_labels(config_dir=tmp_path).dismiss_rules}
-    assert rules["one"].click == "OK"
-    assert rules["many"].click == ["Override", "Yes"]
-
-
-def test_dismiss_rule_click_rejects_an_empty_candidate_list(tmp_path):
-    _write_override(
-        tmp_path,
-        {"dismiss_rules": [{"name": "bad", "click": [], "match_title": "A"}]},
-    )
-    with pytest.raises(LabelsError, match=r"dismiss_rules entry 'bad'.*click"):
-        load_labels(config_dir=tmp_path)
-
-
-@pytest.mark.parametrize("click", [[1], ["OK", None], 5, {"a": "b"}])
-def test_dismiss_rule_click_rejects_non_string_candidates(tmp_path, click):
-    _write_override(
-        tmp_path,
-        {"dismiss_rules": [{"name": "bad", "click": click, "match_title": "A"}]},
-    )
-    with pytest.raises(LabelsError):
-        load_labels(config_dir=tmp_path)
-
-
 def test_invalid_json_raises_labels_error(tmp_path):
     _write_override(tmp_path, "{oops")
     with pytest.raises(LabelsError, match="invalid JSON"):
@@ -255,9 +159,7 @@ def test_unknown_keys_are_logged_and_ignored(tmp_path, caplog):
         {
             "login": {"gateway_title": ["x"]},
             "bogus": 1,
-            "dismiss_rules": [
-                {"name": "r", "click": "OK", "match_title": "t", "extra": 1}
-            ],
+            "dismiss_rules": [{"name": "r", "click": "OK", "match_title": "t"}],
         },
     )
     with caplog.at_level(logging.WARNING, logger="ibcontroller.labels"):
@@ -265,7 +167,7 @@ def test_unknown_keys_are_logged_and_ignored(tmp_path, caplog):
     logged = " ".join(r.getMessage() for r in caplog.records)
     assert "login.gateway_title" in logged
     assert "'bogus'" in logged
-    assert "dismiss_rules[0].extra" in logged
+    assert "'dismiss_rules'" in logged  # removed in favour of the dialog catalog
     assert labels.login.gateway_titles[0] == "IBKR Gateway"  # typo had no effect
 
 

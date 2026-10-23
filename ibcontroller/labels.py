@@ -8,19 +8,9 @@ ibcontroller works out of the box) is layered under an optional
 `labels.json` in `app_dirs.resolve_app_dirs()`'s `config_dir` -- merged one
 field at a time (`{"login": {"gateway_titles": [...]}}` overrides just that
 one field, leaving every other label and domain untouched), not a full
-replacement. `dismiss_rules` (below) is a list, merged by rule `name`: an
-override entry with a bundled rule's name replaces that rule, an entry with a
-new name is appended, and bundled rules the override doesn't name are kept.
-Removing a bundled rule is not supported.
-
-`dismiss_rules` is a real exception to "this file is just labels, not config
-rules": each entry is a full declarative `Recognizer` (see `DismissRule`'s
-own docstring), not just a name-to-text mapping the way every other group
-here is. It stays here to reuse this module's bundled-default-plus-override
-loader, rather than a second loader elsewhere. A *config rule* in the wider
-sense (arbitrary match -> arbitrary `ACTIONS` sequence, user-authored,
-per-deployment) is still a different, larger thing than a `DismissRule`
-(fixed shape: one match, one click)."""
+replacement. Dialog handling that needs no code (match a window, click a
+button) is not here: it lives in the bundled dialog catalog (`dialogs.py`).
+"""
 
 from __future__ import annotations
 
@@ -43,8 +33,7 @@ converter = cattrs.Converter()
 
 class LabelsError(ConfigError):
     """A malformed `labels.json` (bundled or override) -- invalid JSON, a wrong
-    type, an empty candidate list, or a `DismissRule` with neither
-    `match_title` nor `match_text` set. A `ConfigError`, so `cli.py` exits 78."""
+    type or an empty candidate list. A `ConfigError`, so `cli.py` exits 78."""
 
 
 def _structure_str(value: Any, _type: Any) -> str:
@@ -60,15 +49,8 @@ def _structure_str_list(value: Any, _type: Any) -> list[str]:
     return [_structure_str(item, str) for item in value]
 
 
-def _structure_str_or_list(value: Any, _type: Any) -> str | list[str]:
-    return value if isinstance(value, str) else _structure_str_list(value, _type)
-
-
 converter.register_structure_hook(str, _structure_str)
 converter.register_structure_hook_func(lambda t: t == list[str], _structure_str_list)
-converter.register_structure_hook_func(
-    lambda t: t == (str | list[str]), _structure_str_or_list
-)
 
 
 def _non_empty(instance: Any, attribute: attrs.Attribute[list[str]], value: list[str]):
@@ -202,44 +184,6 @@ class GatewayConnectionFailedLabels:
 
 
 @attrs.define(frozen=True)
-class DismissRule:
-    """One declarative "just dismiss this" recogniser: a dialog that's always
-    recognised the same simple way (title-contains and/or text-contains, ignoring
-    case) and always dismissed the same simple way (click one button, or the first
-    present of several candidates).
-
-    `recognisers.DeclarativeDismissRecognizer` implements the `Recognizer`
-    Protocol generically for every rule here.
-
-    At least one of `match_title`/`match_text` is required (checked in
-    `__attrs_post_init__`, so a malformed rule fails at `load_labels()` time,
-    not silently at first dispatch). If both are given, **both** must match
-    (AND, not OR), to avoid over-matching an unrelated dialog that happens to
-    share only one of the two conditions. `match_text` checks every
-    component's `text` *and* `accessible_name`, since which field a label's
-    text lands in depends on the real Swing component type -- `JLabel` text
-    only ever surfaces via `accessible_name`. Text that is HTML is also matched
-    with tags stripped and entities decoded, so a phrase can be copied as shown
-    on screen."""
-
-    name: str
-    click: str | list[str]
-    match_title: str | None = None
-    match_text: str | None = None
-
-    def __attrs_post_init__(self) -> None:
-        if not self.click:
-            raise LabelsError(
-                f"dismiss_rules entry {self.name!r}: click must not be empty"
-            )
-        if self.match_title is None and self.match_text is None:
-            raise LabelsError(
-                f"dismiss_rules entry {self.name!r} needs at least one of "
-                "'match_title'/'match_text'"
-            )
-
-
-@attrs.define(frozen=True)
 class NotCurrentlyAvailableLabels:
     """The "not currently available" login dialog (ported from IBC's
     `NotCurrentlyAvailableDialogHandler`). `message_marker` is matched
@@ -342,7 +286,6 @@ class Labels:
     settings: SettingsLabels
     shutdown: ShutdownLabels
     generic: GenericLabels
-    dismiss_rules: list[DismissRule] = attrs.field(factory=list)
 
 
 def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
@@ -357,19 +300,6 @@ def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[st
         else:
             merged[key] = value
     return merged
-
-
-def _merge_dismiss_rules(base: Any, override: Any) -> Any:
-    """Merges `dismiss_rules` lists by rule `name`; a same-name override entry replaces
-    the bundled one in place, new names are appended. Malformed input is returned as
-    the override for the structuring step to reject."""
-    if not (isinstance(base, list) and isinstance(override, list)):
-        return override
-    if not all(isinstance(rule, Mapping) and "name" in rule for rule in override):
-        return override
-    by_name = {rule["name"]: rule for rule in base}
-    by_name.update((rule["name"], rule) for rule in override)
-    return list(by_name.values())
 
 
 def _load_bundled_default() -> dict[str, Any]:
@@ -420,7 +350,7 @@ def load_labels(config_dir: str | Path | None = None) -> Labels:
 
     Raises `LabelsError` (a `ConfigError`) naming the file and the field for invalid
     JSON, a wrong type (e.g. a string where a list is expected), an empty candidate
-    list or a malformed `dismiss_rules` entry. Unknown keys are logged and ignored."""
+    list. Unknown keys are logged and ignored."""
     data = _load_bundled_default()
     source = "bundled labels.json"
     if config_dir is not None:
@@ -434,12 +364,7 @@ def load_labels(config_dir: str | Path | None = None) -> Labels:
             if not isinstance(override_data, dict):
                 raise LabelsError(f"{source}: expected a JSON object at the top level")
             _warn_unknown_keys(override_data, Labels, "")
-            merged = _deep_merge(data, override_data)
-            if "dismiss_rules" in override_data:
-                merged["dismiss_rules"] = _merge_dismiss_rules(
-                    data.get("dismiss_rules"), override_data["dismiss_rules"]
-                )
-            data = merged
+            data = _deep_merge(data, override_data)
     try:
         return converter.structure(data, Labels)
     except cattrs.ClassValidationError as exc:

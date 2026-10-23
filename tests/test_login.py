@@ -32,6 +32,7 @@ from ibcontroller.agent_client import (
     WindowInfo,
 )
 from ibcontroller.config import Config, ExistingSessionAction, Program, TradingMode
+from ibcontroller.dialogs import load_catalog
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
 from ibcontroller.login import (
@@ -41,7 +42,7 @@ from ibcontroller.login import (
     MfaTimeoutError,
 )
 from ibcontroller.recognisers import (
-    DeclarativeDismissRecognizer,
+    DialogRecognizer,
     ExistingSessionRecognizer,
     LoginFailedRecognizer,
     RecognizerRegistry,
@@ -54,8 +55,8 @@ from tests.fakes import FakeCommandServer, FakeEventServer
 pytestmark = pytest.mark.asyncio
 
 LABELS = load_labels()
-_NON_BROKERAGE_RULE = next(
-    r for r in LABELS.dismiss_rules if r.name == "non_brokerage_account"
+_NON_BROKERAGE_ENTRY = next(
+    e for e in load_catalog().dialog if e.name == "non_brokerage_account"
 )
 
 
@@ -78,7 +79,7 @@ def _registry(is_logged_in) -> RecognizerRegistry:
                 LABELS.existing_session, ExistingSessionAction.PRIMARY, is_logged_in
             ),
             LoginFailedRecognizer(LABELS.login_failed),
-            DeclarativeDismissRecognizer(_NON_BROKERAGE_RULE),
+            DialogRecognizer(_NON_BROKERAGE_ENTRY, _NON_BROKERAGE_ENTRY.default),
         ]
     )
 

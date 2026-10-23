@@ -13,6 +13,7 @@ import pytest
 from ibcontroller import main as _main
 from ibcontroller.config import Config, ConfigError
 from ibcontroller.control_loop import ShutdownCause
+from ibcontroller.dialogs import DialogCatalog
 from ibcontroller.labels import Labels
 from ibcontroller.launcher import LauncherError
 
@@ -134,12 +135,14 @@ async def test_run_async_passes_config_and_labels_into_run_control_loop(
 
     captured_config: Config | None = None
     captured_labels: Labels | None = None
+    captured_dialogs: DialogCatalog | None = None
     captured_agent_jar: Path | None = None
 
-    async def fake_run_control_loop(config, agent_jar, *, labels):
-        nonlocal captured_config, captured_labels, captured_agent_jar
+    async def fake_run_control_loop(config, agent_jar, *, labels, dialogs):
+        nonlocal captured_config, captured_labels, captured_dialogs, captured_agent_jar
         captured_config = config
         captured_labels = labels
+        captured_dialogs = dialogs
         captured_agent_jar = agent_jar
         return ShutdownCause.REQUESTED
 
@@ -152,4 +155,6 @@ async def test_run_async_passes_config_and_labels_into_run_control_loop(
     assert captured_config is not None
     assert captured_config.trading_mode.value == "paper"
     assert captured_labels is not None
+    assert captured_dialogs is not None
+    assert captured_dialogs.dialog, "bundled catalog loaded"
     assert captured_agent_jar == tmp_path / "fake.jar"

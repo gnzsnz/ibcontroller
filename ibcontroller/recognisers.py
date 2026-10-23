@@ -5,9 +5,9 @@ waits for directly via `actions.wait_for_window`.
 
 `RecognizerRegistry` holds an ordered list of `Recognizer`s, checked in
 order against each unprompted window; the first one whose `recognises()`
-returns `True` has its `handle()` awaited. `DeclarativeDismissRecognizer` is
-built from `labels.DismissRule` entries (`build_default_registry`) for
-the common "match text/title, click one button" case; the remaining classes
+returns `True` has its `handle()` awaited. `DialogRecognizer` is
+built from `dialogs.DialogEntry` catalog entries (`build_default_registry`) for
+the common "match text/title, run these steps" case; the remaining classes
 below handle cases with real conditional logic that isn't expressible as
 data. Every recogniser acts through `actions.py`'s primitives, the same as
 any other caller.
@@ -41,11 +41,10 @@ from ibcontroller.config import (
     Config,
     ExistingSessionAction,
 )
-from ibcontroller.dialogs import DialogEntry, MatchGroup, run_steps
+from ibcontroller.dialogs import DialogCatalog, DialogEntry, MatchGroup, run_steps
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import (
     AcceptIncomingConnectionLabels,
-    DismissRule,
     ExistingSessionLabels,
     GatewayConnectionFailedLabels,
     Labels,
@@ -135,44 +134,6 @@ def is_credential_entry(components: list[Component]) -> bool:
     field. Checked before any recogniser runs -- credential fields are never
     handled by this registry, only by Login's own field-fill."""
     return any(c.credential_field and c.showing for c in components)
-
-
-class DeclarativeDismissRecognizer:
-    """One `Recognizer` per `labels.DismissRule`: matches `rule.match_title`
-    against the window's title and/or `rule.match_text` against any
-    component's `accessible_name`/`text`, then clicks `rule.click`. If both
-    `match_title` and `match_text` are given, both must match. `rule` is
-    public so a caller inspecting `RecognizerRegistry.handled` can identify
-    which rule fired, by name."""
-
-    def __init__(self, rule: DismissRule) -> None:
-        self.rule = rule
-
-    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        rule = self.rule
-        if (
-            rule.match_title is not None
-            and rule.match_title.casefold() not in (event.window.title or "").casefold()
-        ):
-            return False
-        if rule.match_text is not None and not any(
-            _text_matches(rule.match_text, value)
-            for c in components
-            for value in (c.accessible_name, c.text)
-            if value is not None
-        ):
-            return False
-        return True
-
-    async def handle(
-        self,
-        event: WindowEvent,
-        components: list[Component],
-        dispatcher: Dispatcher,
-    ) -> None:
-        """Clicks `rule.click`, scoped to `event.window.window_id`."""
-        await click(dispatcher, self.rule.click, window_id=event.window.window_id)
-        logger.info("dismissed %s (declarative rule)", self.rule.name)
 
 
 class DialogRecognizer:
@@ -779,16 +740,17 @@ async def handle_window_opened(
 def build_default_registry(
     config: Config,
     labels: Labels,
+    dialogs: DialogCatalog,
     session: SessionState,
     schedule_retry: Callable[[float], None],
 ) -> RecognizerRegistry:
     """Signal recognisers first (login outcomes and the exit progress windows),
-    then declarative rules, then the other built-ins as the fallback. A
-    declarative rule cannot shadow a dialog that carries a login outcome or
-    announces an exit. `session` is read-only; `schedule_retry` is
-    `TooManyFailedLoginAttemptsRecognizer`'s retry hook."""
+    then one `DialogRecognizer` per catalog entry (in its default mode), then
+    the other built-ins as the fallback. A catalog entry cannot shadow a dialog
+    that carries a login outcome or announces an exit. `session` is read-only;
+    `schedule_retry` is `TooManyFailedLoginAttemptsRecognizer`'s retry hook."""
     declarative: list[Recognizer] = [
-        DeclarativeDismissRecognizer(rule) for rule in labels.dismiss_rules
+        DialogRecognizer(entry, entry.default) for entry in dialogs.dialog
     ]
     signals: list[Recognizer] = [
         NotCurrentlyAvailableRecognizer(labels.not_currently_available),
