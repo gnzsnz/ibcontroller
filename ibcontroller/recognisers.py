@@ -138,8 +138,9 @@ class DeclarativeDismissRecognizer:
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
         rule = self.rule
-        if rule.match_title is not None and rule.match_title not in (
-            event.window.title or ""
+        if (
+            rule.match_title is not None
+            and rule.match_title.casefold() not in (event.window.title or "").casefold()
         ):
             return False
         if rule.match_text is not None and not any(
@@ -153,10 +154,14 @@ class DeclarativeDismissRecognizer:
 
     @staticmethod
     def _text_matches(match_text: str, value: str) -> bool:
-        """Raw match first; then HTML-stripped, since IB message panes are HTML
-        and a phrase copied from the screen can span a tag or hold an entity
-        (`&quot;`)."""
-        return match_text in value or match_text in html.unescape(_strip_html(value))
+        """Case-insensitive. Raw match first; then HTML-stripped, since IB message
+        panes are HTML and a phrase copied from the screen can span a tag or hold
+        an entity (`&quot;`)."""
+        needle = match_text.casefold()
+        return (
+            needle in value.casefold()
+            or needle in html.unescape(_strip_html(value)).casefold()
+        )
 
     async def handle(
         self,

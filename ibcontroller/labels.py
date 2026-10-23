@@ -204,9 +204,9 @@ class GatewayConnectionFailedLabels:
 @attrs.define(frozen=True)
 class DismissRule:
     """One declarative "just dismiss this" recogniser: a dialog that's always
-    recognised the same simple way (title-contains and/or text-contains) and
-    always dismissed the same simple way (click one button, or the first present
-    of several candidates).
+    recognised the same simple way (title-contains and/or text-contains, ignoring
+    case) and always dismissed the same simple way (click one button, or the first
+    present of several candidates).
 
     `recognisers.DeclarativeDismissRecognizer` implements the `Recognizer`
     Protocol generically for every rule here.

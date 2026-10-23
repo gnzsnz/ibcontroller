@@ -185,6 +185,39 @@ def test_declarative_dismiss_recognises_by_title():
     assert recognizer.recognises(_event("IBKR Gateway"), []) is False
 
 
+def test_declarative_dismiss_title_match_ignores_case():
+    rule = DismissRule(name="t", click="OK", match_title="Order Preview")
+    recognizer = DeclarativeDismissRecognizer(rule)
+    assert recognizer.recognises(_event("ORDER PREVIEW (paper)"), []) is True
+    assert recognizer.recognises(_event("order preview"), []) is True
+
+
+def test_declarative_dismiss_text_match_ignores_case():
+    rule = DismissRule(name="t", click="OK", match_text="Blind Trading")
+    recognizer = DeclarativeDismissRecognizer(rule)
+    assert recognizer.recognises(
+        _event("Any"), [_component(text="Warning: BLIND TRADING is on")]
+    )
+    assert recognizer.recognises(
+        _event("Any"), [_component(accessible_name="blind trading")]
+    )
+
+
+def test_declarative_dismiss_text_match_ignores_case_after_html_stripping():
+    rule = DismissRule(name="t", click="OK", match_text='are you "sure"')
+    markup = "<html><body>ARE<br>YOU &quot;SURE&quot;?</body></html>"
+    assert DeclarativeDismissRecognizer(rule).recognises(
+        _event("Any"), [_component(text=markup)]
+    )
+
+
+def test_declarative_dismiss_case_insensitive_match_still_rejects_other_text():
+    rule = DismissRule(name="t", click="OK", match_text="Blind Trading")
+    assert not DeclarativeDismissRecognizer(rule).recognises(
+        _event("Any"), [_component(text="something unrelated")]
+    )
+
+
 def test_declarative_dismiss_requires_both_when_both_given():
     rule = DismissRule(
         name="test_and", click="OK", match_title="Warning", match_text="specific text"

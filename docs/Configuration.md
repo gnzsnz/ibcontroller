@@ -306,7 +306,7 @@ value from its text, retrying, raising an error) needs code and is not expressib
 
 - At least one of `match_title`/`match_text` is required. If both are given, both must match.
 - `click` must not be empty. A malformed rule is a startup error (exit 78) that names the rule.
-- Matching is case-sensitive today.
+- Matching ignores case for both `match_title` and `match_text`.
 
 **Merging.** Rules are merged by `name`: a rule with a bundled rule's name replaces it, a
 rule with a new name is added, and bundled rules you do not name are kept (the

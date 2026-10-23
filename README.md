@@ -311,7 +311,7 @@ handler recognises (default `OK`, `Close`, `Dismiss`).
 The one part of `labels.json` that isn't just text is `dismiss_rules` — a list of
 "if a window matches, click this button" entries, checked on every window that opens.
 Each entry needs at least one of `match_title`/`match_text` (both, if given, must
-match); `click` is the button's label, or a list of labels when the button differs per
+match; case is ignored); `click` is the button's label, or a list of labels when the button differs per
 build (the first one present is clicked). `match_text` also matches message text with HTML
 tags removed and entities decoded, so copy the phrase as it shows on screen.
 
