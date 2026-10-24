@@ -285,7 +285,8 @@ value is left as it is in Gateway/TWS (leave-unchanged, as IBC's empty value).
   `type_text`, `type_text_near_label`) and the control by `label` (literal) or `label_ref` (a
   name in `labels.json`'s `settings.controls`). `type_text_near_label` also takes
   `field_index` (0-based field below the label) for a field with no label of its own. The
-  entry's value comes from `[ibkr]` like any other. A custom name cannot reuse a catalog name.
+  entry's value comes from `[ibkr]` like any other; a custom setting with no value
+  is logged as a warning at startup and left untouched. A custom name cannot reuse a catalog name.
 - **Moved:** `read_only_api`, `auto_restart_time` and `auto_logoff_time` are no longer
   `[ibcontroller]` keys, and `IBC_READ_ONLY_API`, `IBC_AUTO_RESTART_TIME` and
   `IBC_AUTO_LOGOFF_TIME` are no longer read (ignored silently). `settings_file`,

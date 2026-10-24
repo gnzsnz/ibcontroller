@@ -77,7 +77,8 @@ def _resolve_choices(
     """Parses the user's `[[dialog]]` and `[[setting]]` entries and picks a mode
     per dialog and a checked value per setting. Runs at startup so a bad value
     stops the run before launch. `[ibkr]` is one namespace: a name shared by a
-    dialog and a setting is an error, a name that is neither is a warning."""
+    dialog and a setting is an error, a name that is neither is a warning, and so
+    is a custom setting with no value."""
     source = "ibcontroller.toml"
     custom_dialogs = parse_custom_dialogs(declarative.dialogs, source=source)
     custom_settings = parse_custom_settings(declarative.settings, source=source)
@@ -90,6 +91,15 @@ def _resolve_choices(
             "IBController > [ibkr] names no setting or dialog, ignored: %s",
             ", ".join(unknown),
         )
+    for entry in custom_settings:
+        if entry.name not in declarative.ibkr:
+            logger.warning(
+                "IBController > custom setting %s has no value, left untouched: "
+                "set %s in [ibkr] or IBKR_%s",
+                entry.name,
+                entry.name,
+                entry.name.upper(),
+            )
     dialogs = resolve_dialogs(
         dialog_catalog, custom_dialogs, declarative.ibkr, declarative.ibkr_sources
     )

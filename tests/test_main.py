@@ -251,6 +251,35 @@ async def test_run_async_name_shared_by_dialog_and_setting_is_an_error(
         await _run_capturing_dialogs(tmp_path, monkeypatch, toml)
 
 
+async def test_run_async_warns_about_a_custom_setting_without_a_value(
+    tmp_path, monkeypatch, caplog
+):
+    """A custom `[[setting]]` carries no value of its own, so one never given a
+    value in `[ibkr]` does nothing; the warning names it."""
+    toml = (
+        "[[setting]]\nname = 'my_port'\ntree_path = 'API/Settings'\n"
+        "action = 'type_text'\nlabel = 'Socket port'\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="ibcontroller.main"):
+        await _run_capturing_dialogs(tmp_path, monkeypatch, toml)
+    assert "my_port" in caplog.text
+    assert "IBKR_MY_PORT" in caplog.text
+    assert captured_settings == []
+
+
+async def test_run_async_no_warning_for_a_custom_setting_with_a_value(
+    tmp_path, monkeypatch, caplog
+):
+    toml = (
+        "[ibkr]\nmy_port = 4002\n"
+        "[[setting]]\nname = 'my_port'\ntree_path = 'API/Settings'\n"
+        "action = 'type_text'\nlabel = 'Socket port'\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="ibcontroller.main"):
+        await _run_capturing_dialogs(tmp_path, monkeypatch, toml)
+    assert caplog.text == ""
+
+
 async def test_run_async_warns_about_ibkr_names_that_match_nothing(
     tmp_path, monkeypatch, caplog
 ):
