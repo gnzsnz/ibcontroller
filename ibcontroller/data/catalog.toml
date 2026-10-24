@@ -36,6 +36,86 @@ tree_path = "API/Settings"
 action = "toggle"
 label_ref = "read_only_api"
 
+# The API/Settings text fields have no accessible name, so they are found by position:
+# field_index counts the panel's text fields from the top (0 socket port, 1 master client
+# ID). A wrong index writes the value into the neighbouring field.
+# Changing the port or the client ID on TWS while "Enable ActiveX and Socket Clients"
+# is checked may open a TWS-only confirmation dialog. Its text is not captured yet.
+[[setting]]
+name = "socket_port"
+tree_path = "API/Settings"
+action = "type_text_near_label"
+label_ref = "socket_port"
+field_index = 0
+
+[[setting]]
+name = "master_api_client_id"
+tree_path = "API/Settings"
+action = "type_text_near_label"
+label_ref = "master_api_client_id"
+field_index = 1
+
+# Unverified: ticking the box may open a confirmation modal that is not captured yet.
+[[setting]]
+name = "send_market_data_in_lots_us_stocks"
+tree_path = "API/Settings"
+action = "toggle"
+label_ref = "send_market_data_in_lots_us_stocks"
+
+[[setting]]
+name = "api_precautions_bypass_order_precautions"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_order_precautions"
+
+[[setting]]
+name = "api_precautions_bypass_bond_warning"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_bond_warning"
+
+[[setting]]
+name = "api_precautions_bypass_negative_yield_to_worst"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_negative_yield_to_worst"
+
+[[setting]]
+name = "api_precautions_bypass_called_bond_warning"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_called_bond_warning"
+
+[[setting]]
+name = "api_precautions_bypass_same_action_pair_trade"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_same_action_pair_trade"
+
+[[setting]]
+name = "api_precautions_bypass_price_based_volatility"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_price_based_volatility"
+
+[[setting]]
+name = "api_precautions_bypass_redirect_order_warning"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_redirect_order_warning"
+
+[[setting]]
+name = "api_precautions_bypass_no_overfill_protection"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_no_overfill_protection"
+
+[[setting]]
+name = "api_precautions_bypass_route_marketable_to_bbo"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_route_marketable_to_bbo"
+
 [[dialog]]
 name = "non_brokerage_account"
 default = "on"

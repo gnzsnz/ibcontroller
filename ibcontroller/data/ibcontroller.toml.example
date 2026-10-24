@@ -222,6 +222,40 @@
 # Default: not set
 # read_only_api = true
 
+# IBC: OverrideTwsApiPort. API/Settings "Socket port", a number or text. IBKR's defaults:
+# 7496 TWS live, 7497 TWS paper, 4001 Gateway live, 4002 Gateway paper. Changing it on
+# TWS while "Enable ActiveX and Socket Clients" is checked may open a TWS-only
+# confirmation dialog, which ibcontroller does not handle yet: check the log after the
+# first run.
+# Default: not set
+# socket_port = 4002
+
+# IBC: OverrideTwsMasterClientID. API/Settings "Master API client ID", a number or text.
+# The same TWS confirmation dialog may appear.
+# Default: not set
+# master_api_client_id = 0
+
+# IBC: SendMarketDataInLotsForUSstocks. API/Settings, "Send market data in lots for US
+# stocks for dual-mode API clients": true or false. Unverified: ticking the box may open
+# a confirmation window that ibcontroller does not handle yet.
+# Default: not set
+# send_market_data_in_lots_us_stocks = false
+
+# API/Precautions, "Bypass ... for API orders": true bypasses the warning, false keeps
+# it. IBC: BypassOrderPrecautions, BypassBondWarning, BypassNegativeYieldToWorstConfirmation,
+# BypassCalledBondWarning, BypassSameActionPairTradeWarning, BypassPriceBasedVolatilityWarning,
+# BypassRedirectOrderWarning, BypassNoOverfillProtection, BypassRouteMarketableToBBOWarning.
+# Default: not set
+# api_precautions_bypass_order_precautions = true
+# api_precautions_bypass_bond_warning = true
+# api_precautions_bypass_negative_yield_to_worst = true
+# api_precautions_bypass_called_bond_warning = true
+# api_precautions_bypass_same_action_pair_trade = true
+# api_precautions_bypass_price_based_volatility = true
+# api_precautions_bypass_redirect_order_warning = true
+# api_precautions_bypass_no_overfill_protection = true
+# api_precautions_bypass_route_marketable_to_bbo = true
+
 # --- Pop-ups ibcontroller handles, one line each. A dialog takes the name of one of its
 # modes, or true (mode "on") / false (mode "off"). In the environment, true/false/yes/no
 # in any case count as booleans (env: IBKR_<NAME>, e.g. IBKR_BLIND_TRADING=true).
@@ -253,11 +287,10 @@
 # position below the label; field_index counts from 0, default 0). The control is named
 # with label (literal text) or label_ref (an entry of labels.json settings.controls).
 # [[setting]]
-# name = "master_api_client_id"
+# name = "my_checkbox_setting"
 # tree_path = "API/Settings"
-# action = "type_text_near_label"
-# label = "Master API client ID"
-# field_index = 0
+# action = "toggle"
+# label = "Label of the checkbox"
 
 # A pop-up the catalog lacks. A custom entry is checked before catalog ones and needs a
 # name that no catalog entry uses. match: a list of groups, any one is enough; inside a

@@ -329,6 +329,18 @@ The value is checked at startup, a wrong one stops the run with an error naming 
 | `auto_logoff_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily logoff time. |
 | `auto_restart_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily restart time. Shares the "Lock and Exit" radio pair with `auto_logoff_time`: if you set both, `auto_restart_time` wins, as in IBC. |
 | `read_only_api` | `true`/`false` | API/Settings "Read-Only API". |
+| `socket_port` | number or text | API/Settings "Socket port". IBKR defaults: 7496 TWS live, 7497 TWS paper, 4001 Gateway live, 4002 Gateway paper. On TWS, changing it while "Enable ActiveX and Socket Clients" is checked may open a confirmation dialog that is not handled yet. |
+| `master_api_client_id` | number or text | API/Settings "Master API client ID". Same TWS confirmation caveat as the port. |
+| `send_market_data_in_lots_us_stocks` | `true`/`false` | API/Settings, lots for US stocks. Unverified: a confirmation window may open. |
+| `api_precautions_bypass_order_precautions` | `true`/`false` | API/Precautions: bypass the order precautions for API orders. |
+| `api_precautions_bypass_bond_warning` | `true`/`false` | API/Precautions: bypass the bond warning for API orders. |
+| `api_precautions_bypass_negative_yield_to_worst` | `true`/`false` | API/Precautions: bypass the negative yield to worst confirmation for API orders. |
+| `api_precautions_bypass_called_bond_warning` | `true`/`false` | API/Precautions: bypass the called bond warning for API orders. |
+| `api_precautions_bypass_same_action_pair_trade` | `true`/`false` | API/Precautions: bypass the "same action pair trade" warning for API orders. |
+| `api_precautions_bypass_price_based_volatility` | `true`/`false` | API/Precautions: bypass the price-based volatility risk warning for API orders. |
+| `api_precautions_bypass_redirect_order_warning` | `true`/`false` | API/Precautions: bypass the redirect order warning (stock orders) for API orders. |
+| `api_precautions_bypass_no_overfill_protection` | `true`/`false` | API/Precautions: bypass the no overfill protection precaution for API orders. |
+| `api_precautions_bypass_route_marketable_to_bbo` | `true`/`false` | API/Precautions: bypass the route marketable to BBO warning for API orders. |
 
 ```toml
 [ibkr]
@@ -346,14 +358,14 @@ in `[ibkr]` under its name:
 
 ```toml
 [ibkr]
-master_api_client_id = 0
+my_checkbox_setting = true
 
 [[setting]]
-name = "master_api_client_id"
+name = "my_checkbox_setting"
 tree_path = "API/Settings"                # Global Configuration's own tree, section by section
-action = "type_text_near_label"           # "toggle" | "type_text" | "type_text_near_label"
-label = "Master API client ID"            # a literal label...
-# label_ref = "master_api_client_id"      # ...or a name from labels.json's settings.controls map
+action = "toggle"                         # "toggle" | "type_text" | "type_text_near_label"
+label = "Label of the checkbox"  # a literal label...
+# label_ref = "my_label"                 # ...or a name from labels.json's settings.controls map
 field_index = 0                           # only type_text_near_label: 0-based field below the label
 ```
 

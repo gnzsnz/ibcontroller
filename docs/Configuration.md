@@ -274,6 +274,18 @@ value is left as it is in Gateway/TWS (leave-unchanged, as IBC's empty value).
 | `auto_logoff_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily logoff, under Lock and Exit. |
 | `auto_restart_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily restart, under Lock and Exit. Shares one radio pair with `auto_logoff_time`: if both have a value, `auto_restart_time` wins (applied last, as IBC specifies). |
 | `read_only_api` | `true`/`false` | API/Settings "Read-Only API". |
+| `socket_port` | number or text | API/Settings "Socket port". IBKR defaults: 7496 TWS live, 7497 TWS paper, 4001 Gateway live, 4002 Gateway paper. On TWS, changing it while "Enable ActiveX and Socket Clients" is checked may open a confirmation dialog that is not handled yet. |
+| `master_api_client_id` | number or text | API/Settings "Master API client ID". Same TWS confirmation caveat as the port. |
+| `send_market_data_in_lots_us_stocks` | `true`/`false` | API/Settings, lots for US stocks. Unverified: a confirmation window may open. |
+| `api_precautions_bypass_order_precautions` | `true`/`false` | API/Precautions: bypass the order precautions for API orders. |
+| `api_precautions_bypass_bond_warning` | `true`/`false` | API/Precautions: bypass the bond warning for API orders. |
+| `api_precautions_bypass_negative_yield_to_worst` | `true`/`false` | API/Precautions: bypass the negative yield to worst confirmation for API orders. |
+| `api_precautions_bypass_called_bond_warning` | `true`/`false` | API/Precautions: bypass the called bond warning for API orders. |
+| `api_precautions_bypass_same_action_pair_trade` | `true`/`false` | API/Precautions: bypass the "same action pair trade" warning for API orders. |
+| `api_precautions_bypass_price_based_volatility` | `true`/`false` | API/Precautions: bypass the price-based volatility risk warning for API orders. |
+| `api_precautions_bypass_redirect_order_warning` | `true`/`false` | API/Precautions: bypass the redirect order warning (stock orders) for API orders. |
+| `api_precautions_bypass_no_overfill_protection` | `true`/`false` | API/Precautions: bypass the no overfill protection precaution for API orders. |
+| `api_precautions_bypass_route_marketable_to_bbo` | `true`/`false` | API/Precautions: bypass the route marketable to BBO warning for API orders. |
 
 - Values are checked at startup; a wrong one stops the run (exit 78) with an error naming
   the setting. A `toggle` takes a boolean (in the environment `true`, `false`, `yes`, `no`

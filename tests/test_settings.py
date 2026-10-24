@@ -1403,6 +1403,21 @@ def test_bundled_catalog_lists_the_settings_in_apply_order():
     assert "read_only_api" in names
 
 
+def test_bundled_catalog_has_api_text_and_precaution_entries():
+    entries = {e.name: e for e in load_setting_catalog().setting}
+    for name in ("socket_port", "master_api_client_id"):
+        assert entries[name].action == "type_text_near_label"
+        assert entries[name].tree_path == "API/Settings"
+    # the two share one container: the port is field 0, the client ID field 1
+    assert entries["socket_port"].field_index == 0
+    assert entries["master_api_client_id"].field_index == 1
+    precautions = [n for n in entries if n.startswith("api_precautions_bypass_")]
+    assert len(precautions) == 9
+    for name in precautions:
+        assert entries[name].action == "toggle"
+        assert entries[name].tree_path == "API/Precautions"
+
+
 def test_bundled_catalog_label_refs_exist_in_labels():
     for entry in load_setting_catalog().setting:
         if entry.label_ref is not None:
