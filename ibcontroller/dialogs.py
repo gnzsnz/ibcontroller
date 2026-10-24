@@ -13,7 +13,7 @@ first dispatch.
 from __future__ import annotations
 
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from importlib import resources
 from typing import Any
 
@@ -144,6 +144,16 @@ def _describe(exception: BaseException, _type: type | None) -> str:
     return str(exception) if isinstance(exception, DialogsError) else repr(exception)
 
 
+def _structure_catalog(data: Mapping[str, Any], source: str) -> DialogCatalog:
+    try:
+        return _converter.structure(data, DialogCatalog)
+    except cattrs.ClassValidationError as exc:
+        details = "; ".join(cattrs.transform_error(exc, format_exception=_describe))
+        raise DialogsError(f"{source}: {details}") from exc
+    except DialogsError as exc:
+        raise DialogsError(f"{source}: {exc}") from exc
+
+
 def parse_catalog(raw: str, *, source: str) -> DialogCatalog:
     """Parses `raw` TOML into a `DialogCatalog`. Raises `DialogsError` naming
     `source` for invalid TOML, an unknown key, a wrong type or an invalid
@@ -152,13 +162,15 @@ def parse_catalog(raw: str, *, source: str) -> DialogCatalog:
         data = tomllib.loads(raw)
     except tomllib.TOMLDecodeError as exc:
         raise DialogsError(f"{source}: invalid TOML: {exc}") from exc
-    try:
-        return _converter.structure(data, DialogCatalog)
-    except cattrs.ClassValidationError as exc:
-        details = "; ".join(cattrs.transform_error(exc, format_exception=_describe))
-        raise DialogsError(f"{source}: {details}") from exc
-    except DialogsError as exc:
-        raise DialogsError(f"{source}: {exc}") from exc
+    return _structure_catalog(data, source)
+
+
+def parse_custom_dialogs(
+    raw_entries: Sequence[Mapping[str, Any]], *, source: str
+) -> list[DialogEntry]:
+    """Builds the user's `[[dialog]]` entries from plain data, with the same
+    checks as the bundled catalog. Raises `DialogsError` naming `source`."""
+    return _structure_catalog({"dialog": list(raw_entries)}, source).dialog
 
 
 def load_catalog() -> DialogCatalog:
@@ -170,3 +182,74 @@ def load_catalog() -> DialogCatalog:
         .read_text(encoding="utf-8")
     )
     return parse_catalog(raw, source="bundled catalog.toml")
+
+
+@attrs.define(frozen=True)
+class DialogChoice:
+    """An entry with the mode it runs in and where that mode came from:
+    `default`, `file` or `env`."""
+
+    entry: DialogEntry
+    mode: str
+    source: str
+
+
+_ENV_TRUE = frozenset({"true", "yes"})
+_ENV_FALSE = frozenset({"false", "no"})
+
+
+def _mode_for(entry: DialogEntry, value: object, source: str) -> str:
+    """Maps a configured value to one of the entry's modes: a boolean is `on` or
+    `off`, a string is a mode name, ignoring case. From the environment
+    `true`/`yes` and `false`/`no` count as booleans."""
+    if source == "env" and isinstance(value, str):
+        word = value.strip().casefold()
+        if word in _ENV_TRUE | _ENV_FALSE:
+            value = word in _ENV_TRUE
+    where = f"dialog {entry.name!r} ({source})"
+    if isinstance(value, bool):
+        mode = "on" if value else "off"
+        if not {"on", "off"} <= entry.modes.keys():
+            raise DialogsError(
+                f"{where}: a boolean needs both 'on' and 'off' modes; "
+                f"modes: {', '.join(entry.modes)}"
+            )
+        return mode
+    if not isinstance(value, str):
+        raise DialogsError(
+            f"{where}: expected a mode name or a boolean, got {type(value).__name__}"
+        )
+    for name in entry.modes:
+        if name.casefold() == value.strip().casefold():
+            return name
+    raise DialogsError(
+        f"{where}: unknown mode {value!r}; modes: {', '.join(entry.modes)}"
+    )
+
+
+def resolve_dialogs(
+    catalog: DialogCatalog,
+    custom: Sequence[DialogEntry],
+    ibkr: Mapping[str, Any],
+    sources: Mapping[str, str],
+) -> list[DialogChoice]:
+    """Picks a mode per entry from `ibkr` (the `[ibkr]` values, environment
+    merged over file; `sources` says which) or the entry's default. Custom
+    entries come first, so they win over catalog entries. Keys of `ibkr` that
+    name no dialog are not this module's: settings read them. Raises
+    `DialogsError` naming the entry."""
+    bundled = {entry.name for entry in catalog.dialog}
+    for entry in custom:
+        if entry.name in bundled:
+            raise DialogsError(
+                f"custom dialog {entry.name!r} has the name of a catalog entry"
+            )
+    choices: list[DialogChoice] = []
+    for entry in [*custom, *catalog.dialog]:
+        if entry.name in ibkr:
+            source = sources.get(entry.name, "file")
+            mode = _mode_for(entry, ibkr[entry.name], source)
+            choices.append(DialogChoice(entry, mode, source))
+        else:
+            choices.append(DialogChoice(entry, entry.default, "default"))
+    return choices

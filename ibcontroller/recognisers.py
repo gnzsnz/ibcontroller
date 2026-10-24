@@ -41,7 +41,7 @@ from ibcontroller.config import (
     Config,
     ExistingSessionAction,
 )
-from ibcontroller.dialogs import DialogCatalog, DialogEntry, MatchGroup, run_steps
+from ibcontroller.dialogs import DialogChoice, DialogEntry, MatchGroup, run_steps
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import (
     AcceptIncomingConnectionLabels,
@@ -740,17 +740,18 @@ async def handle_window_opened(
 def build_default_registry(
     config: Config,
     labels: Labels,
-    dialogs: DialogCatalog,
+    dialogs: Sequence[DialogChoice],
     session: SessionState,
     schedule_retry: Callable[[float], None],
 ) -> RecognizerRegistry:
     """Signal recognisers first (login outcomes and the exit progress windows),
-    then one `DialogRecognizer` per catalog entry (in its default mode), then
-    the other built-ins as the fallback. A catalog entry cannot shadow a dialog
+    then one `DialogRecognizer` per dialog choice (custom entries before catalog
+    ones, each in its resolved mode), then the other built-ins as the fallback.
+    A dialog entry cannot shadow a dialog
     that carries a login outcome or announces an exit. `session` is read-only;
     `schedule_retry` is `TooManyFailedLoginAttemptsRecognizer`'s retry hook."""
     declarative: list[Recognizer] = [
-        DialogRecognizer(entry, entry.default) for entry in dialogs.dialog
+        DialogRecognizer(choice.entry, choice.mode) for choice in dialogs
     ]
     signals: list[Recognizer] = [
         NotCurrentlyAvailableRecognizer(labels.not_currently_available),

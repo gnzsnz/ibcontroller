@@ -418,6 +418,10 @@ def test_declarative_input_reads_raw_sections(tmp_path):
         '[[dialog]]\nname = "d"\n[dialog.modes]\non = []\n',
     )
     assert dict(result.ibkr) == {"blind_trading": True, "auto_restart_time": "23:45"}
+    assert dict(result.ibkr_sources) == {
+        "blind_trading": "file",
+        "auto_restart_time": "file",
+    }
     assert [s["name"] for s in result.settings] == ["a", "b"]
     assert result.dialogs[0]["modes"] == {"on": []}
 
@@ -442,6 +446,11 @@ def test_ibkr_env_collected_lowercase_and_wins_over_file(monkeypatch, tmp_path):
         "blind_trading": "on",
         "nse_compliance": "off",
         "other": 1,
+    }
+    assert dict(result.ibkr_sources) == {
+        "blind_trading": "env",
+        "nse_compliance": "env",
+        "other": "file",
     }
 
 

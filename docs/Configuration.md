@@ -15,10 +15,29 @@ One table per concern:
 | `[[setting]]`, `[[dialog]]` | custom setting and dialog entries | none |
 
 The file is rejected at startup if it has a top-level key outside a table (a file
-from before the tables existed) or any table other than the four above. `[ibkr]`,
-`[[setting]]` and `[[dialog]]` are read but not applied yet. `IBKR_<NAME>` also
-accepts a `_FILE` variant, an empty value counts as missing, and the startup
-environment dump lists these variables with the same masking as `IBC_*`.
+from before the tables existed) or any table other than the four above.
+`IBKR_<NAME>` also accepts a `_FILE` variant, an empty value counts as missing, and
+the startup environment dump lists these variables with the same masking as `IBC_*`.
+
+### Dialogs
+
+ibcontroller handles the pop-ups listed in its bundled catalog (`catalog.toml`).
+Each has a name and modes; a mode is what ibcontroller does to the window, and a
+mode with no steps leaves the dialog to the user. `[ibkr]` picks the mode by the
+dialog's name, for example `blind_trading = "on"` or `IBKR_BLIND_TRADING=on`.
+
+- A boolean means `on` or `off`. In the environment `true`, `false`, `yes` and
+  `no` (any case) are booleans. A string in the file is always a mode name.
+- Mode names ignore case. An unknown mode, a boolean on a dialog without `on` and
+  `off` modes, or any other type stops startup with an error naming the dialog.
+- Without a value the dialog runs in its default mode. Startup logs one line per
+  dialog with its mode and where the mode came from (`default`, `file`, `env`).
+- `[[dialog]]` adds a dialog the catalog lacks, with `name`, `default`, `match` and
+  `[dialog.modes]`, in the same shape as the catalog. A custom entry is checked
+  before catalog entries, and cannot reuse a catalog name.
+- Login outcome and exit progress windows are always handled first and cannot be
+  overridden.
+- `[ibkr]` keys that name no dialog are not read yet. They are for settings.
 
 Precedence, highest first:
 

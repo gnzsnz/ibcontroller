@@ -62,7 +62,7 @@ import attrs
 from ibcontroller.agent_client import AgentClientError, ProtocolError, WindowEvent
 from ibcontroller.config import Config, MfaTimeoutAction, Program
 from ibcontroller.diagnostics import sweep_settings_tree, watch_for_diagnostics
-from ibcontroller.dialogs import DialogCatalog
+from ibcontroller.dialogs import DialogChoice
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.errors import IBControllerError
 from ibcontroller.labels import Labels
@@ -236,7 +236,11 @@ async def _apply_declarative_settings_or_log(
 
 
 async def run_control_loop(
-    config: Config, agent_jar: str | Path, *, labels: Labels, dialogs: DialogCatalog
+    config: Config,
+    agent_jar: str | Path,
+    *,
+    labels: Labels,
+    dialogs: Sequence[DialogChoice],
 ) -> ShutdownCause:
     """The outer loop -- ports IBC's own `ibcstart.sh` shape (a `while` loop
     wrapped around the entire JVM invocation) around one lap of
@@ -571,11 +575,24 @@ async def _reap(task: asyncio.Task, name: str) -> None:
         logger.warning("IBController > %s ended with %r", name, exc)
 
 
+def _log_dialog_choices(dialogs: Sequence[DialogChoice]) -> None:
+    """One line per dialog entry: its mode and where the mode came from. Logged
+    each lap, after `launch_instance` has set up the log handlers, so a value that
+    did not reach a dialog shows in the log file."""
+    for choice in dialogs:
+        logger.info(
+            "IBController > dialog %s: mode=%s (%s)",
+            choice.entry.name,
+            choice.mode,
+            choice.source,
+        )
+
+
 async def _run_one_cycle(  # noqa: PLR0915
     config: Config,
     agent_jar: str | Path,
     labels: Labels,
-    dialogs: DialogCatalog,
+    dialogs: Sequence[DialogChoice],
     *,
     restart_hash: str | None = None,
     lap: _Lap | None = None,
@@ -596,6 +613,7 @@ async def _run_one_cycle(  # noqa: PLR0915
     lap = lap or _Lap()
     state = StartupState.LAUNCHING
     launched = await launch_instance(config, agent_jar, restart_hash=restart_hash)
+    _log_dialog_choices(dialogs)
     manager = LoginManager(
         config,
         labels,

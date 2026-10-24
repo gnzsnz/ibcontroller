@@ -13,7 +13,7 @@ import pytest
 from ibcontroller import main as _main
 from ibcontroller.config import Config, ConfigError
 from ibcontroller.control_loop import ShutdownCause
-from ibcontroller.dialogs import DialogCatalog
+from ibcontroller.dialogs import DialogChoice, DialogsError
 from ibcontroller.labels import Labels
 from ibcontroller.launcher import LauncherError
 
@@ -135,7 +135,7 @@ async def test_run_async_passes_config_and_labels_into_run_control_loop(
 
     captured_config: Config | None = None
     captured_labels: Labels | None = None
-    captured_dialogs: DialogCatalog | None = None
+    captured_dialogs: list[DialogChoice] | None = None
     captured_agent_jar: Path | None = None
 
     async def fake_run_control_loop(config, agent_jar, *, labels, dialogs):
@@ -156,5 +156,51 @@ async def test_run_async_passes_config_and_labels_into_run_control_loop(
     assert captured_config.trading_mode.value == "paper"
     assert captured_labels is not None
     assert captured_dialogs is not None
-    assert captured_dialogs.dialog, "bundled catalog loaded"
+    assert captured_dialogs, "bundled catalog loaded"
     assert captured_agent_jar == tmp_path / "fake.jar"
+
+
+async def _run_capturing_dialogs(tmp_path, monkeypatch, toml_text):
+    for key, value in _BASE_ENV.items():
+        monkeypatch.setenv(key, value)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "ibcontroller.toml").write_text(toml_text)
+    captured: list[DialogChoice] = []
+
+    async def fake_run_control_loop(config, agent_jar, *, labels, dialogs):
+        captured.extend(dialogs)
+        return ShutdownCause.REQUESTED
+
+    monkeypatch.setattr(_main, "run_control_loop", fake_run_control_loop)
+    monkeypatch.setattr(_main, "_load_jar_path", lambda: tmp_path / "fake.jar")
+    await _main.run_async(config_dir, tmp_path / "log")
+    return {c.entry.name: c for c in captured}
+
+
+async def test_run_async_resolves_dialog_modes_from_file_env_and_custom(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("IBKR_PASSWORD_EXPIRY_WARNING", "yes")
+    toml = (
+        "[ibkr]\nblind_trading = true\nmy_warning = 'on'\n"
+        "[[dialog]]\nname = 'my_warning'\ndefault = 'off'\n"
+        "match = [ { text = 'some phrase' } ]\n"
+        "[dialog.modes]\noff = []\non = [ { click = 'OK' } ]\n"
+    )
+    choices = await _run_capturing_dialogs(tmp_path, monkeypatch, toml)
+    assert (choices["blind_trading"].mode, choices["blind_trading"].source) == (
+        "on",
+        "file",
+    )
+    assert choices["password_expiry_warning"].source == "env"
+    assert choices["password_expiry_warning"].mode == "on"
+    assert choices["my_warning"].mode == "on"
+    assert choices["non_brokerage_account"].source == "default"
+
+
+async def test_run_async_bad_dialog_mode_is_a_startup_error(tmp_path, monkeypatch):
+    with pytest.raises(DialogsError, match="blind_trading"):
+        await _run_capturing_dialogs(
+            tmp_path, monkeypatch, "[ibkr]\nblind_trading = 'maybe'\n"
+        )

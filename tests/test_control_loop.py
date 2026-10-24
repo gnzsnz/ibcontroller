@@ -40,7 +40,7 @@ from ibcontroller.control_loop import (
     _wait_for_first_completion,
     run_control_loop,
 )
-from ibcontroller.dialogs import load_catalog
+from ibcontroller.dialogs import load_catalog, resolve_dialogs
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
 from ibcontroller.launcher import LaunchedInstance
@@ -57,7 +57,7 @@ from tests.fakes import FakeProcess
 pytestmark = pytest.mark.asyncio
 
 LABELS = load_labels()
-CATALOG = load_catalog()
+CATALOG = resolve_dialogs(load_catalog(), (), {}, {})
 
 
 def test_startup_state_has_no_separate_awaiting_dialogs_step():
@@ -128,6 +128,40 @@ async def test_run_control_loop_returns_requested_when_task_is_cancelled(
     assert cause is ShutdownCause.REQUESTED
     assert not task.cancelled()
     assert any("stop requested" in message for message in caplog.messages)
+
+
+def test_log_dialog_choices_lists_mode_and_source(caplog):
+    choices = resolve_dialogs(
+        load_catalog(), (), {"blind_trading": "on"}, {"blind_trading": "env"}
+    )
+    with caplog.at_level(logging.INFO, logger="ibcontroller.control_loop"):
+        control_loop._log_dialog_choices(choices)
+    assert "dialog blind_trading: mode=on (env)" in " ".join(caplog.messages)
+    assert "dialog non_brokerage_account: mode=on (default)" in " ".join(
+        caplog.messages
+    )
+
+
+async def test_run_one_cycle_logs_dialog_choices_after_launch(
+    monkeypatch, sock_path, event_sock_path, caplog
+):
+    """Handlers are set up inside `launch_instance`, so a line logged before it
+    would be dropped."""
+    order: list[str] = []
+
+    async def launch(*_args, **_kwargs):
+        order.append("launch")
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(control_loop, "launch_instance", launch)
+    monkeypatch.setattr(
+        control_loop,
+        "_log_dialog_choices",
+        lambda _dialogs: order.append("log"),
+    )
+    with pytest.raises(RuntimeError, match="stop here"):
+        await control_loop._run_one_cycle(_config(), "agent.jar", LABELS, CATALOG)
+    assert order == ["launch"], "never logged before launch"
 
 
 async def test_sleep_until_scheduled_shutdown_fires_the_matching_cause(monkeypatch):

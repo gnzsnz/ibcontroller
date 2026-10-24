@@ -36,9 +36,19 @@ from typing import Any
 import anyio.to_thread
 
 from ibcontroller.app_dirs import resolve_app_dirs
-from ibcontroller.config import load_config, load_declarative_input
+from ibcontroller.config import (
+    DeclarativeInput,
+    load_config,
+    load_declarative_input,
+)
 from ibcontroller.control_loop import ShutdownCause, run_control_loop
-from ibcontroller.dialogs import load_catalog
+from ibcontroller.dialogs import (
+    DialogCatalog,
+    DialogChoice,
+    load_catalog,
+    parse_custom_dialogs,
+    resolve_dialogs,
+)
 from ibcontroller.labels import load_labels
 from ibcontroller.launcher import LauncherError
 
@@ -52,6 +62,15 @@ _SCAFFOLD_FILES: dict[str, str] = {
     "ibkr_settings.toml.example": "ibkr_settings.toml.example",
     "labels.json.example": "labels.json.example",
 }
+
+
+def _resolve_dialog_choices(
+    catalog: DialogCatalog, declarative: DeclarativeInput
+) -> list[DialogChoice]:
+    """Parses the user's `[[dialog]]` entries and picks a mode per dialog. Runs at
+    startup so a bad value stops the run before launch."""
+    custom = parse_custom_dialogs(declarative.dialogs, source="ibcontroller.toml")
+    return resolve_dialogs(catalog, custom, declarative.ibkr, declarative.ibkr_sources)
 
 
 def _load_jar_path() -> Path:
@@ -135,11 +154,12 @@ async def run_async(
         )
     )
     # after load_config, which loads the dotenv; validates the file's structure
-    await anyio.to_thread.run_sync(load_declarative_input, config_dir)
+    declarative = await anyio.to_thread.run_sync(load_declarative_input, config_dir)
     labels = await anyio.to_thread.run_sync(
         functools.partial(load_labels, config_dir=config_dir)
     )
-    dialogs = await anyio.to_thread.run_sync(load_catalog)
+    catalog = await anyio.to_thread.run_sync(load_catalog)
+    dialogs = _resolve_dialog_choices(catalog, declarative)
     agent_jar_path = await anyio.to_thread.run_sync(_load_jar_path)
 
     loop = asyncio.get_running_loop()

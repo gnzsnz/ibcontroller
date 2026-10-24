@@ -28,10 +28,10 @@ from ibcontroller.config import (
 )
 from ibcontroller.dialogs import (
     ClickStep,
-    DialogCatalog,
     DialogEntry,
     MatchGroup,
     load_catalog,
+    resolve_dialogs,
 )
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
@@ -70,6 +70,7 @@ pytestmark = pytest.mark.asyncio
 
 LABELS = load_labels()
 CATALOG = load_catalog()
+CHOICES = resolve_dialogs(CATALOG, (), {}, {})
 
 
 def _catalog_recognizer(name: str) -> DialogRecognizer:
@@ -594,7 +595,7 @@ def test_not_currently_available_registered_before_login_failed():
             log_dir=f"{gettempdir()}/log",
         ),
         LABELS,
-        CATALOG,
+        CHOICES,
         types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False),  # type: ignore[arg-type]
         lambda _s: None,
     )
@@ -1621,7 +1622,7 @@ def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
     registry = build_default_registry(
         config,
         LABELS,
-        CATALOG,
+        CHOICES,
         session,  # type: ignore[arg-type]
         lambda _wait: None,
     )
@@ -1680,11 +1681,11 @@ def test_declarative_rule_does_not_shadow_a_login_outcome_recogniser():
         match=[MatchGroup(title="Unrecognized Username")],
         modes={"on": [ClickStep("OK")]},
     )
-    catalog = DialogCatalog(dialog=[shadow, *CATALOG.dialog])
+    choices = resolve_dialogs(CATALOG, [shadow], {}, {})
     registry = build_default_registry(
         config,
         LABELS,
-        catalog,
+        choices,
         types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False),  # type: ignore[arg-type]
         lambda _s: None,
     )
@@ -1710,11 +1711,11 @@ def test_declarative_rule_does_not_shadow_the_exit_progress_recogniser():
         match=[MatchGroup(title="Restart in progress")],
         modes={"on": [ClickStep("OK")]},
     )
-    catalog = DialogCatalog(dialog=[shadow, *CATALOG.dialog])
+    choices = resolve_dialogs(CATALOG, [shadow], {}, {})
     registry = build_default_registry(
         config,
         LABELS,
-        catalog,
+        choices,
         types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False),  # type: ignore[arg-type]
         lambda _s: None,
     )
@@ -1739,7 +1740,7 @@ def test_build_registry_binds_session_and_schedule_retry():
     registry = build_default_registry(
         config,
         LABELS,
-        CATALOG,
+        CHOICES,
         session,  # type: ignore[arg-type]
         retries.append,
     )

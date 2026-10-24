@@ -566,9 +566,11 @@ def load_config(
 class DeclarativeInput:
     """Raw `[ibkr]`, `[[setting]]` and `[[dialog]]` data, unvalidated: the settings and
     dialogs layers own those schemas. `ibkr` already has `IBKR_*` environment values
-    merged over the file's."""
+    merged over the file's; `ibkr_sources` says, per key, which one won (`file` or
+    `env`)."""
 
     ibkr: Mapping[str, Any] = attrs.field(factory=dict)
+    ibkr_sources: Mapping[str, str] = attrs.field(factory=dict)
     settings: tuple[Mapping[str, Any], ...] = ()
     dialogs: tuple[Mapping[str, Any], ...] = ()
 
@@ -605,8 +607,14 @@ def load_declarative_input(
     values. Call after `load_config`, which loads the dotenv file."""
     path = Path(toml_path) if toml_path else Path(config_dir) / "ibcontroller.toml"
     data = _read_toml(path)
+    from_file = data.get(_IBKR_TABLE, {})
+    from_env = _collect_ibkr_env()
     return DeclarativeInput(
-        ibkr={**data.get(_IBKR_TABLE, {}), **_collect_ibkr_env()},
+        ibkr={**from_file, **from_env},
+        ibkr_sources={
+            **dict.fromkeys(from_file, "file"),
+            **dict.fromkeys(from_env, "env"),
+        },
         settings=tuple(data.get("setting", ())),
         dialogs=tuple(data.get("dialog", ())),
     )

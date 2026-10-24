@@ -13,11 +13,14 @@ from ibcontroller.agent_client import (
 from ibcontroller.config import ConfigError
 from ibcontroller.dialogs import (
     ClickStep,
+    DialogChoice,
     DialogEntry,
     DialogsError,
     MatchGroup,
     load_catalog,
     parse_catalog,
+    parse_custom_dialogs,
+    resolve_dialogs,
     run_steps,
 )
 from ibcontroller.dispatch import Dispatcher
@@ -314,3 +317,138 @@ def test_bundled_blind_trading_has_both_ibc_variants_and_candidate_buttons():
 def test_every_bundled_entry_has_an_off_and_an_on_mode():
     for entry in load_catalog().dialog:
         assert {"off", "on"} <= set(entry.modes), entry.name
+
+
+# --- custom entries and mode resolution ---------------------------------------
+
+_RAW_CUSTOM = {
+    "name": "my_warning",
+    "default": "on",
+    "match": [{"title": "Warning", "text": "some phrase"}],
+    "modes": {"off": [], "on": [{"click": ["OK", "Yes"]}]},
+}
+
+
+def _resolve(ibkr=None, sources=None, custom=()):
+    ibkr = ibkr or {}
+    sources = sources or dict.fromkeys(ibkr, "file")
+    return resolve_dialogs(load_catalog(), custom, ibkr, sources)
+
+
+def _by_name(choices):
+    return {c.entry.name: c for c in choices}
+
+
+def test_parse_custom_dialogs_builds_entries():
+    (entry,) = parse_custom_dialogs([_RAW_CUSTOM], source="ibcontroller.toml")
+    assert entry.name == "my_warning"
+    assert entry.modes["on"] == [ClickStep(["OK", "Yes"])]
+
+
+def test_parse_custom_dialogs_empty_is_empty():
+    assert parse_custom_dialogs([], source="ibcontroller.toml") == []
+
+
+@pytest.mark.parametrize(
+    "mutate, match",
+    [
+        (lambda d: d.update(bogus=1), "unknown key"),
+        (lambda d: d.update(default="nope"), "default"),
+        (lambda d: d.update(match=[]), "match group"),
+        (lambda d: d.update(modes={}), "modes"),
+        (lambda d: d.update(name=3), "string"),
+    ],
+)
+def test_parse_custom_dialogs_errors_name_the_source(mutate, match):
+    raw = {**_RAW_CUSTOM}
+    mutate(raw)
+    with pytest.raises(DialogsError, match=rf"ibcontroller\.toml.*{match}"):
+        parse_custom_dialogs([raw], source="ibcontroller.toml")
+
+
+def test_parse_custom_dialogs_duplicate_names_rejected():
+    with pytest.raises(DialogsError, match="duplicate"):
+        parse_custom_dialogs([_RAW_CUSTOM, _RAW_CUSTOM], source="ibcontroller.toml")
+
+
+def test_resolve_defaults_when_nothing_given():
+    choices = _by_name(_resolve())
+    blind = choices["blind_trading"]
+    assert (blind.mode, blind.source) == ("off", "default")
+    assert choices["non_brokerage_account"].mode == "on"
+
+
+def test_resolve_keeps_catalog_order_after_custom_entries():
+    (custom,) = parse_custom_dialogs([_RAW_CUSTOM], source="x")
+    names = [c.entry.name for c in _resolve(custom=[custom])]
+    assert names[0] == "my_warning"
+    assert names[1:] == [e.name for e in load_catalog().dialog]
+
+
+@pytest.mark.parametrize(
+    "value, mode", [(True, "on"), (False, "off"), ("on", "on"), ("off", "off")]
+)
+def test_resolve_file_value(value, mode):
+    choice = _by_name(_resolve({"blind_trading": value}))["blind_trading"]
+    assert (choice.mode, choice.source) == (mode, "file")
+
+
+@pytest.mark.parametrize(
+    "value, mode",
+    [
+        ("true", "on"),
+        ("YES", "on"),
+        ("false", "off"),
+        ("No", "off"),
+        ("ON", "on"),
+        ("Off", "off"),
+    ],
+)
+def test_resolve_env_value(value, mode):
+    choices = _resolve({"blind_trading": value}, {"blind_trading": "env"})
+    choice = _by_name(choices)["blind_trading"]
+    assert (choice.mode, choice.source) == (mode, "env")
+
+
+def test_resolve_file_string_true_is_a_mode_name_not_a_boolean():
+    with pytest.raises(DialogsError, match=r"blind_trading.*'true'"):
+        _resolve({"blind_trading": "true"})
+
+
+def test_resolve_unknown_mode_lists_the_known_ones():
+    with pytest.raises(DialogsError, match=r"blind_trading.*'maybe'.*off, on"):
+        _resolve({"blind_trading": "maybe"})
+
+
+def test_resolve_wrong_type_is_an_error():
+    with pytest.raises(DialogsError, match=r"blind_trading.*int"):
+        _resolve({"blind_trading": 3})
+
+
+def test_resolve_boolean_needs_on_and_off_modes():
+    raw = {
+        **_RAW_CUSTOM,
+        "modes": {"manual": [], "accept": [{"click": "OK"}]},
+        "default": "manual",
+    }
+    (custom,) = parse_custom_dialogs([raw], source="x")
+    with pytest.raises(DialogsError, match=r"my_warning.*boolean.*on.*off"):
+        _resolve({"my_warning": True}, custom=[custom])
+
+
+def test_resolve_custom_entry_with_catalog_name_is_rejected():
+    raw = {**_RAW_CUSTOM, "name": "blind_trading"}
+    (custom,) = parse_custom_dialogs([raw], source="x")
+    with pytest.raises(DialogsError, match=r"blind_trading.*catalog"):
+        _resolve(custom=[custom])
+
+
+def test_resolve_ignores_keys_that_are_not_dialogs():
+    choices = _resolve({"read_only_api": True, "auto_restart_time": "23:45"})
+    assert all(c.source == "default" for c in choices)
+
+
+def test_dialog_choice_fields():
+    entry = load_catalog().dialog[0]
+    choice = DialogChoice(entry, "on", "file")
+    assert (choice.entry, choice.mode, choice.source) == (entry, "on", "file")
