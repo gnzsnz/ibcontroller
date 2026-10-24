@@ -224,14 +224,11 @@
 
 # IBC: OverrideTwsApiPort. API/Settings "Socket port", a number or text. IBKR's defaults:
 # 7496 TWS live, 7497 TWS paper, 4001 Gateway live, 4002 Gateway paper. Changing it on
-# TWS while "Enable ActiveX and Socket Clients" is checked may open a TWS-only
-# confirmation dialog, which ibcontroller does not handle yet: check the log after the
-# first run.
+# TWS opens a confirmation dialog after OK, see socket_port_confirmation below.
 # Default: not set
 # socket_port = 4002
 
 # IBC: OverrideTwsMasterClientID. API/Settings "Master API client ID", a number or text.
-# The same TWS confirmation dialog may appear.
 # Default: not set
 # master_api_client_id = 0
 
@@ -278,6 +275,12 @@
 # "Override and Transmit" or "Yes". Unverified, as above.
 # Modes "off", "on". Default "off"
 # blind_trading = "off"
+
+# TWS only: "Press YES if you wish to apply the new socket port setting immediately",
+# shown after OK when socket_port changed. "on" clicks "Yes" (the port takes effect at
+# once), "no" clicks "No" (it takes effect when the GUI restarts), "off" leaves it to you.
+# Modes "off", "on", "no". Default "off"
+# socket_port_confirmation = "off"
 
 # A Global Configuration setting the catalog lacks. It carries no value: give it one
 # in [ibkr] under its name, or as IBKR_<NAME>. A custom name must not be a catalog name,

@@ -288,12 +288,14 @@ def test_bundled_catalog_loads_with_the_expected_entries():
         "auto_restart_confirmation",
         "password_expiry_warning",
         "blind_trading",
+        "socket_port_confirmation",
     ]
     assert {n: e.default for n, e in entries.items()} == {
         "non_brokerage_account": "on",
         "auto_restart_confirmation": "on",
         "password_expiry_warning": "off",  # nosec B105
         "blind_trading": "off",
+        "socket_port_confirmation": "off",  # nosec B105
     }
 
 
@@ -319,6 +321,17 @@ def test_bundled_blind_trading_has_both_ibc_variants_and_candidate_buttons():
     ]
     assert blind.modes["on"] == [ClickStep(["Override and Transmit", "Yes"])]
     assert blind.modes["off"] == []
+
+
+def test_bundled_socket_port_confirmation_answers_yes_or_no_and_defaults_to_off():
+    entry = {e.name: e for e in load_catalog().dialog}["socket_port_confirmation"]
+    assert entry.match == [
+        MatchGroup(text="apply the new socket port setting immediately")
+    ]
+    assert entry.modes["on"] == [ClickStep(["Yes"])]
+    assert entry.modes["no"] == [ClickStep(["No"])]
+    assert entry.modes["off"] == []
+    assert entry.default == "off"
 
 
 def test_every_bundled_entry_has_an_off_and_an_on_mode():

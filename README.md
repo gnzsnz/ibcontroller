@@ -306,10 +306,10 @@ handler recognises (default `OK`, `Close`, `Dismiss`).
 Pop-ups that are always handled the same simple way (match a window, click a button) are
 not in `labels.json`: they are entries of the bundled dialog catalog (`data/catalog.toml`).
 Today those are the non-brokerage-account warning and the auto-restart confirmation notice,
-both handled automatically; entries for the password-expiry notice and blind-trading
-confirmation ship switched off. Matching ignores case. Adding your own dialogs and switching
-catalog entries on or off arrives with the `ibcontroller.toml` sections for declarative
-configuration. A `dismiss_rules` key in `labels.json` is no longer read: it is logged as an
+both handled automatically; entries for the password-expiry notice, blind-trading
+confirmation and the TWS socket-port confirmation ship switched off. Matching ignores case.
+Switch an entry with its name in `[ibkr]` and add your own with `[[dialog]]` in
+`ibcontroller.toml`. A `dismiss_rules` key in `labels.json` is no longer read: it is logged as an
 unknown key and ignored.
 
 Login-outcome dialogs ("Login failed", "Unrecognized Username or Password", the connection
@@ -329,8 +329,8 @@ The value is checked at startup, a wrong one stops the run with an error naming 
 | `auto_logoff_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily logoff time. |
 | `auto_restart_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily restart time. Shares the "Lock and Exit" radio pair with `auto_logoff_time`: if you set both, `auto_restart_time` wins, as in IBC. |
 | `read_only_api` | `true`/`false` | API/Settings "Read-Only API". |
-| `socket_port` | number or text | API/Settings "Socket port". IBKR defaults: 7496 TWS live, 7497 TWS paper, 4001 Gateway live, 4002 Gateway paper. On TWS, changing it while "Enable ActiveX and Socket Clients" is checked may open a confirmation dialog that is not handled yet. |
-| `master_api_client_id` | number or text | API/Settings "Master API client ID". Same TWS confirmation caveat as the port. |
+| `socket_port` | number or text | API/Settings "Socket port". IBKR defaults: 7496 TWS live, 7497 TWS paper, 4001 Gateway live, 4002 Gateway paper. On TWS, changing it opens a confirmation dialog after OK, see `socket_port_confirmation`. |
+| `master_api_client_id` | number or text | API/Settings "Master API client ID". |
 | `send_market_data_in_lots_us_stocks` | `true`/`false` | API/Settings, lots for US stocks. Unverified: a confirmation window may open. |
 | `api_precautions_bypass_order_precautions` | `true`/`false` | API/Precautions: bypass the order precautions for API orders. |
 | `api_precautions_bypass_bond_warning` | `true`/`false` | API/Precautions: bypass the bond warning for API orders. |

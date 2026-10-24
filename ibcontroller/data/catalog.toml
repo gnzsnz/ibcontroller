@@ -39,8 +39,8 @@ label_ref = "read_only_api"
 # The API/Settings text fields have no accessible name, so they are found by position:
 # field_index counts the panel's text fields from the top (0 socket port, 1 master client
 # ID). A wrong index writes the value into the neighbouring field.
-# Changing the port or the client ID on TWS while "Enable ActiveX and Socket Clients"
-# is checked may open a TWS-only confirmation dialog. Its text is not captured yet.
+# On TWS, changing the port opens a confirmation dialog after OK: see the
+# socket_port_confirmation dialog below.
 [[setting]]
 name = "socket_port"
 tree_path = "API/Settings"
@@ -152,3 +152,14 @@ match = [
 [dialog.modes]
 off = []
 on = [ { click = ["Override and Transmit", "Yes"] } ]
+
+# TWS only: shown after OK when the socket port changed. "on" answers Yes (the new port
+# takes effect at once), "no" answers No (it takes effect when the GUI restarts).
+[[dialog]]
+name = "socket_port_confirmation"
+default = "off"
+match = [ { text = "apply the new socket port setting immediately" } ]
+[dialog.modes]
+off = []
+on = [ { click = ["Yes"] } ]
+no = [ { click = ["No"] } ]
