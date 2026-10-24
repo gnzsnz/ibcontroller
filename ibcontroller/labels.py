@@ -216,7 +216,7 @@ class SettingsLabels:
 
     `controls` is a flat name -> widget-label map, deliberately decoupled
     from tree paths (which stay literal on each `settings.SettingEntry` in
-    `ibkr_settings.toml`): this dict exists to version-proof against IBKR
+    `catalog.toml`): this dict exists to version-proof against IBKR
     renaming a *label*, not to describe a setting's navigation.
 
     `api_precautions_*` covers the API/Precautions panel. The control set is

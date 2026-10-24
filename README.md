@@ -73,7 +73,7 @@ You can use the following cli parameters:
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Commands ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ init     Scaffold the config directory with starter ibcontroller.toml/                                                                  │
-│          ibkr_settings.toml.example/labels.json.example files. Never overwrites a file                                                  │
+│          labels.json.example files. Never overwrites a file                                                  │
 │          that already exists unless --force is given.                                                                                   │
 │ run      Run one ibcontroller instance until it stops (Ctrl-C for a graceful shutdown,                                                  │
 │          or Gateway/TWS exiting or restarting on its own). Scaffolds the config directory                                               │
@@ -138,13 +138,11 @@ In the same way a sample `.toml` file with all config is
 
 `ibcontroller init` (or the first `ibcontroller run`) copies starter templates into the
 config directory: `ibcontroller.toml` (every key commented out -- safe to run as-is,
-since it changes nothing versus the defaults below), `ibkr_settings.toml.example`
-(*extra* declarative Global Configuration settings, on top of the always-applied
-built-in ones -- see "Declarative configuration" below), and `labels.json.example` (an
-optional, sparse override for window/button labels and dismiss rules, applied once
-renamed to `labels.json` -- see `labels.py`'s own docstring for the merge mechanism).
-Both `.example` files are deliberately left inert (kept under their `.example` name)
-until renamed -- neither auto-applies just by existing. The templates themselves are
+since it changes nothing versus the defaults below) and `labels.json.example` (an
+optional, sparse override for window/button labels, applied once renamed to
+`labels.json` -- see `labels.py`'s own docstring for the merge mechanism).
+`labels.json.example` is deliberately left inert (kept under its `.example` name)
+until renamed -- it does not apply just by existing. The templates themselves are
 bundled inside the installed package (`ibcontroller/data/`), not kept in this
 repository.
 
@@ -213,7 +211,6 @@ allowing `None`. `Config`'s schema is closed — an unknown key in
 | `tws_channel` | `IBC_TWS_CHANNEL`, `--tws-channel` | `"stable"`/`"latest"`; narrows auto-detection to one update channel | `"stable"` |
 | `tws_path` | `IBC_TWS_PATH`, `--tws-path` | Override TWS/gateway install-path inference | `None` |
 | `tws_settings_path` | `IBC_TWS_SETTINGS_PATH`, `--tws-settings-path` | TWS/Gateway settings dir (per instance) | `None` |
-| `settings_file` | `IBC_SETTINGS_FILE` | Extra `ibkr_settings.toml`, merged on top of the built-in settings -- see "Declarative configuration" below | `None` |
 | `trace_enabled` | `IBC_TRACE_ENABLED` | Enable verbose raw wire trace (`cmd-{instance}.jsonl`/`events-{instance}.jsonl`) | `false` |
 | `log_dir` | `IBC_LOG_DIR` | Where ibcontroller's own log file lives; always resolved at startup | platform default |
 | `log_level` | `IBC_LOG_LEVEL` | `debug`/`info`/`warning`/`error` | `info` |
@@ -231,7 +228,6 @@ TWS/ibgateway settings
 | --- | --- | --- | --- |
 | `trading_mode` | `IBC_TRADING_MODE`, `--trading-mode` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
 | `read_only_login` | `IBC_READ_ONLY_LOGIN` | TWS-only (Gateway warns and logs in normally); clicks "Enter Read Only" on the 2FA frame instead of waiting for the push, no effect without 2FA (paper) | `false` |
-| `read_only_api` | `IBC_READ_ONLY_API` | `true`/`false` sets it; omit to leave unchanged. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` |
 | `accept_incoming_connections` | `IBC_ACCEPT_INCOMING_CONNECTIONS` | `manual`/`accept`/`reject` | `"manual"` |
 | `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | `manual`/`primary`/`primaryoverride`/`secondary` | `"manual"` |
 | `login_dialog_display_timeout` | `IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog | `60.0` |
@@ -240,8 +236,6 @@ TWS/ibgateway settings
 | `mfa_exit_interval` | `IBC_MFA_EXIT_INTERVAL` | Post-approval wait for login to complete when relogin is on | `60.0` |
 | `mfa_timeout_action` | `IBC_MFA_TIMEOUT_ACTION` | `exit` (exit 75, see "Exit codes" above) or `restart` (relaunch with a fresh login) when `mfa_exit_interval` expires after an approved push | `"exit"` |
 | `restart_cap` | `IBC_RESTART_CAP` | Max consecutive relaunches that never reach READY (login frame timeout, transient login failure, logout, crash during login); then exit 70 | `3` |
-| `auto_restart_time` | `IBC_AUTO_RESTART_TIME` | `"hh:mm AM/PM"` daily auto-restart time. Applied to Gateway/TWS automatically -- see "Declarative configuration" below | `None` |
-| `auto_logoff_time` | `IBC_AUTO_LOGOFF_TIME` | `"hh:mm AM/PM"` daily auto-logoff time; same "Lock and Exit" radio-button pair as `auto_restart_time` -- if both are set, `auto_restart_time` wins | `None` |
 | `time_zone` | `IBC_TIME_ZONE` | IANA zone name, e.g. `"Europe/Zurich"`, written to `jts.ini`'s `TimeZone`. Auto-detected from `TZ`, then `/etc/localtime` -- no setup needed in the common case; never overwrites an existing `TimeZone` line | auto-detected |
 | `cold_restart_time` | `IBC_COLD_RESTART_TIME` | TWS and Gateway. `"HH:MM"` 24-hour local time; every Sunday, ibcontroller closes the instance tidily and relaunches with a full fresh login, forcing IBKR's weekly Sunday 01:00 US/Eastern token-invalidation reauth -- not a GUI setting, see "Scheduled shutdown" below | `None` |
 | `closedown_at` | `IBC_CLOSEDOWN_AT` | TWS and Gateway. `"HH:MM"` (daily) or `"<Weekday> HH:MM"` (weekly); closes the instance tidily at that time, no relaunch -- not a GUI setting, see "Scheduled shutdown" below | `None` |
@@ -269,8 +263,7 @@ Gateway installs of the same version.
 
 #### Scheduled shutdown: `cold_restart_time` / `closedown_at`
 
-Unlike `read_only_api`/`auto_restart_time`/`auto_logoff_time` (real Global Configuration
-GUI settings), these two aren't written to TWS/Gateway at all -- ibcontroller schedules
+Unlike the `[ibkr]` settings (real Global Configuration GUI settings), these two aren't written to TWS/Gateway at all -- ibcontroller schedules
 the action itself, ported from IBC's own `IbcTws.java` (the shared base class both
 programs use, so both apply here too). If both are set, whichever occurs first wins; a
 malformed value is logged and skipped rather than aborting the other one.
@@ -288,12 +281,12 @@ US/Eastern invalidation window if that's the intent.
 
 ## Declarative configuration
 
-Inside `ibcontroller.toml`, the `[ibkr]` table chooses what ibcontroller does with
-IBKR's own pop-ups (for example `blind_trading = "on"`, or `IBKR_BLIND_TRADING=on` in
-the environment) and `[[dialog]]` describes a pop-up the bundled catalog lacks; see
-"Dialogs" in [docs/Configuration.md](./docs/Configuration.md). Beyond that, two
-things let you shape ibcontroller's behavior without writing any Python: **`labels.json`** (window/button text) and **`ibkr_settings.toml`** (Global Configuration settings applied to Gateway/TWS
-at startup). Each is covered below.
+Inside `ibcontroller.toml`, the `[ibkr]` table gives values to IBKR's own settings and
+pop-ups, by name, and the environment can do the same as `IBKR_<NAME>` (it wins over the
+file). Two table kinds describe entries the bundled catalog lacks: `[[setting]]` and
+`[[dialog]]`. The catalog is `ibcontroller/data/catalog.toml`. Beyond that, **`labels.json`**
+(window/button text) lets you shape ibcontroller without writing any Python. Each is covered
+below; the full reference is in [docs/Configuration.md](./docs/Configuration.md).
 
 ### `labels.json` — window/button text
 
@@ -324,71 +317,54 @@ and too-many-attempts warnings) and the "Shutdown progress" / "Restart in progre
 are always handled first, before catalog entries, so a credential rejection still exits with
 code 77 and a restart is still recognised as one.
 
-### `ibkr_settings.toml` — Global Configuration settings
+### Global Configuration settings
 
-Global Configuration settings (the "Configure" / "Settings" dialog inside Gateway/TWS)
-are applied once, right after login, from two layers combined into one list:
+Global Configuration settings (the "Configure" / "Settings" dialog inside Gateway/TWS) are
+applied once, right after login. Each is an entry of the catalog with a name; a value in
+`[ibkr]` (or `IBKR_<NAME>`) makes it apply, and a setting with no value is left as it is.
+The value is checked at startup, a wrong one stops the run with an error naming the setting.
 
-- **Built-in** — `read_only_api`, `auto_restart_time`, and `auto_logoff_time`, applied
-  straight from `ibcontroller.toml`/the environment. Set `read_only_api = false` or
-  `auto_restart_time = "04:00 AM"` in your config and it's applied on the next run —
-  no separate file needed. `auto_restart_time`/`auto_logoff_time` share one
-  radio-button pair; if you set both, `auto_restart_time` wins (the built-in file
-  applies it last, matching IBC's own stated precedence).
-- **Your own `ibkr_settings.toml`** — anything else: any other Global Configuration
-  checkbox or text field, activated by pointing `[settings] file = "..."` (or
-  `IBC_SETTINGS_FILE`) at a real file (rename `ibkr_settings.toml.example` to
-  start from the bundled worked examples: the `api_precautions_*` toggles, plus commented
-  entries for the API socket port, the master API client ID and "Send market data in lots
-  for US stocks" under `API/Settings`).
+| Name | Value | Notes |
+| --- | --- | --- |
+| `auto_logoff_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily logoff time. |
+| `auto_restart_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily restart time. Shares the "Lock and Exit" radio pair with `auto_logoff_time`: if you set both, `auto_restart_time` wins, as in IBC. |
+| `read_only_api` | `true`/`false` | API/Settings "Read-Only API". |
 
-When no entry resolves to a value (the default), the dialog is not opened. Only the TWS Mosaic
+```toml
+[ibkr]
+read_only_api = false
+auto_restart_time = "04:00 AM"
+```
+
+When no setting has a value (the default), the dialog is not opened. Only the TWS Mosaic
 layout is supported: on TWS Classic no setting is applied and the attempt waits for
-`mfa_timeout` (default 180s) before failing. Gateway is not affected.
+`mfa_timeout` (default 180s) before failing. Gateway is not affected. A setting that fails
+(control not found) is logged and the next one still runs.
 
-An entry looks like this:
-
-```toml
-[[settings]]
-tree_path = "API/Precautions"           # Global Configuration's own tree, section by section
-action = "toggle"                       # "toggle" | "type_text" | "type_text_near_label" | "auto_restart_time" | "auto_logoff_time"
-label_ref = "api_precautions_bypass_bond_warning"  # a name from labels.json's settings.controls map
-# label = "Some Checkbox Label"         # ...or a literal label, for anything not named there yet
-value = true                            # a literal value...
-# value_from_config = "read_only_api"   # ...or pulled from ibcontroller.toml/env at apply time
-```
-
-- `label_ref` looks the label up in `labels.json`'s `settings.controls` map (version-proofed
-  against a future rename); `label` is a literal string for anything not worth naming there.
-- `value` is a literal; `value_from_config` instead reads an `ibcontroller.toml` field by
-  name at apply time — this is how the built-in entries stay driven purely by config. A
-  value that resolves to nothing (unset `value`, or a `value_from_config` field left at its
-  default `None`) skips that entry entirely — "leave unchanged," not "set to blank." This
-  is the actual enable/disable mechanism for `Config`-backed settings (see the `### Settings`
-  table above) — `value_from_config` only works for the fixed set of fields `settings.py`
-  already knows about (`read_only_api`/`auto_restart_time`/`auto_logoff_time` today);
-  `Config`'s own schema is closed, so pointing it at anything else logs a warning and never
-  applies — use a literal `value` for anything not in that set.
-- `type_text_near_label`, for a field with no accessible label of its own, also takes
-  `field_index` (0-based position within the container below the matched label).
-
-**Your file adds to the built-ins, and can also override one.** Every entry you declare
-with a *different* `value_from_config` (or none at all, e.g. a literal-`value` entry) is
-simply added to what gets applied. An entry with the *same* `value_from_config` as a
-built-in *replaces* that built-in entry outright — the two are never both applied. Use
-this if a future Gateway/TWS release moves `read_only_api` (or `auto_restart_time`) to a
-different screen or renames its control: point your own entry at the new location, keep
-`value_from_config = "read_only_api"`, and it takes over from the bundled one.
+For a setting the catalog lacks, add a `[[setting]]` entry; it carries no value, give it one
+in `[ibkr]` under its name:
 
 ```toml
-# Overrides the built-in read_only_api entry with a new location/label, still driven
-# by the same ibcontroller.toml field:
-[[settings]]
-tree_path = "API/Settings/Read-Only"
-action = "toggle"
-label = "Read-Only API Access"
-value_from_config = "read_only_api"
+[ibkr]
+master_api_client_id = 0
+
+[[setting]]
+name = "master_api_client_id"
+tree_path = "API/Settings"                # Global Configuration's own tree, section by section
+action = "type_text_near_label"           # "toggle" | "type_text" | "type_text_near_label"
+label = "Master API client ID"            # a literal label...
+# label_ref = "master_api_client_id"      # ...or a name from labels.json's settings.controls map
+field_index = 0                           # only type_text_near_label: 0-based field below the label
 ```
+
+A custom name must not be the name of a catalog entry or of a dialog.
+
+**Moved from earlier versions:** `read_only_api`, `auto_restart_time` and `auto_logoff_time`
+are no longer `[ibcontroller]` keys and `IBC_READ_ONLY_API`, `IBC_AUTO_RESTART_TIME` and
+`IBC_AUTO_LOGOFF_TIME` are no longer read (they are ignored silently). Use the `[ibkr]` table
+or `IBKR_READ_ONLY_API`, `IBKR_AUTO_RESTART_TIME`, `IBKR_AUTO_LOGOFF_TIME`. `settings_file`,
+`IBC_SETTINGS_FILE` and `ibkr_settings.toml` are gone too: custom entries go in
+`ibcontroller.toml`.
 
 ## Logging
 

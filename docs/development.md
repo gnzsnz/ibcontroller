@@ -327,7 +327,7 @@ call each other.
 | ---------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | Login      | `login.py`, login-outcome recognisers in `recognisers.py`     | Fill credentials, detect success, MFA and failure, report the outcome.         |
 | Dialogs    | `RecognizerRegistry`, `watch_for_unprompted_windows`          | Recognise and handle windows nobody is waiting for.                          |
-| Settings   | `settings.py`, `builtin_settings.toml`, `ibkr_settings.toml`  | Apply declared Global Configuration settings.                                |
+| Settings   | `settings.py`, `[[setting]]` entries of `catalog.toml`        | Apply declared Global Configuration settings.                                |
 | Scheduling | `schedule.py`                                                  | Wall-clock maths for cold restart and close-down. No I/O.                     |
 | Diagnostic | `diagnostics.py`                                               | Dump window structure for development and support.                           |
 | Management | `management.py`                                                | Runtime operations on a running instance: graceful shutdown today; restart and data-farm reconnect when built. Decides how; callers (L6, later L7) decide when. |

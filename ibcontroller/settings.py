@@ -2,66 +2,45 @@
 `management.py` (Management).
 
 Drives IBKR's Global Configuration dialog: open it, navigate to a section,
-set a value, repeat for every declared setting, then click "OK" once to
+set a value, repeat for every setting with a value, then click "OK" once to
 commit and close. A plain sequence, not a state machine -- built on the same
 `actions.py` primitives (`navigate_menu`, `expand_tree`, `toggle`, `type_text`,
 `type_text_near_label`, `click`) every other domain uses.
 
-Settings are declared in TOML, not code (`SettingEntry`/`SettingsFile`, loaded
-via `load_settings_file`/`load_builtin_settings_file`). Two tiers:
+A setting is a `SettingEntry`, data and not code: a name, where the control
+is (`tree_path`, `label` or `label_ref`) and an `action`. The bundled
+`data/catalog.toml` holds the entries ibcontroller knows; a user adds more as
+`[[setting]]` in `ibcontroller.toml`. The value comes from `[ibkr]` (file) or
+`IBKR_<NAME>` (environment); `resolve_settings` checks it against the entry's
+action at startup. A setting with no value is left alone -- the deliberate
+three-state (set/clear/leave-unchanged) mechanism, matching IBC's own
+`config.ini` semantics for yes/no settings.
 
-- **Built-in** (`data/builtin_settings.toml`, always loaded): `read_only_api`
-  and `auto_restart_time`, the load-bearing settings this project's own
-  "Scope, deliberately" section calls out. Sourced from `Config` fields, so
-  they apply from `ibcontroller.toml` alone, no extra file needed.
-- **User** (`ibkr_settings.toml`, via `Config.settings_file`, opt-in): anything
-  else a deployment wants to set, e.g. the `api_precautions_*` controls.
+Five actions are supported: `toggle` (a bool), `type_text` and
+`type_text_near_label` (a string), `auto_restart_time` and `auto_logoff_time`
+(an `"hh:mm AM/PM"` string; each one drives three writes: the time field, the
+AM/PM radio and the "Auto restart"/"Auto logoff" radio, see `_parse_time_ampm`).
+Both time settings share the Lock and Exit radio pair, so the catalog lists
+`auto_logoff_time` before `auto_restart_time`: choices keep catalog order, the
+last one applied wins the radio group, matching IBC's stated precedence.
+Button-press entries with no value and dropdown (`JComboBox`) controls are not
+supported yet.
 
-`merge_settings_files` combines them: a user entry whose `value_from_config`
-matches a built-in entry replaces it (e.g. to correct a control that moved in
-a newer TWS/Gateway release); everything else is unioned in, built-ins first.
-
-Each `SettingEntry` names its target via `label` (a literal widget label) or
-`label_ref` (resolved through `labels.settings.controls`, version-proofed),
-and its value via a literal `value` or `value_from_config` (an attribute
-looked up on `Config` at apply time). A value of `None`, from either source,
-means "leave this setting alone" -- the deliberate three-state (set/clear/
-leave-unchanged) enable/disable mechanism, matching IBC's own `config.ini`
-semantics for yes/no settings. `_SETTINGS_ELIGIBLE_FIELDS` is the closed set
-of `Config` fields a `value_from_config` may name; adding a new built-in
-setting means extending this set and adding the `Config` field together.
-
-Five actions are supported: `toggle`, `type_text`, `type_text_near_label`,
-`auto_restart_time`, and `auto_logoff_time` (each of the last two, one config
-string driving three underlying writes: the time field, the AM/PM radio, and
-the "Auto restart"/"Auto logoff" radio -- see `_parse_time_ampm`; both share
-the same Lock and Exit radio-button pair, so `builtin_settings.toml` applies
-`auto_logoff_time` before `auto_restart_time` so that, if both are set, the
-last-applied wins the shared radio group, matching IBC's own stated
-precedence). Button-press entries with no value (e.g. IBC's "Reset API order
-ID sequence") and dropdown (`JComboBox`) controls aren't supported yet --
-nothing declared so far needs them.
-
-`apply_settings_from_file` applies at instance startup only, before or
-around Login (not from the future control API/L9, which is a separate
-runtime trigger into the same `SettingEntry` mechanism). Each entry's
-failure is caught and logged independently, so one bad entry doesn't abort
-the rest of the file."""
+`apply_settings` applies at instance startup only, before or around Login.
+Each entry's failure is caught and logged independently, so one bad entry
+doesn't abort the rest."""
 
 from __future__ import annotations
 
 import logging
 import tomllib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from importlib import resources
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import attrs
 import cattrs
-from anyio import Path as AsyncPath
-from anyio.to_thread import run_sync
 
 from ibcontroller.actions import (
     click,
@@ -78,9 +57,8 @@ from ibcontroller.agent_client import (
     ProtocolError,
     WindowGoneError,
 )
-from ibcontroller.config import Config, Program
+from ibcontroller.config import ENV_FALSE, ENV_TRUE, Config, ConfigError, Program
 from ibcontroller.dispatch import Dispatcher
-from ibcontroller.errors import IBControllerError
 from ibcontroller.labels import Labels, SettingsLabels
 
 if TYPE_CHECKING:
@@ -88,154 +66,184 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-converter = cattrs.Converter()
 _NOON_HOUR = 12  # datetime.hour is 0-23; below this is AM, at/above is PM
-# Single source of truth for which Config fields a "value_from_config" may
-# name -- both _resolve_value's allow-list and load_settings_file's eager
-# warning read this same set. hasattr(config, ...) alone would let an entry
-# reach any Config attribute, including Secret-wrapped credentials
-# (userid/password). Extend this set (and config.py) when a new built-in
-# setting is added.
-_SETTINGS_ELIGIBLE_FIELDS = frozenset(
-    {"read_only_api", "auto_restart_time", "auto_logoff_time"}
-)
-# SettingEntry.value (bool | str | None) has no discriminator cattrs can use
-# on its own -- but tomllib.load() already parses TOML's own real
-# bool/string/absent types into native Python values before cattrs ever sees
-# them, so a plain passthrough is the correct hook.
-converter.register_structure_hook(bool | str | None, lambda v, _: v)
+_TIME_ACTIONS = frozenset({"auto_restart_time", "auto_logoff_time"})
+_TEXT_ACTIONS = frozenset({"type_text", "type_text_near_label"})
+_ACTIONS = _TIME_ACTIONS | _TEXT_ACTIONS | {"toggle"}
 
 
-class SettingsError(IBControllerError):
-    """Raised for conditions specific to this module's own sequencing and
-    entry resolution: the Global Configuration dialog never appeared, a
-    wanted section/setting couldn't be found, or a `SettingEntry` is
-    malformed (unknown `action`, neither/both of `label`/`label_ref` given,
-    an unresolvable `label_ref`/`value_from_config`). `actions.py`'s own
-    typed exceptions (`TimeoutError`, `ElementNotFoundError`) propagate
-    unchanged where relevant."""
+class SettingsError(ConfigError):
+    """A malformed setting entry or value (unknown `action`, a wrong label
+    key, a value of the wrong type), or a failure of this module's own
+    sequencing: the Global Configuration dialog never appeared, a wanted
+    section/setting couldn't be found, an unresolvable `label_ref`.
+    `actions.py`'s own typed exceptions (`TimeoutError`, `ElementNotFoundError`)
+    propagate unchanged where relevant."""
 
 
 @attrs.define(frozen=True)
 class SettingEntry:
-    """One row of `ibkr_settings.toml` -- see the module docstring for the
-    `label`/`label_ref`/`value`/`value_from_config` resolution rules."""
+    """One setting: where its control is and how to write it. The wanted value
+    is not part of the entry, it comes from `[ibkr]`/`IBKR_<NAME>`."""
 
+    name: str
     tree_path: str
     action: str
     label: str | None = None
     label_ref: str | None = None
-    value: bool | str | None = None
-    value_from_config: str | None = None
     field_index: int = 0
     """Used only by `"type_text_near_label"` entries, to find a field with
     no accessible name of its own by position within the container below
     the matched label. Ignored by every other action."""
 
+    def __attrs_post_init__(self) -> None:
+        if self.action not in _ACTIONS:
+            raise SettingsError(
+                f"setting {self.name!r}: unknown action {self.action!r}; "
+                f"actions: {', '.join(sorted(_ACTIONS))}"
+            )
+        named = (self.label is not None) + (self.label_ref is not None)
+        if self.action in _TIME_ACTIONS and named:
+            raise SettingsError(
+                f"setting {self.name!r}: {self.action!r} takes no 'label' or "
+                "'label_ref', it knows its controls"
+            )
+        if self.action not in _TIME_ACTIONS and named != 1:
+            raise SettingsError(
+                f"setting {self.name!r}: needs exactly one of 'label'/'label_ref'"
+            )
+
 
 @attrs.define(frozen=True)
-class SettingsFile:
-    settings: list[SettingEntry] = attrs.field(factory=list)
+class SettingCatalog:
+    """The `[[setting]]` entries of one file, in file order. Names are unique."""
+
+    setting: list[SettingEntry] = attrs.field(factory=list)
+
+    def __attrs_post_init__(self) -> None:
+        seen: set[str] = set()
+        for entry in self.setting:
+            if entry.name in seen:
+                raise SettingsError(f"duplicate setting name {entry.name!r}")
+            seen.add(entry.name)
 
 
-async def load_settings_file(path: str | Path) -> SettingsFile:
-    """Loads `path` as TOML into a `SettingsFile`. Used for a user's own
-    `ibkr_settings.toml` (`Config.settings_file`, `None` unless a caller
-    explicitly points at a real file) -- see `load_builtin_settings_file`
-    for the always-loaded built-in counterpart.
+@attrs.define(frozen=True)
+class SettingChoice:
+    """An entry with its checked value and where the value came from: `file`
+    or `env`."""
 
-    Warns (without raising, and without dropping the entry) for any
-    `value_from_config` naming a field outside `_SETTINGS_ELIGIBLE_FIELDS`,
-    since such an entry can never resolve to a real setting and will always
-    be skipped at apply time.
+    entry: SettingEntry
+    value: bool | str
+    source: str
 
-    Read via `anyio.Path`, off the event loop -- called once per launch/
-    restart from `apply_declarative_settings`, concurrently
-    with the Dispatcher's own event/command tasks while the Configuration
-    dialog is open on the live Gateway.
 
-    Raises `SettingsError` (never a raw `OSError`/`tomllib.TOMLDecodeError`/
-    cattrs error) for a missing/unreadable file, invalid TOML, or a
-    structure that doesn't match `SettingsFile` -- `control_loop` catches
-    this specifically to fall back to built-in-only settings rather than
-    losing the whole settings step to one bad user file."""
+def _structure_str(value: Any, _type: Any) -> str:
+    if not isinstance(value, str):
+        raise SettingsError(f"expected a string, got {type(value).__name__}")
+    return value
+
+
+# Extra keys are an error: a stray key in a custom entry is a typo to fail on.
+_converter = cattrs.Converter(forbid_extra_keys=True)
+_converter.register_structure_hook(str, _structure_str)
+
+
+def _describe(exception: BaseException, _type: type | None) -> str:
+    if isinstance(exception, cattrs.ForbiddenExtraKeysError):
+        keys = ", ".join(repr(key) for key in sorted(exception.extra_fields))
+        return f"unknown key {keys}"
+    return str(exception) if isinstance(exception, SettingsError) else repr(exception)
+
+
+def _structure_catalog(data: Mapping[str, Any], source: str) -> SettingCatalog:
     try:
-        raw = await AsyncPath(Path(path).expanduser()).read_bytes()
-    except OSError as exc:
-        raise SettingsError(f"could not read settings file {path}: {exc}") from exc
-    try:
-        data = tomllib.loads(raw.decode("utf-8"))
-    except tomllib.TOMLDecodeError as exc:
-        raise SettingsError(f"settings file {path} is not valid TOML: {exc}") from exc
-    try:
-        settings_file = converter.structure(data, SettingsFile)
-    except cattrs.errors.ClassValidationError as exc:
-        raise SettingsError(
-            f"settings file {path} has an invalid structure: {exc}"
-        ) from exc
-    for entry in settings_file.settings:
-        if (
-            entry.value_from_config is not None
-            and entry.value_from_config not in _SETTINGS_ELIGIBLE_FIELDS
-        ):
-            logger.warning(
-                "IBController > settings: %s entry %s (%s) has "
-                "value_from_config=%r, which is not a real ibcontroller.toml "
-                "field -- this entry will never apply. Use a literal 'value' "
-                "instead, or check the README's Settings table.",
-                path,
-                entry.tree_path,
-                entry.label or entry.label_ref,
-                entry.value_from_config,
-            )
-    return settings_file
+        return _converter.structure(data, SettingCatalog)
+    except cattrs.ClassValidationError as exc:
+        details = "; ".join(cattrs.transform_error(exc, format_exception=_describe))
+        raise SettingsError(f"{source}: {details}") from exc
+    except SettingsError as exc:
+        raise SettingsError(f"{source}: {exc}") from exc
 
 
-async def load_builtin_settings_file() -> SettingsFile:
-    """Loads the bundled `data/builtin_settings.toml` -- `read_only_api`/
-    `auto_restart_time`, always parsed and always applied regardless of
-    whether `Config.settings_file` is set.
-
-    `resources.files(...)` returns an `importlib.resources` `Traversable`,
-    not necessarily a real `pathlib.Path` (e.g. inside a zipped wheel), so
-    this can't use `anyio.Path` directly -- `anyio.to_thread.run_sync` wraps
-    the whole `read_bytes()` call off the event loop instead, same reasoning
-    as `launcher.build_launch_plan`'s own wrap."""
-    resource = resources.files("ibcontroller").joinpath("data", "builtin_settings.toml")
-    raw = await run_sync(resource.read_bytes)
-    data = tomllib.loads(raw.decode("utf-8"))
-    return converter.structure(data, SettingsFile)
-
-
-def merge_settings_files(
-    builtin: SettingsFile, user: SettingsFile | None
+def parse_custom_settings(
+    raw_entries: Sequence[Mapping[str, Any]], *, source: str
 ) -> list[SettingEntry]:
-    """Combines `builtin`'s always-on entries with `user`'s optional
-    entries. A user entry whose `value_from_config` matches a built-in
-    entry's *replaces* it (the override case); every other entry (an
-    un-overridden built-in, or any other user entry, including one with no
-    `value_from_config` set at all) is unioned in, built-ins first in their
-    own order, then the user's remaining entries in theirs."""
-    user_entries = user.settings if user is not None else []
-    user_by_key = {
-        entry.value_from_config: entry
-        for entry in user_entries
-        if entry.value_from_config is not None
-    }
-    merged: list[SettingEntry] = []
-    overridden_keys: set[str] = set()
-    for entry in builtin.settings:
-        key = entry.value_from_config
-        if key is not None and key in user_by_key:
-            merged.append(user_by_key[key])
-            overridden_keys.add(key)
-        else:
-            merged.append(entry)
-    for entry in user_entries:
-        if entry.value_from_config in overridden_keys:
-            continue  # already merged in above, in the built-in's own slot
-        merged.append(entry)
-    return merged
+    """Builds the user's `[[setting]]` entries from plain data, with the same
+    checks as the bundled catalog. Raises `SettingsError` naming `source`."""
+    return _structure_catalog({"setting": list(raw_entries)}, source).setting
+
+
+def load_setting_catalog() -> SettingCatalog:
+    """Loads the `[[setting]]` entries of the bundled `data/catalog.toml`
+    (the `[[dialog]]` entries are `dialogs.py`'s). Blocking file read: call it
+    off the event loop."""
+    source = "bundled catalog.toml"
+    raw = (
+        resources.files("ibcontroller")
+        .joinpath("data", "catalog.toml")
+        .read_text(encoding="utf-8")
+    )
+    try:
+        data = tomllib.loads(raw)
+    except tomllib.TOMLDecodeError as exc:
+        raise SettingsError(f"{source}: invalid TOML: {exc}") from exc
+    return _structure_catalog({"setting": data.get("setting", [])}, source)
+
+
+def _value_for(entry: SettingEntry, raw: object, source: str) -> bool | str:
+    """Checks `raw` against the entry's action and returns the value to write.
+    From the environment `true`/`yes` and `false`/`no` count as booleans.
+    Raises `SettingsError` naming the entry."""
+    where = f"setting {entry.name!r} ({source})"
+    if entry.action == "toggle":
+        if source == "env" and isinstance(raw, str):
+            word = raw.strip().casefold()
+            if word in ENV_TRUE | ENV_FALSE:
+                return word in ENV_TRUE
+        if not isinstance(raw, bool):
+            raise SettingsError(f"{where}: expected true or false, got {raw!r}")
+        return raw
+    if entry.action in _TIME_ACTIONS:
+        if not isinstance(raw, str):
+            raise SettingsError(f"{where}: expected a time string, got {raw!r}")
+        try:
+            _parse_time_ampm(raw, setting_name=entry.name)
+        except SettingsError as exc:
+            raise SettingsError(f"{where}: {exc}") from exc
+        return raw
+    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+        raise SettingsError(f"{where}: expected text or a number, got {raw!r}")
+    return str(raw)
+
+
+def resolve_settings(
+    catalog: SettingCatalog,
+    custom: Sequence[SettingEntry],
+    ibkr: Mapping[str, Any],
+    sources: Mapping[str, str],
+) -> list[SettingChoice]:
+    """Checks the `[ibkr]` value of every entry that has one (environment merged
+    over file; `sources` says which) and returns the choices in apply order:
+    catalog entries, then custom ones. An entry with no value is left out, so
+    its setting stays untouched. Keys of `ibkr` that name no setting are not
+    this module's: dialogs read them. Raises `SettingsError` naming the entry."""
+    bundled = {entry.name for entry in catalog.setting}
+    for entry in custom:
+        if entry.name in bundled:
+            raise SettingsError(
+                f"custom setting {entry.name!r} has the name of a catalog entry"
+            )
+    choices: list[SettingChoice] = []
+    for entry in [*catalog.setting, *custom]:
+        if entry.name in ibkr:
+            source = sources.get(entry.name, "file")
+            choices.append(
+                SettingChoice(
+                    entry, _value_for(entry, ibkr[entry.name], source), source
+                )
+            )
+    return choices
 
 
 def _resolve_control(labels: SettingsLabels, name: str) -> str:
@@ -268,28 +276,6 @@ def _parse_time_ampm(value: str, *, setting_name: str) -> tuple[str, str]:
             f'example "09:30 AM" or "04:00 PM", got {value!r}'
         ) from None
     return parsed.strftime("%I:%M"), ("AM" if parsed.hour < _NOON_HOUR else "PM")
-
-
-def _resolve_value(entry: SettingEntry, config: Config) -> bool | str | None:
-    if entry.value_from_config is not None:
-        if entry.value_from_config not in _SETTINGS_ELIGIBLE_FIELDS:
-            raise SettingsError(
-                f"Config has no field named {entry.value_from_config!r}"
-            )
-        return getattr(config, entry.value_from_config)
-    return entry.value
-
-
-def _any_value_to_apply(entries: list[SettingEntry], config: Config) -> bool:
-    """True if any entry resolves to a value. An entry whose value cannot be
-    resolved counts as one, so the per-entry error handling reports it."""
-    for entry in entries:
-        try:
-            if _resolve_value(entry, config) is not None:
-                return True
-        except SettingsError:
-            return True
-    return False
 
 
 async def _await_menu_ready(
@@ -392,20 +378,56 @@ async def close_settings_dialog(
     await click(dispatcher, labels.ok_button, window_id=window_id)
 
 
-async def apply_settings_from_file(  # noqa: PLR0912 -- per-entry try/except (below)
+async def _apply_time(
     dispatcher: Dispatcher,
     labels: Labels,
-    config: Config,
-    settings_file: SettingsFile,
+    entry: SettingEntry,
+    value: str,
+    window_id: str | None,
+) -> None:
+    """Writes an `auto_restart_time`/`auto_logoff_time` value: the time field,
+    the AM/PM radio and the enable radio. Unlike every other action these
+    already know all their controls (via `labels.settings.controls`), so the
+    entry names none."""
+    time_str, ampm = _parse_time_ampm(value, setting_name=entry.name)
+    restart_time_label = _resolve_control(labels.settings, "auto_restart_time_label")
+    logoff_time_label = _resolve_control(labels.settings, "auto_logoff_time_label")
+    ampm_label = _resolve_control(
+        labels.settings, "am_radio" if ampm == "AM" else "pm_radio"
+    )
+    is_restart = entry.action == "auto_restart_time"
+    enable_label = _resolve_control(
+        labels.settings, "auto_restart_radio" if is_restart else "auto_logoff_radio"
+    )
+    # One time field, labelled by the selected radio -- try the action's own
+    # label first, then the other.
+    first_label, second_label = (
+        (restart_time_label, logoff_time_label)
+        if is_restart
+        else (logoff_time_label, restart_time_label)
+    )
+    try:
+        await type_text_near_label(
+            dispatcher, first_label, entry.field_index, time_str, window_id=window_id
+        )
+    except ElementNotFoundError:
+        await type_text_near_label(
+            dispatcher, second_label, entry.field_index, time_str, window_id=window_id
+        )
+    await toggle(dispatcher, ampm_label, True, window_id=window_id)
+    await toggle(dispatcher, enable_label, True, window_id=window_id)
+
+
+async def apply_settings(
+    dispatcher: Dispatcher,
+    labels: Labels,
+    choices: Sequence[SettingChoice],
     *,
     window_id: str | None = None,
 ) -> None:
-    """Applies every entry in `settings_file`, in order, against an already-
-    open Configuration dialog -- callers sequence `open_settings_dialog` ->
-    `apply_settings_from_file` -> `close_settings_dialog`. An entry whose
-    resolved value is `None` (either a literal `value = nothing` or a
-    `value_from_config` field that's currently `None`) is skipped entirely
-    -- leave-unchanged.
+    """Applies every choice, in order, against an already-open Configuration
+    dialog -- callers sequence `open_settings_dialog` -> `apply_settings` ->
+    `close_settings_dialog`.
 
     `window_id`, if given (normally `open_settings_dialog`'s own return
     value), scopes every action below to the one Configuration dialog it
@@ -415,124 +437,36 @@ async def apply_settings_from_file(  # noqa: PLR0912 -- per-entry try/except (be
     caught, logged, and skipped independently, so one bad entry costs exactly
     that entry, not the ones after it. `WindowGoneError` and `ProtocolError`
     (the dialog or the agent is gone) propagate and end the loop."""
-    for entry in settings_file.settings:
+    for choice in choices:
+        entry, value = choice.entry, choice.value
         try:
-            value = _resolve_value(entry, config)
-            if value is None:
-                logger.info(
-                    "IBController > settings: skipping %s (%s) -- value "
-                    "resolved to None",
-                    entry.tree_path,
-                    entry.label or entry.label_ref,
-                )
-                continue
             await expand_tree(dispatcher, entry.tree_path, window_id=window_id)
-            if entry.action in ("auto_restart_time", "auto_logoff_time"):
-                # No `label`/`label_ref` to resolve -- unlike every other action,
-                # these already know all three underlying controls (the time
-                # field, the AM/PM radio pair, the enable radio) via
-                # labels.settings.controls, so there's nothing for the entry
-                # itself to name.
-                if not isinstance(value, str):
-                    raise SettingsError(
-                        f"'{entry.action}' entries need a string value, got {value!r}"
-                    )
-                time_str, ampm = _parse_time_ampm(value, setting_name=entry.action)
-                logger.info(
-                    "IBController > settings: applying %s (%s) = %s %s",
-                    entry.tree_path,
-                    entry.action,
-                    time_str,
-                    ampm,
-                )
-                restart_time_label = _resolve_control(
-                    labels.settings, "auto_restart_time_label"
-                )
-                logoff_time_label = _resolve_control(
-                    labels.settings, "auto_logoff_time_label"
-                )
-                ampm_label = _resolve_control(
-                    labels.settings, "am_radio" if ampm == "AM" else "pm_radio"
-                )
-                enable_control = (
-                    "auto_restart_radio"
-                    if entry.action == "auto_restart_time"
-                    else "auto_logoff_radio"
-                )
-                enable_label = _resolve_control(labels.settings, enable_control)
-                # One time field, labelled by the selected radio -- try the
-                # action's own label first, then the other.
-                first_label, second_label = (
-                    (restart_time_label, logoff_time_label)
-                    if entry.action == "auto_restart_time"
-                    else (logoff_time_label, restart_time_label)
-                )
-                try:
-                    await type_text_near_label(
-                        dispatcher,
-                        first_label,
-                        entry.field_index,
-                        time_str,
-                        window_id=window_id,
-                    )
-                except ElementNotFoundError:
-                    await type_text_near_label(
-                        dispatcher,
-                        second_label,
-                        entry.field_index,
-                        time_str,
-                        window_id=window_id,
-                    )
-                await toggle(dispatcher, ampm_label, True, window_id=window_id)
-                await toggle(dispatcher, enable_label, True, window_id=window_id)
+            logger.info(
+                "IBController > settings: applying %s = %r (%s)",
+                entry.name,
+                value,
+                choice.source,
+            )
+            if entry.action in _TIME_ACTIONS:
+                await _apply_time(dispatcher, labels, entry, str(value), window_id)
                 continue
             label = _resolve_label(entry, labels.settings)
-            logger.info(
-                "IBController > settings: applying %s (%s) %s = %r",
-                entry.tree_path,
-                label,
-                entry.action,
-                value,
-            )
             if entry.action == "toggle":
-                if not isinstance(value, bool):
-                    raise SettingsError(
-                        f"'toggle' entries need a bool value, got {value!r}"
-                    )
-                await toggle(dispatcher, label, value, window_id=window_id)
+                await toggle(dispatcher, label, bool(value), window_id=window_id)
             elif entry.action == "type_text":
-                if not isinstance(value, str):
-                    raise SettingsError(
-                        f"'type_text' entries need a string value, got {value!r}"
-                    )
-                await type_text(dispatcher, label, value, window_id=window_id)
-            elif entry.action == "type_text_near_label":
-                if not isinstance(value, str):
-                    raise SettingsError(
-                        "'type_text_near_label' entries need a string "
-                        f"value, got {value!r}"
-                    )
+                await type_text(dispatcher, label, str(value), window_id=window_id)
+            else:  # type_text_near_label
                 await type_text_near_label(
                     dispatcher,
                     label,
                     entry.field_index,
-                    value,
+                    str(value),
                     window_id=window_id,
-                )
-            else:
-                raise SettingsError(
-                    f"unsupported settings action {entry.action!r} -- only "
-                    "'toggle'/'type_text'/'type_text_near_label'/"
-                    "'auto_restart_time'/'auto_logoff_time' are supported"
                 )
         except (SettingsError, ElementNotFoundError, AgentError) as exc:
             logger.error(
-                "IBController > settings: entry %s (%s) failed -- skipping: %s",
-                entry.tree_path,
-                entry.label or entry.label_ref,
-                exc,
+                "IBController > settings: %s failed -- skipping: %s", entry.name, exc
             )
-            continue
 
 
 async def apply_declarative_settings(
@@ -540,12 +474,12 @@ async def apply_declarative_settings(
     labels: Labels,
     config: Config,
     session: SessionState,
+    choices: Sequence[SettingChoice],
     *,
     after_apply: Callable[[str | None], Awaitable[None]] | None = None,
 ) -> None:
-    """Applies the bundled built-in entries (`read_only_api`/
-    `auto_restart_time`, from `Config` alone -- see "Two tiers, not one"
-    above), merged with a user's own `Config.settings_file` when set.
+    """Applies `choices` (see `resolve_settings`) in the Global Configuration
+    dialog.
 
     `session.main_window_id` scopes `open_settings_dialog`'s menu navigation
     to the already-validated main window instead of a global guess.
@@ -553,35 +487,18 @@ async def apply_declarative_settings(
     `window_id` (from `open_settings_dialog`) scopes every subsequent action
     to the dialog that opened, and `close_settings_dialog` always runs in
     `finally`. `after_apply`, if given, is awaited with that `window_id`
-    while the dialog is still open, after the entries are applied.
-
-    A `config.settings_file` that fails to load (`SettingsError`) is logged
-    and treated as absent, so a typo'd path cannot take the load-bearing
-    built-in entries down with it.
+    while the dialog is still open, after the choices are applied.
 
     The "OK" click always runs, committing the entries applied so far, except
     when the dialog or the agent is gone (`WindowGoneError`/`ProtocolError`),
     which is re-raised without it.
 
-    Returns without opening the dialog when no entry resolves to a value and
-    there is no `after_apply` hook."""
-    builtin_settings = await load_builtin_settings_file()
-    user_settings = None
-    if config.settings_file is not None:
-        try:
-            user_settings = await load_settings_file(config.settings_file)
-        except SettingsError as exc:
-            logger.error(
-                "IBController > settings: could not load %s -- continuing "
-                "with built-in settings only: %s",
-                config.settings_file,
-                exc,
-            )
-    merged = merge_settings_files(builtin_settings, user_settings)
-    if after_apply is None and not _any_value_to_apply(merged, config):
+    Returns without opening the dialog when there are no choices and no
+    `after_apply` hook."""
+    if after_apply is None and not choices:
         logger.info("IBController > settings: no settings to apply")
         return
-    # open_settings_dialog -> apply_settings_from_file -> close_settings_dialog
+    # open_settings_dialog -> apply_settings -> close_settings_dialog
     window_id = await open_settings_dialog(
         dispatcher,
         labels.settings,
@@ -591,13 +508,7 @@ async def apply_declarative_settings(
     )
     dialog_gone = False
     try:
-        await apply_settings_from_file(
-            dispatcher,
-            labels,
-            config,
-            SettingsFile(settings=merged),
-            window_id=window_id,
-        )
+        await apply_settings(dispatcher, labels, choices, window_id=window_id)
         if after_apply is not None:
             await after_apply(window_id)
     except (WindowGoneError, ProtocolError):
@@ -608,10 +519,4 @@ async def apply_declarative_settings(
             await close_settings_dialog(
                 dispatcher, labels.settings, window_id=window_id
             )
-    if user_settings is not None:
-        logger.info(
-            "IBController > declarative settings applied (built-in + %s)",
-            config.settings_file,
-        )
-    else:
-        logger.info("IBController > declarative settings applied (built-in only)")
+    logger.info("IBController > declarative settings applied (%d)", len(choices))

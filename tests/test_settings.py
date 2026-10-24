@@ -28,17 +28,18 @@ from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import load_labels
 from ibcontroller.logging_setup import configure_logging, stop_logging
 from ibcontroller.settings import (
+    SettingCatalog,
+    SettingChoice,
     SettingEntry,
     SettingsError,
-    SettingsFile,
     _parse_time_ampm,
     apply_declarative_settings,
-    apply_settings_from_file,
+    apply_settings,
     close_settings_dialog,
-    load_builtin_settings_file,
-    load_settings_file,
-    merge_settings_files,
+    load_setting_catalog,
     open_settings_dialog,
+    parse_custom_settings,
+    resolve_settings,
 )
 from tests.fakes import FakeCommandServer, FakeEventServer
 
@@ -91,105 +92,38 @@ def _tracking_responder(calls: list[dict]):
     return responder
 
 
-# --- load_settings_file -------------------------------------------------------
+def _choice(
+    *,
+    tree_path: str,
+    action: str,
+    value: bool | str,
+    name: str = "setting",
+    source: str = "file",
+    **fields: object,
+) -> SettingChoice:
+    entry = SettingEntry(name=name, tree_path=tree_path, action=action, **fields)  # type: ignore[arg-type]
+    return SettingChoice(entry, value, source)
 
 
-async def test_load_settings_file_parses_label_and_label_ref_entries(tmp_path):
-    toml_path = tmp_path / "ibkr_settings.toml"
-    toml_path.write_text(
-        """
-        [[settings]]
-        tree_path = "API/Settings"
-        action = "toggle"
-        label_ref = "read_only_api"
-        value_from_config = "read_only_api"
-
-        [[settings]]
-        tree_path = "API/Precautions"
-        action = "toggle"
-        label = "Bypass Order Precautions for API Orders"
-        value = true
-        """
+_ONE_CHOICE = [
+    SettingChoice(
+        SettingEntry(
+            name="read_only_api",
+            tree_path="API/Settings",
+            action="toggle",
+            label_ref="read_only_api",
+        ),
+        False,
+        "file",
     )
-    settings_file = await load_settings_file(toml_path)
-    assert len(settings_file.settings) == 2
-    assert settings_file.settings[0].label_ref == "read_only_api"
-    assert settings_file.settings[0].value_from_config == "read_only_api"
-    assert settings_file.settings[1].label == "Bypass Order Precautions for API Orders"
-    assert settings_file.settings[1].value is True
+]
 
 
-async def test_load_settings_file_missing_settings_key_is_empty(tmp_path):
-    toml_path = tmp_path / "ibkr_settings.toml"
-    toml_path.write_text("")
-    settings_file = await load_settings_file(toml_path)
-    assert settings_file.settings == []
+def _choices(*, settings: list[SettingChoice]) -> list[SettingChoice]:
+    return settings
 
 
-async def test_load_settings_file_missing_file_raises_settings_error(tmp_path):
-    missing_path = tmp_path / "does_not_exist.toml"
-    with pytest.raises(SettingsError, match="could not read"):
-        await load_settings_file(missing_path)
-
-
-async def test_load_settings_file_malformed_toml_raises_settings_error(tmp_path):
-    toml_path = tmp_path / "ibkr_settings.toml"
-    toml_path.write_text("[[settings]\nthis is not valid toml")
-    with pytest.raises(SettingsError, match="not valid TOML"):
-        await load_settings_file(toml_path)
-
-
-async def test_load_settings_file_invalid_structure_raises_settings_error(tmp_path):
-    toml_path = tmp_path / "ibkr_settings.toml"
-    toml_path.write_text('settings = "not a list of tables"')
-    with pytest.raises(SettingsError, match="invalid structure"):
-        await load_settings_file(toml_path)
-
-
-async def test_load_settings_file_warns_eagerly_on_non_eligible_value_from_config(
-    tmp_path, caplog
-):
-    """A `value_from_config` naming anything outside `_SETTINGS_ELIGIBLE_FIELDS`
-    can never resolve (`Config`'s schema is closed) -- warned at load time, well
-    before any Gateway launch, in addition to the existing apply-time skip."""
-    toml_path = tmp_path / "ibkr_settings.toml"
-    toml_path.write_text(
-        """
-        [[settings]]
-        tree_path = "API/Precautions"
-        action = "toggle"
-        label_ref = "api_precautions_bypass_order_precautions"
-        value_from_config = "api_precautions_bypass_order_precautions"
-        """
-    )
-    with caplog.at_level(logging.WARNING, logger="ibcontroller.settings"):
-        settings_file = await load_settings_file(toml_path)
-    assert len(settings_file.settings) == 1  # still loaded, not dropped
-    assert any(
-        "api_precautions_bypass_order_precautions" in message
-        for message in caplog.messages
-    )
-
-
-async def test_load_settings_file_no_warning_for_eligible_value_from_config(
-    tmp_path, caplog
-):
-    toml_path = tmp_path / "ibkr_settings.toml"
-    toml_path.write_text(
-        """
-        [[settings]]
-        tree_path = "API/Settings"
-        action = "toggle"
-        label_ref = "read_only_api"
-        value_from_config = "read_only_api"
-        """
-    )
-    with caplog.at_level(logging.WARNING, logger="ibcontroller.settings"):
-        await load_settings_file(toml_path)
-    assert caplog.messages == []
-
-
-# --- apply_settings_from_file --------------------------------------------------
+# --- apply_settings -----------------------------------------------------------
 
 
 async def test_apply_settings_resolves_label_ref_and_value_from_config(
@@ -203,18 +137,18 @@ async def test_apply_settings_resolves_label_ref_and_value_from_config(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config(read_only_api=False)
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="API/Settings",
                         action="toggle",
                         label_ref="read_only_api",
-                        value_from_config="read_only_api",
+                        value=False,
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
 
@@ -233,10 +167,10 @@ async def test_apply_settings_resolves_literal_label_and_value(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config()
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="API/Precautions",
                         action="toggle",
                         label="Bypass Order Precautions for API Orders",
@@ -244,7 +178,7 @@ async def test_apply_settings_resolves_literal_label_and_value(
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
 
@@ -256,14 +190,13 @@ async def test_apply_settings_resolves_literal_label_and_value(
     } in calls
 
 
-async def test_apply_settings_logs_each_entry_applied_and_skipped(
+async def test_apply_settings_logs_each_entry_with_value_and_source(
     sock_path, event_sock_path, tmp_path
 ):
-    """`apply_settings_from_file` logs which entries applied and which were
-    skipped (a `None`-resolved `value_from_config`, e.g. `read_only_api` left
-    unset), so a log shows what actually happened. File-based, not `caplog`, matching
-    `test_recognisers.py`'s own pattern -- `configure_logging` disables
-    propagation to the root logger on purpose."""
+    """The log shows which setting was written, with what and where the value
+    came from. File-based, not `caplog`, matching `test_recognisers.py`'s own
+    pattern -- `configure_logging` disables propagation to the root logger on
+    purpose."""
     configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     responder = _tracking_responder([])
     async with (
@@ -272,24 +205,20 @@ async def test_apply_settings_logs_each_entry_applied_and_skipped(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config()  # read_only_api left at its None default
-            settings_file = SettingsFile(
-                settings=[
-                    SettingEntry(
+            await apply_settings(
+                dispatcher,
+                LABELS,
+                [
+                    _choice(
                         tree_path="API/Precautions",
                         action="toggle",
                         label="Bypass Order Precautions for API Orders",
                         value=True,
-                    ),
-                    SettingEntry(
-                        tree_path="API/Settings",
-                        action="toggle",
-                        label_ref="read_only_api",
-                        value_from_config="read_only_api",
-                    ),
-                ]
+                        name="bypass_orders",
+                        source="env",
+                    )
+                ],
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
         finally:
             await dispatcher.stop()
 
@@ -297,11 +226,7 @@ async def test_apply_settings_logs_each_entry_applied_and_skipped(
     # draining it is what guarantees they've been written before we read.
     stop_logging()
     log_text = (tmp_path / "test.log").read_text()
-    assert (
-        "applying API/Precautions (Bypass Order Precautions for API Orders) "
-        "toggle = True" in log_text
-    )
-    assert "skipping API/Settings (read_only_api) -- value resolved to None" in log_text
+    assert "applying bypass_orders = True (env)" in log_text
 
 
 async def test_apply_settings_scopes_every_action_to_the_given_window_id(
@@ -319,10 +244,10 @@ async def test_apply_settings_scopes_every_action_to_the_given_window_id(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config()
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="API/Precautions",
                         action="toggle",
                         label="Bypass Order Precautions for API Orders",
@@ -330,9 +255,7 @@ async def test_apply_settings_scopes_every_action_to_the_given_window_id(
                     )
                 ]
             )
-            await apply_settings_from_file(
-                dispatcher, LABELS, config, settings_file, window_id="w9"
-            )
+            await apply_settings(dispatcher, LABELS, settings_file, window_id="w9")
         finally:
             await dispatcher.stop()
 
@@ -345,35 +268,6 @@ async def test_apply_settings_scopes_every_action_to_the_given_window_id(
     } in calls
 
 
-async def test_apply_settings_skips_entry_when_resolved_value_is_none(
-    sock_path, event_sock_path
-):
-    calls: list[dict] = []
-    responder = _tracking_responder(calls)
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            config = _config(read_only_api=None)  # explicit "leave unchanged"
-            settings_file = SettingsFile(
-                settings=[
-                    SettingEntry(
-                        tree_path="API/Settings",
-                        action="toggle",
-                        label_ref="read_only_api",
-                        value_from_config="read_only_api",
-                    )
-                ]
-            )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
-        finally:
-            await dispatcher.stop()
-
-    assert calls == []
-
-
 async def test_apply_settings_type_text_action(sock_path, event_sock_path):
     calls: list[dict] = []
     responder = _tracking_responder(calls)
@@ -383,10 +277,10 @@ async def test_apply_settings_type_text_action(sock_path, event_sock_path):
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config()
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="Lock and Exit",
                         action="type_text",
                         label="Some Time Field",
@@ -394,7 +288,7 @@ async def test_apply_settings_type_text_action(sock_path, event_sock_path):
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
 
@@ -414,10 +308,10 @@ async def test_apply_settings_type_text_near_label_action(sock_path, event_sock_
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config()
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="Lock and Exit",
                         action="type_text_near_label",
                         label_ref="auto_restart_time_label",
@@ -426,7 +320,7 @@ async def test_apply_settings_type_text_near_label_action(sock_path, event_sock_
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
 
@@ -478,17 +372,17 @@ async def test_apply_settings_auto_restart_time_action(sock_path, event_sock_pat
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config(auto_restart_time="11:59 PM")
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="Lock and Exit",
                         action="auto_restart_time",
-                        value_from_config="auto_restart_time",
+                        value="11:59 PM",
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
 
@@ -531,17 +425,17 @@ async def test_apply_settings_auto_restart_time_falls_back_to_logoff_label(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config(auto_restart_time="08:00 AM")
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="Lock and Exit",
                         action="auto_restart_time",
-                        value_from_config="auto_restart_time",
+                        value="08:00 AM",
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
 
@@ -551,34 +445,6 @@ async def test_apply_settings_auto_restart_time_falls_back_to_logoff_label(
         "index": 0,
         "value": "08:00",
     } in calls
-
-
-async def test_apply_settings_auto_restart_time_none_skips_entry(
-    sock_path, event_sock_path
-):
-    calls: list[dict] = []
-    responder = _tracking_responder(calls)
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            config = _config(auto_restart_time=None)
-            settings_file = SettingsFile(
-                settings=[
-                    SettingEntry(
-                        tree_path="Lock and Exit",
-                        action="auto_restart_time",
-                        value_from_config="auto_restart_time",
-                    )
-                ]
-            )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
-        finally:
-            await dispatcher.stop()
-
-    assert calls == []
 
 
 async def test_apply_settings_auto_restart_time_bad_value_is_logged_and_skipped(
@@ -594,17 +460,17 @@ async def test_apply_settings_auto_restart_time_bad_value_is_logged_and_skipped(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config(auto_restart_time="not a time")
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="Lock and Exit",
                         action="auto_restart_time",
-                        value_from_config="auto_restart_time",
+                        value="not a time",
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
     stop_logging()
@@ -620,17 +486,17 @@ async def test_apply_settings_auto_logoff_time_action(sock_path, event_sock_path
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config(auto_logoff_time="11:59 PM")
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="Lock and Exit",
                         action="auto_logoff_time",
-                        value_from_config="auto_logoff_time",
+                        value="11:59 PM",
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
 
@@ -669,17 +535,17 @@ async def test_apply_settings_auto_logoff_time_falls_back_to_restart_label(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config(auto_logoff_time="08:00 AM")
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="Lock and Exit",
                         action="auto_logoff_time",
-                        value_from_config="auto_logoff_time",
+                        value="08:00 AM",
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
 
@@ -689,34 +555,6 @@ async def test_apply_settings_auto_logoff_time_falls_back_to_restart_label(
         "index": 0,
         "value": "08:00",
     } in calls
-
-
-async def test_apply_settings_auto_logoff_time_none_skips_entry(
-    sock_path, event_sock_path
-):
-    calls: list[dict] = []
-    responder = _tracking_responder(calls)
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            config = _config(auto_logoff_time=None)
-            settings_file = SettingsFile(
-                settings=[
-                    SettingEntry(
-                        tree_path="Lock and Exit",
-                        action="auto_logoff_time",
-                        value_from_config="auto_logoff_time",
-                    )
-                ]
-            )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
-        finally:
-            await dispatcher.stop()
-
-    assert calls == []
 
 
 async def test_apply_settings_auto_logoff_time_bad_value_is_logged_and_skipped(
@@ -729,17 +567,17 @@ async def test_apply_settings_auto_logoff_time_bad_value_is_logged_and_skipped(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config(auto_logoff_time="not a time")
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="Lock and Exit",
                         action="auto_logoff_time",
-                        value_from_config="auto_logoff_time",
+                        value="not a time",
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
     stop_logging()
@@ -761,23 +599,23 @@ async def test_apply_settings_multiple_entries_across_different_tree_paths(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config(read_only_api=False, auto_restart_time="08:00 AM")
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="API/Settings",
                         action="toggle",
                         label_ref="read_only_api",
-                        value_from_config="read_only_api",
+                        value=False,
                     ),
-                    SettingEntry(
+                    _choice(
                         tree_path="Lock and Exit",
                         action="auto_restart_time",
-                        value_from_config="auto_restart_time",
+                        value="08:00 AM",
                     ),
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
 
@@ -797,10 +635,10 @@ async def test_apply_settings_unresolvable_label_ref_is_logged_and_skipped(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config()
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="API/Settings",
                         action="toggle",
                         label_ref="no_such_control",
@@ -808,132 +646,19 @@ async def test_apply_settings_unresolvable_label_ref_is_logged_and_skipped(
                     )
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
     stop_logging()
     assert "no_such_control" in (tmp_path / "test.log").read_text()
 
 
-async def test_apply_settings_unresolvable_value_from_config_is_logged_and_skipped(
-    sock_path, event_sock_path, tmp_path
-):
-    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
-    async with (
-        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            config = _config()
-            settings_file = SettingsFile(
-                settings=[
-                    SettingEntry(
-                        tree_path="API/Settings",
-                        action="toggle",
-                        label_ref="read_only_api",
-                        value_from_config="no_such_field",
-                    )
-                ]
-            )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
-        finally:
-            await dispatcher.stop()
-    stop_logging()
-    assert "no_such_field" in (tmp_path / "test.log").read_text()
-
-
-async def test_apply_settings_value_from_config_cannot_reach_credentials(
-    sock_path, event_sock_path, tmp_path
-):
-    """`_resolve_value`'s allow-list (`_SETTINGS_ELIGIBLE_FIELDS`), not a bare
-    `hasattr` check -- a `value_from_config` naming a real but credential
-    `Config` field (`userid`/`password`, `Secret`-wrapped) is rejected the same
-    way as any other non-eligible field, by design, not by `Secret` merely
-    failing a later `isinstance` check."""
-    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
-    async with (
-        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            config = _config()
-            settings_file = SettingsFile(
-                settings=[
-                    SettingEntry(
-                        tree_path="API/Settings",
-                        action="type_text",
-                        label_ref="read_only_api",
-                        value_from_config="userid",
-                    )
-                ]
-            )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
-        finally:
-            await dispatcher.stop()
-    stop_logging()
-    assert "userid" in (tmp_path / "test.log").read_text()
-
-
-async def test_apply_settings_unsupported_action_is_logged_and_skipped(
-    sock_path, event_sock_path, tmp_path
-):
-    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
-    async with (
-        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            config = _config()
-            settings_file = SettingsFile(
-                settings=[
-                    SettingEntry(
-                        tree_path="API/Settings",
-                        action="click",
-                        label="Reset API order ID sequence",
-                        value=True,
-                    )
-                ]
-            )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
-        finally:
-            await dispatcher.stop()
-    stop_logging()
-    assert "unsupported settings action" in (tmp_path / "test.log").read_text()
-
-
-async def test_apply_settings_entry_needs_label_or_label_ref_is_logged_and_skipped(
-    sock_path, event_sock_path, tmp_path
-):
-    configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
-    async with (
-        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            config = _config()
-            settings_file = SettingsFile(
-                settings=[
-                    SettingEntry(tree_path="API/Settings", action="toggle", value=True)
-                ]
-            )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
-        finally:
-            await dispatcher.stop()
-    stop_logging()
-    assert "label" in (tmp_path / "test.log").read_text()
-
-
 async def test_apply_settings_entry_failure_does_not_block_later_entries(
     sock_path, event_sock_path, tmp_path
 ):
-    """Per-entry isolation: an entry referencing a nonexistent Config field must not
-    abort every entry after it in the same file (see the module docstring).
-    Here the first entry is exactly that shape; the second entry's action
-    must still run."""
+    """Per-entry isolation: an entry naming a missing control must not abort
+    every entry after it. Here the first entry is exactly that shape; the
+    second entry's action must still run."""
     configure_logging(log_dir=tmp_path, filename="test.log", sink="file")
     calls: list[dict] = []
     responder = _tracking_responder(calls)
@@ -943,16 +668,16 @@ async def test_apply_settings_entry_failure_does_not_block_later_entries(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            config = _config()
-            settings_file = SettingsFile(
+            _config()
+            settings_file = _choices(
                 settings=[
-                    SettingEntry(
+                    _choice(
                         tree_path="API/Precautions",
                         action="toggle",
-                        label_ref="api_precautions_bypass_order_precautions",
-                        value_from_config="api_precautions_bypass_order_precautions",
+                        label_ref="no_such_control",
+                        value=True,
                     ),
-                    SettingEntry(
+                    _choice(
                         tree_path="API/Precautions",
                         action="toggle",
                         label="Bypass Bond warning for API Orders.",
@@ -960,14 +685,11 @@ async def test_apply_settings_entry_failure_does_not_block_later_entries(
                     ),
                 ]
             )
-            await apply_settings_from_file(dispatcher, LABELS, config, settings_file)
+            await apply_settings(dispatcher, LABELS, settings_file)
         finally:
             await dispatcher.stop()
     stop_logging()
-    assert (
-        "api_precautions_bypass_order_precautions"
-        in (tmp_path / "test.log").read_text()
-    )
+    assert "no_such_control" in (tmp_path / "test.log").read_text()
     assert {
         "cmd": "set_checkbox",
         "target": "Bypass Bond warning for API Orders.",
@@ -1266,115 +988,7 @@ async def test_close_settings_dialog_scopes_click_when_window_id_given(
     assert {"cmd": "click", "target": "Apply"} not in calls
 
 
-# --- load_builtin_settings_file / merge_settings_files -------------------------
-
-
-async def test_load_builtin_settings_file_has_read_only_api_and_auto_restart_time():
-    """The bundled data/builtin_settings.toml is real, shipped package data --
-    not the same file as ibkr_settings.toml.example (that one intentionally
-    stays inert, see cli.py's ensure_config_scaffold)."""
-    builtin = await load_builtin_settings_file()
-    by_key = {e.value_from_config: e for e in builtin.settings}
-    assert by_key.keys() == {"read_only_api", "auto_restart_time", "auto_logoff_time"}
-    assert by_key["read_only_api"].tree_path == "API/Settings"
-    assert by_key["read_only_api"].label_ref == "read_only_api"
-    assert by_key["auto_restart_time"].tree_path == "Lock and Exit"
-    assert by_key["auto_logoff_time"].tree_path == "Lock and Exit"
-
-
-async def test_load_builtin_settings_file_applies_auto_logoff_before_auto_restart():
-    """Locks in the ordering the shared-radio-group precedence depends on
-    (see builtin_settings.toml's own comment) -- auto_restart_time must win
-    when both fields are set, which requires it to be applied last."""
-    builtin = await load_builtin_settings_file()
-    actions_in_order = [e.action for e in builtin.settings]
-    assert actions_in_order.index("auto_logoff_time") < actions_in_order.index(
-        "auto_restart_time"
-    )
-
-
-def test_merge_settings_files_returns_builtins_only_when_no_user_file():
-    builtin = SettingsFile(
-        settings=[
-            SettingEntry(
-                tree_path="API/Settings",
-                action="toggle",
-                label_ref="read_only_api",
-                value_from_config="read_only_api",
-            )
-        ]
-    )
-    merged = merge_settings_files(builtin, None)
-    assert merged == builtin.settings
-
-
-def test_merge_settings_files_is_additive_for_non_overlapping_entries():
-    builtin = SettingsFile(
-        settings=[
-            SettingEntry(
-                tree_path="API/Settings",
-                action="toggle",
-                label_ref="read_only_api",
-                value_from_config="read_only_api",
-            )
-        ]
-    )
-    user_entry = SettingEntry(
-        tree_path="API/Precautions",
-        action="toggle",
-        label_ref="api_precautions_bypass_bond_warning",
-        value=True,
-    )
-    user = SettingsFile(settings=[user_entry])
-
-    merged = merge_settings_files(builtin, user)
-
-    assert merged == [builtin.settings[0], user_entry]
-
-
-def test_merge_settings_files_user_entry_replaces_builtin_with_same_value_from_config():
-    """The real case this exists for: a future TWS/Gateway release moves
-    read_only_api's control to a different tree_path/label -- a user's own
-    entry, sharing the same value_from_config, replaces the built-in one
-    rather than both firing."""
-    builtin_entry = SettingEntry(
-        tree_path="API/Settings",
-        action="toggle",
-        label_ref="read_only_api",
-        value_from_config="read_only_api",
-    )
-    override_entry = SettingEntry(
-        tree_path="API/Settings/Read-Only",
-        action="toggle",
-        label="Read-Only API Access",
-        value_from_config="read_only_api",
-    )
-    builtin = SettingsFile(settings=[builtin_entry])
-    user = SettingsFile(settings=[override_entry])
-
-    merged = merge_settings_files(builtin, user)
-
-    assert merged == [override_entry]
-    assert builtin_entry not in merged
-
-
-def test_merge_settings_files_preserves_builtin_then_user_order():
-    builtin_a = SettingEntry(
-        tree_path="A", action="toggle", label="a", value_from_config="a"
-    )
-    builtin_b = SettingEntry(
-        tree_path="B", action="toggle", label="b", value_from_config="b"
-    )
-    override_a = SettingEntry(
-        tree_path="A2", action="toggle", label="a2", value_from_config="a"
-    )
-    user_extra = SettingEntry(tree_path="C", action="toggle", label="c", value=True)
-    builtin = SettingsFile(settings=[builtin_a, builtin_b])
-    user = SettingsFile(settings=[override_a, user_extra])
-
-    merged = merge_settings_files(builtin, user)
-
-    assert merged == [override_a, builtin_b, user_extra]
+# --- apply_declarative_settings ------------------------------------------------
 
 
 def _tracking_responder(calls: list[dict]):
@@ -1389,13 +1003,9 @@ def _tracking_responder(calls: list[dict]):
     return responder
 
 
-async def test_apply_declarative_settings_applies_builtin_with_no_settings_file(
-    sock_path, event_sock_path
-):
-    """The real gap this fix closes: `read_only_api` set in `ibcontroller.toml`
-    alone, with `Config.settings_file` left at its `None` default, used to be a
-    silent no-op -- nothing ever opened the Configuration dialog. Now the
-    built-in entry applies from `Config` alone."""
+async def test_apply_declarative_settings_applies_a_choice(sock_path, event_sock_path):
+    """A choice alone, with no file of its own, opens the Configuration dialog,
+    writes the value and clicks "OK"."""
     calls: list[dict] = []
     responder = _tracking_responder(calls)
     async with (
@@ -1407,7 +1017,7 @@ async def test_apply_declarative_settings_applies_builtin_with_no_settings_file(
         )
         await dispatcher.start()
         session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
-        config = _config(settings_file=None, read_only_api=False)
+        config = _config()
         try:
             task = asyncio.ensure_future(
                 apply_declarative_settings(
@@ -1415,6 +1025,7 @@ async def test_apply_declarative_settings_applies_builtin_with_no_settings_file(
                     LABELS,
                     config,
                     session,  # type: ignore[arg-type]
+                    _ONE_CHOICE,
                 )
             )
             await asyncio.sleep(0.02)
@@ -1442,74 +1053,14 @@ async def test_apply_declarative_settings_applies_builtin_with_no_settings_file(
     } in calls
 
 
-async def test_apply_declarative_settings_applies_builtin_when_user_file_missing(
-    sock_path, event_sock_path, caplog
-):
-    """A `Config.settings_file` that fails to load (missing
-    here) used to abort the whole function before `open_settings_dialog` ever
-    ran, silently skipping the built-in `read_only_api` entry too. Now the
-    load failure is isolated and the built-in entry still applies."""
-    calls: list[dict] = []
-    responder = _tracking_responder(calls)
-    async with (
-        FakeCommandServer(sock_path, responder),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = Dispatcher(
-            AgentCommandConnection(sock_path), AgentEventConnection(event_sock_path)
-        )
-        await dispatcher.start()
-        session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
-        config = _config(
-            settings_file="/nonexistent/ibkr_settings.toml", read_only_api=False
-        )
-        try:
-            with caplog.at_level(logging.ERROR, logger="ibcontroller.settings"):
-                task = asyncio.ensure_future(
-                    apply_declarative_settings(
-                        dispatcher,
-                        LABELS,
-                        config,
-                        session,  # type: ignore[arg-type]
-                    )
-                )
-                await asyncio.sleep(0.02)
-                dispatcher._window_events.emit(
-                    WindowEvent(
-                        seq=1,
-                        kind="window_opened",
-                        window=WindowInfo(
-                            class_="feature.configure.ai",
-                            title="DU123 Trader Workstation Configuration "
-                            "(Simulated Trading)",
-                            window_id="w9",
-                        ),
-                    )
-                )
-                await asyncio.wait_for(task, timeout=5.0)
-        finally:
-            await dispatcher.stop()
-
-    assert {
-        "cmd": "set_checkbox",
-        "target": "Read-Only API",
-        "checked": False,
-        "window_id": "w9",
-    } in calls
-    assert any(
-        "could not load" in message and "nonexistent" in message
-        for message in caplog.messages
-    )
-
-
 async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
     sock_path, event_sock_path, monkeypatch
 ):
     """A `finally` around
-    `apply_settings_from_file` now guarantees `close_settings_dialog` runs even
+    `apply_settings` now guarantees `close_settings_dialog` runs even
     when applying entries fails outright -- before this fix, the Configuration
     dialog was left open on the live Gateway for good. Forces an exception past
-    `apply_settings_from_file`'s own per-entry isolation (which only catches
+    `apply_settings`'s own per-entry isolation (which only catches
     `SettingsError`/`ElementNotFoundError`) to exercise the guaranteed-close
     path specifically, not the per-entry-skip path already covered in
     `test_settings.py`."""
@@ -1519,7 +1070,7 @@ async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
     async def _raise(*_args, **_kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(settings, "apply_settings_from_file", _raise)
+    monkeypatch.setattr(settings, "apply_settings", _raise)
 
     async with (
         FakeCommandServer(sock_path, responder),
@@ -1530,7 +1081,7 @@ async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
         )
         await dispatcher.start()
         session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
-        config = _config(settings_file=None, read_only_api=False)
+        config = _config()
         try:
             task = asyncio.ensure_future(
                 apply_declarative_settings(
@@ -1538,6 +1089,7 @@ async def test_apply_declarative_settings_closes_dialog_even_when_apply_raises(
                     LABELS,
                     config,
                     session,  # type: ignore[arg-type]
+                    _ONE_CHOICE,
                 )
             )
             await asyncio.sleep(0.02)
@@ -1583,20 +1135,17 @@ async def test_apply_declarative_settings_passes_second_factor_timeout(
         return None
 
     monkeypatch.setattr(settings, "open_settings_dialog", _fake_open_settings_dialog)
-    monkeypatch.setattr(settings, "apply_settings_from_file", _noop)
+    monkeypatch.setattr(settings, "apply_settings", _noop)
     monkeypatch.setattr(settings, "close_settings_dialog", _noop)
 
     session = types.SimpleNamespace(main_window_id="w5", is_logged_in=lambda: False)
-    config = _config(
-        settings_file=None,
-        read_only_api=False,
-        mfa_timeout=42.0,
-    )
+    config = _config(mfa_timeout=42.0)
     await apply_declarative_settings(
         None,  # type: ignore[arg-type]
         LABELS,
         config,
         session,  # type: ignore[arg-type]
+        _ONE_CHOICE,
     )
 
     assert captured["timeout"] == 42.0
@@ -1620,15 +1169,16 @@ async def test_apply_declarative_settings_runs_after_apply_before_close(monkeypa
         order.append(f"after:{window_id}")
 
     monkeypatch.setattr(settings, "open_settings_dialog", _open)
-    monkeypatch.setattr(settings, "apply_settings_from_file", _apply)
+    monkeypatch.setattr(settings, "apply_settings", _apply)
     monkeypatch.setattr(settings, "close_settings_dialog", _close)
 
     session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
     await apply_declarative_settings(
         None,  # type: ignore[arg-type]
         LABELS,
-        _config(settings_file=None, read_only_api=False),
+        _config(),
         session,  # type: ignore[arg-type]
+        [],
         after_apply=_after,
     )
 
@@ -1650,15 +1200,15 @@ def _patch_dialog_steps(monkeypatch) -> list[str]:
         order.append("close")
 
     monkeypatch.setattr(settings, "open_settings_dialog", _open)
-    monkeypatch.setattr(settings, "apply_settings_from_file", _apply)
+    monkeypatch.setattr(settings, "apply_settings", _apply)
     monkeypatch.setattr(settings, "close_settings_dialog", _close)
     return order
 
 
-async def test_apply_declarative_settings_skips_dialog_when_no_value_resolves(
+async def test_apply_declarative_settings_skips_dialog_when_no_choices(
     monkeypatch, caplog
 ):
-    """With every entry resolving to `None` the dialog is never opened."""
+    """With no choices the dialog is never opened."""
     order = _patch_dialog_steps(monkeypatch)
     session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
 
@@ -1666,8 +1216,9 @@ async def test_apply_declarative_settings_skips_dialog_when_no_value_resolves(
         await apply_declarative_settings(
             None,  # type: ignore[arg-type]
             LABELS,
-            _config(settings_file=None),
+            _config(),
             session,  # type: ignore[arg-type]
+            [],
         )
 
     assert order == []
@@ -1687,37 +1238,20 @@ async def test_apply_declarative_settings_opens_dialog_for_after_apply_hook(
     await apply_declarative_settings(
         None,  # type: ignore[arg-type]
         LABELS,
-        _config(settings_file=None),
+        _config(),
         session,  # type: ignore[arg-type]
+        [],
         after_apply=_after,
     )
 
     assert order == ["open", "apply", "after", "close"]
 
 
-def test_any_value_to_apply_counts_an_unresolvable_entry():
-    """An entry naming an unknown config field still reaches the per-entry
-    error handling."""
-    bad = SettingEntry(
-        tree_path="API/Settings",
-        action="toggle",
-        label="X",
-        value_from_config="no_such_field",
-    )
-
-    assert settings._any_value_to_apply([bad], _config()) is True
-    assert settings._any_value_to_apply([], _config()) is False
-
-
-def _two_toggle_entries() -> SettingsFile:
-    return SettingsFile(
+def _two_toggle_entries() -> list[SettingChoice]:
+    return _choices(
         settings=[
-            SettingEntry(
-                tree_path="API/Settings", action="toggle", label="A", value=True
-            ),
-            SettingEntry(
-                tree_path="API/Settings", action="toggle", label="B", value=True
-            ),
+            _choice(tree_path="API/Settings", action="toggle", label="A", value=True),
+            _choice(tree_path="API/Settings", action="toggle", label="B", value=True),
         ]
     )
 
@@ -1739,10 +1273,9 @@ async def test_apply_settings_agent_error_on_one_entry_skips_only_that_entry(
     monkeypatch.setattr(settings, "toggle", _toggle)
     monkeypatch.setattr(settings, "expand_tree", _noop)
 
-    await apply_settings_from_file(
+    await apply_settings(
         None,  # type: ignore[arg-type]
         LABELS,
-        _config(),
         _two_toggle_entries(),
     )
 
@@ -1764,10 +1297,9 @@ async def test_apply_settings_window_gone_ends_the_loop(monkeypatch):
     monkeypatch.setattr(settings, "expand_tree", _noop)
 
     with pytest.raises(WindowGoneError):
-        await apply_settings_from_file(
+        await apply_settings(
             None,  # type: ignore[arg-type]
             LABELS,
-            _config(),
             _two_toggle_entries(),
         )
 
@@ -1785,15 +1317,194 @@ async def test_apply_declarative_settings_skips_ok_when_dialog_or_agent_gone(
     async def _apply(*_args, **_kwargs):
         raise error
 
-    monkeypatch.setattr(settings, "apply_settings_from_file", _apply)
+    monkeypatch.setattr(settings, "apply_settings", _apply)
     session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
 
     with pytest.raises(type(error)):
         await apply_declarative_settings(
             None,  # type: ignore[arg-type]
             LABELS,
-            _config(settings_file=None, read_only_api=False),
+            _config(),
             session,  # type: ignore[arg-type]
+            _ONE_CHOICE,
         )
 
     assert order == ["open"]
+
+
+# --- entries, catalog and values ----------------------------------------------
+
+
+def _toggle(name="read_only_api", **kw) -> dict:
+    return {
+        "name": name,
+        "tree_path": "API/Settings",
+        "action": "toggle",
+        "label": "Read-Only API",
+        **kw,
+    }
+
+
+@pytest.mark.parametrize(
+    ("fields", "match"),
+    [
+        ({"action": "press"}, "unknown action 'press'"),
+        ({"label": None}, "exactly one of 'label'/'label_ref'"),
+        ({"label_ref": "read_only_api"}, "exactly one of 'label'/'label_ref'"),
+        (
+            {"action": "auto_restart_time"},
+            "takes no 'label' or 'label_ref'",
+        ),
+    ],
+)
+def test_setting_entry_rejects_a_malformed_shape(fields, match):
+    """A bad entry fails at construction, so it is a startup error and not a
+    skipped entry at apply time."""
+    with pytest.raises(SettingsError, match=match):
+        SettingEntry(**{**_toggle(), **fields})
+
+
+def test_time_entry_needs_no_label():
+    entry = SettingEntry(
+        name="auto_restart_time", tree_path="Lock and Exit", action="auto_restart_time"
+    )
+    assert entry.label is None
+
+
+def test_parse_custom_settings_builds_entries():
+    entries = parse_custom_settings(
+        [_toggle(), _toggle("lots", label="Lots", field_index=1)],
+        source="ibcontroller.toml",
+    )
+    assert [e.name for e in entries] == ["read_only_api", "lots"]
+    assert entries[1].field_index == 1
+
+
+@pytest.mark.parametrize(
+    ("raw", "match"),
+    [
+        ([{**_toggle(), "colour": "red"}], "unknown key 'colour'"),
+        ([{**_toggle(), "label": 3}], "expected a string"),
+        ([_toggle(), _toggle()], "duplicate setting name 'read_only_api'"),
+        ([_toggle(action="press")], "unknown action"),
+    ],
+)
+def test_parse_custom_settings_errors_name_the_source(raw, match):
+    with pytest.raises(SettingsError, match=match) as info:
+        parse_custom_settings(raw, source="ibcontroller.toml")
+    assert "ibcontroller.toml" in str(info.value)
+
+
+def test_bundled_catalog_lists_the_settings_in_apply_order():
+    """`auto_logoff_time` is written before `auto_restart_time`: both write the
+    same radio pair and the last one applied wins, as IBC specifies."""
+    names = [e.name for e in load_setting_catalog().setting]
+    assert names.index("auto_logoff_time") < names.index("auto_restart_time")
+    assert "read_only_api" in names
+
+
+def test_bundled_catalog_label_refs_exist_in_labels():
+    for entry in load_setting_catalog().setting:
+        if entry.label_ref is not None:
+            assert entry.label_ref in LABELS.settings.controls, entry.name
+
+
+def _catalog() -> SettingCatalog:
+    return load_setting_catalog()
+
+
+def _resolve(ibkr, sources=None, custom=()):
+    return resolve_settings(_catalog(), custom, ibkr, sources or {})
+
+
+def test_resolve_settings_leaves_out_entries_without_a_value():
+    assert _resolve({}) == []
+    assert _resolve({"blind_trading": True}) == [], "dialog names are not ours"
+
+
+def test_resolve_settings_keeps_catalog_order_then_custom():
+    custom = parse_custom_settings([_toggle("zzz", label="Z")], source="x")
+    choices = _resolve(
+        {
+            "zzz": True,
+            "read_only_api": True,
+            "auto_restart_time": "08:00 AM",
+            "auto_logoff_time": "09:00 PM",
+        },
+        custom=custom,
+    )
+    assert [c.entry.name for c in choices] == [
+        "auto_logoff_time",
+        "auto_restart_time",
+        "read_only_api",
+        "zzz",
+    ]
+
+
+def test_resolve_settings_records_the_source():
+    choices = _resolve({"read_only_api": False}, {"read_only_api": "env"})
+    (choice,) = choices
+    assert (choice.value, choice.source) == (False, "env")
+    assert _resolve({"read_only_api": False})[0].source == "file"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("true", True), ("YES", True), ("False", False), (" no ", False)],
+)
+def test_resolve_settings_env_toggle_words_are_booleans(raw, expected):
+    (choice,) = _resolve({"read_only_api": raw}, {"read_only_api": "env"})
+    assert choice.value is expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "source"),
+    [("true", "file"), ("maybe", "env"), (1, "file"), (None, "file")],
+)
+def test_resolve_settings_toggle_rejects_a_non_boolean(raw, source):
+    """A string from the file is not a boolean (only the environment spells it)."""
+    with pytest.raises(SettingsError, match="read_only_api") as info:
+        _resolve({"read_only_api": raw}, {"read_only_api": source})
+    assert source in str(info.value)
+
+
+def test_resolve_settings_time_is_checked_at_startup():
+    (choice,) = _resolve({"auto_restart_time": "11:45 PM"})
+    assert choice.value == "11:45 PM"
+    with pytest.raises(SettingsError, match="auto_restart_time") as info:
+        _resolve({"auto_restart_time": "23:45"})
+    assert "hh:mm AM or hh:mm PM" in str(info.value)
+    with pytest.raises(SettingsError, match="expected a time string"):
+        _resolve({"auto_logoff_time": 2345})
+
+
+def _text_entry():
+    return parse_custom_settings(
+        [
+            {
+                "name": "port",
+                "tree_path": "API/Settings",
+                "action": "type_text",
+                "label": "Socket port",
+            }
+        ],
+        source="x",
+    )
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("4002", "4002"), (4002, "4002")])
+def test_resolve_settings_text_takes_a_string_or_a_number(raw, expected):
+    (choice,) = _resolve({"port": raw}, custom=_text_entry())
+    assert choice.value == expected
+
+
+@pytest.mark.parametrize("raw", [True, 1.5, ["4002"]])
+def test_resolve_settings_text_rejects_other_types(raw):
+    with pytest.raises(SettingsError, match="port"):
+        _resolve({"port": raw}, custom=_text_entry())
+
+
+def test_resolve_settings_rejects_a_custom_name_of_a_catalog_entry():
+    custom = parse_custom_settings([_toggle()], source="x")
+    with pytest.raises(SettingsError, match="read_only_api"):
+        _resolve({}, custom=custom)

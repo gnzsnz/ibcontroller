@@ -41,10 +41,10 @@ def test_toml_values_are_actually_applied(monkeypatch, tmp_path):
     """`TomlFormat("")` used to look up settings[""] instead of the top-level dict,
     silently discarding the whole file."""
     _set_credentials(monkeypatch)
-    toml_path = _write_ibc(tmp_path, 'trading_mode = "live"\nread_only_api = true\n')
+    toml_path = _write_ibc(tmp_path, 'trading_mode = "live"\nrestart_cap = 7\n')
     config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
     assert config.trading_mode is TradingMode.LIVE
-    assert config.read_only_api is True
+    assert config.restart_cap == 7
 
 
 def test_env_var_overrides_toml_value(monkeypatch, tmp_path):
@@ -68,9 +68,9 @@ def test_log_dir_tilde_is_expanded(monkeypatch, tmp_path):
     assert config.log_dir == str(Path("~/some/sub/dir").expanduser())
 
 
-@pytest.mark.parametrize("field", ["tws_path", "tws_settings_path", "settings_file"])
+@pytest.mark.parametrize("field", ["tws_path", "tws_settings_path"])
 def test_optional_path_fields_tilde_is_expanded(monkeypatch, tmp_path, field):
-    """`tws_path`/`tws_settings_path`/`settings_file` share `log_dir`'s converter --
+    """`tws_path`/`tws_settings_path` share `log_dir`'s converter --
     a literal `~` must be expanded here too, not left for a consumption site to
     forget."""
     _set_credentials(monkeypatch)
@@ -90,7 +90,6 @@ def test_optional_path_fields_default_none_is_preserved(monkeypatch, tmp_path):
     config = load_config(config_dir=tmp_path, log_dir=tmp_path)
     assert config.tws_path is None
     assert config.tws_settings_path is None
-    assert config.settings_file is None
 
 
 def test_missing_credentials_raise_config_error(monkeypatch, tmp_path):
@@ -275,9 +274,9 @@ def test_empty_env_var_optional_field_falls_back_to_none(monkeypatch, tmp_path):
     """`IBC_XYZ=` must be treated as absent, matching IBC's own
     getString(key, "").equals("") convention -- not fed through as a real value."""
     _set_credentials(monkeypatch)
-    monkeypatch.setenv("IBC_AUTO_LOGOFF_TIME", "")
+    monkeypatch.setenv("IBC_TWS_PATH", "")
     config = load_config(config_dir=tmp_path, log_dir=tmp_path)
-    assert config.auto_logoff_time is None
+    assert config.tws_path is None
 
 
 def test_empty_env_var_non_optional_field_falls_back_to_default(monkeypatch, tmp_path):
@@ -413,11 +412,11 @@ def test_declarative_input_reads_raw_sections(tmp_path):
     result = _declarative(
         tmp_path,
         '[ibcontroller]\nprogram = "tws"\n'
-        "[ibkr]\nblind_trading = true\nauto_restart_time = '23:45'\n"
+        "[ibkr]\nblind_trading = true\nauto_restart_time = '11:45 PM'\n"
         '[[setting]]\nname = "a"\n[[setting]]\nname = "b"\n'
         '[[dialog]]\nname = "d"\n[dialog.modes]\non = []\n',
     )
-    assert dict(result.ibkr) == {"blind_trading": True, "auto_restart_time": "23:45"}
+    assert dict(result.ibkr) == {"blind_trading": True, "auto_restart_time": "11:45 PM"}
     assert dict(result.ibkr_sources) == {
         "blind_trading": "file",
         "auto_restart_time": "file",

@@ -37,7 +37,9 @@ dialog's name, for example `blind_trading = "on"` or `IBKR_BLIND_TRADING=on`.
   before catalog entries, and cannot reuse a catalog name.
 - Login outcome and exit progress windows are always handled first and cannot be
   overridden.
-- `[ibkr]` keys that name no dialog are not read yet. They are for settings.
+- `[ibkr]` keys that name no dialog are read by the settings (below). A key that names
+  neither a setting nor a dialog is logged as a warning and ignored; a name shared by a
+  setting and a dialog stops startup.
 
 Precedence, highest first:
 
@@ -75,7 +77,6 @@ Settings that drive the behaviour of `ibcontroller` itself.
 | `tws_channel` | `IBC_TWS_CHANNEL` | `"stable"`/`"latest"`; narrows auto-detection to installs carrying this update channel. Ignored when `tws_version` is set explicitly | `"stable"` |
 | `tws_path` | `IBC_TWS_PATH` | Override the install-path inference | `None` |
 | `tws_settings_path` | `IBC_TWS_SETTINGS_PATH` | Where TWS/Gateway stores its own settings (not the install dir); per instance | `None` (per-instance default) |
-| `settings_file` | `IBC_SETTINGS_FILE` | Extra declarative settings file, merged on top of the built-in settings -- see "Declarative configuration" below | `None` |
 | (rejected) | `IBC_USERID` | Login user id; environment-variable-only, never from the config file. Also accepts `IBC_USERID_FILE` | (required) |
 | (rejected) | `IBC_PASSWORD` | Login password; environment-variable-only, never from the config file. Also accepts `IBC_PASSWORD_FILE` | (required) |
 | `trace_enabled` | `IBC_TRACE_ENABLED` | Verbose raw wire trace (`cmd-{instance}.jsonl` / `events-{instance}.jsonl` next to the log file) | `false` |
@@ -95,11 +96,8 @@ Settings related to TWS/ibgateway.
 | --- | --- | --- | --- |
 | `trading_mode` | `IBC_TRADING_MODE` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
 | `read_only_login` | `IBC_READ_ONLY_LOGIN` | TWS only (Gateway logs a warning and logs in normally). Clicks "Enter Read Only" on the 2FA frame instead of waiting for the push; no effect without 2FA (paper) | `false` |
-| `read_only_api` | `IBC_READ_ONLY_API` | `true`/`false` sets it; omit to leave the existing setting unchanged. Applied automatically -- see "Declarative configuration" | `None` (unchanged) |
 | `accept_incoming_connections` | `IBC_ACCEPT_INCOMING_CONNECTIONS` | How to handle incoming API connection dialogs -- see below | `"manual"` |
 | `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | What to do when an existing session is detected -- see below | `"manual"` |
-| `auto_restart_time` | `IBC_AUTO_RESTART_TIME` | Daily auto-restart time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
-| `auto_logoff_time` | `IBC_AUTO_LOGOFF_TIME` | Daily auto-logoff time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
 | `time_zone` | `IBC_TIME_ZONE` | IANA zone name, e.g. `"Europe/Zurich"`, written to `jts.ini`'s `TimeZone` -- see below | auto-detected |
 
 ### Accept Incoming Connection
@@ -176,26 +174,6 @@ Notes:
   after this session chose to continue, which `secondary` and `primaryoverride`
   never do. ibcontroller exits with code `76` without relaunching.
 
-### Auto Restart Time
-
-**key:** `auto_restart_time`
-**Environment variable:** `IBC_AUTO_RESTART_TIME`
-
-`"hh:mm AM/PM"` (e.g. `"08:00 AM"`). Sets TWS/Gateway's own daily "Auto restart"
-time under Lock and Exit. Omit this key (the default) to leave the existing
-setting unchanged. Shares one radio-button pair with Auto Logoff Time below --
-if both are set, this one wins (applied last).
-
-### Auto Logoff Time
-
-**key:** `auto_logoff_time`
-**Environment variable:** `IBC_AUTO_LOGOFF_TIME`
-
-Same `"hh:mm AM/PM"` format and the same Lock and Exit control as Auto Restart
-Time above, just selecting "Auto logoff" instead of "Auto restart". Omit this
-key (the default) to leave the existing setting unchanged. If both keys are
-set, Auto Restart Time wins -- set only one of the two in practice.
-
 ### Time Zone
 
 **key:** `time_zone`
@@ -217,8 +195,8 @@ nothing resolves.
 **Environment variable:** `IBC_COLD_RESTART_TIME`
 
 TWS and Gateway alike (ported from IBC's `IbcTws.java`, the shared base class
-both programs use). `"HH:MM"`, 24-hour, local system time. Unlike the settings
-above, this is not a Global Configuration GUI setting -- it's a self-scheduled
+both programs use). `"HH:MM"`, 24-hour, local system time. Unlike the `[ibkr]`
+settings, this is not a Global Configuration GUI setting -- it's a self-scheduled
 action. Every Sunday at this time, ibcontroller closes the instance tidily and
 relaunches it with a full fresh login (no restart hash, deliberately not a
 silent relogin, and via ibcontroller's own `launch_instance`, not IBC's
@@ -285,31 +263,43 @@ recognises and answers. Each has its own section below.
 
 ### Settings
 
-`read_only_api` and `auto_restart_time` (and `auto_logoff_time`) are applied to
-TWS/Gateway through built-in declarative settings entries loaded automatically
-at startup (see `data/builtin_settings.toml` and `ibkr_settings.toml.example`).
-`settings_file` points at an extra declarative file layered on top of the
-built-in entries -- the built-ins fire first, then the extra file's entries
-override them. The built-ins only act when their own config key is set:
-`read_only_api` applies when it's `true`/`false` and is skipped when `None`;
-`auto_restart_time`/`auto_logoff_time` apply only when a value is set.
+A setting is an entry of the bundled catalog (`data/catalog.toml`) with a name, the
+`tree_path` of its Global Configuration section, an `action` and the control's label. The
+entry carries no value: `[ibkr]` gives it one by name (`read_only_api = true`, or
+`IBKR_READ_ONLY_API=true` in the environment, which wins over the file). A setting with no
+value is left as it is in Gateway/TWS (leave-unchanged, as IBC's empty value).
 
-Other Global Configuration settings go in your own file. `ibkr_settings.toml.example`
-carries worked entries, including commented ones for the API socket port
-(`socket_port`), the master API client ID (`master_api_client_id`) and
-`send_market_data_in_lots_us_stocks`, all on the `API/Settings` panel. The port and
-client ID are text fields found by their label (`type_text_near_label`), so their
-`value` is a string.
+| Name | Value | Notes |
+| --- | --- | --- |
+| `auto_logoff_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily logoff, under Lock and Exit. |
+| `auto_restart_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily restart, under Lock and Exit. Shares one radio pair with `auto_logoff_time`: if both have a value, `auto_restart_time` wins (applied last, as IBC specifies). |
+| `read_only_api` | `true`/`false` | API/Settings "Read-Only API". |
 
-When no entry resolves to a value (the default configuration), the Global Configuration
-dialog is not opened. If one entry fails (a missing control, an agent error), the others are
-still applied and "OK" commits them. If the dialog closes under the program, the step ends
-without clicking "OK".
+- Values are checked at startup; a wrong one stops the run (exit 78) with an error naming
+  the setting. A `toggle` takes a boolean (in the environment `true`, `false`, `yes`, `no`
+  in any case); a time takes `"hh:mm AM/PM"` with one space; a text setting takes a string or
+  a number.
+- Settings are applied in catalog order, after login, in one Global Configuration session.
+  Each applied setting is logged with its value and source (`file` or `env`).
+- `[[setting]]` adds a setting the catalog lacks: `name`, `tree_path`, `action` (`toggle`,
+  `type_text`, `type_text_near_label`) and the control by `label` (literal) or `label_ref` (a
+  name in `labels.json`'s `settings.controls`). `type_text_near_label` also takes
+  `field_index` (0-based field below the label) for a field with no label of its own. The
+  entry's value comes from `[ibkr]` like any other. A custom name cannot reuse a catalog name.
+- **Moved:** `read_only_api`, `auto_restart_time` and `auto_logoff_time` are no longer
+  `[ibcontroller]` keys, and `IBC_READ_ONLY_API`, `IBC_AUTO_RESTART_TIME` and
+  `IBC_AUTO_LOGOFF_TIME` are no longer read (ignored silently). `settings_file`,
+  `IBC_SETTINGS_FILE` and `ibkr_settings.toml` are gone.
+
+When no setting has a value (the default configuration), the Global Configuration dialog is
+not opened. If one entry fails (a missing control, an agent error), the others are still
+applied and "OK" commits them. If the dialog closes under the program, the step ends without
+clicking "OK".
 
 Only the TWS Mosaic layout is supported: the dialog is opened with
 `File > Global Configuration...`. On the TWS Classic layout that menu item does not exist, no
-setting is applied (including `read_only_api`), and the attempt waits for `mfa_timeout`
-(default 180s) before giving up and logging the failure. Gateway is not affected.
+setting is applied, and the attempt waits for `mfa_timeout` (default 180s) before giving up
+and logging the failure. Gateway is not affected.
 
 ### Dialogs
 

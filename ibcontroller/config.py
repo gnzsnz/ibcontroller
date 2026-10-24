@@ -45,6 +45,9 @@ from ibcontroller.errors import IBControllerError
 
 ENV_PREFIX = "IBC_"
 IBKR_ENV_PREFIX = "IBKR_"
+# Words an environment variable may use for a boolean, compared in lower case.
+ENV_TRUE = frozenset({"true", "yes"})
+ENV_FALSE = frozenset({"false", "no"})
 _CONFIG_TABLE = "ibcontroller"
 _IBKR_TABLE = "ibkr"
 _ARRAY_TABLES = ("setting", "dialog")
@@ -338,12 +341,6 @@ class Config:
     IBController's own config file, `ibcontroller.toml`.
     """
 
-    # The IBKR settings file to load (if any) -- see `ibkr_settings.toml.example`.
-    # Defaults to `None` (inert) until a user points `[settings] file` at a renamed
-    # copy of the example file. See module docstring for why this is deliberate.
-    settings_file: str | None = ts.option(
-        default=None, converter=_optional_path_converter
-    )
     # instance default: f"{program}-{trading_mode.value}".
     instance: str = "{program}-{trading_mode}"
     program: Program = Program.GATEWAY
@@ -366,7 +363,6 @@ class Config:
     trading_mode: TradingMode = TradingMode.PAPER
     # IBC: ReadOnlyLogin -- TWS only, clicks "Enter Read Only" on the 2FA frame.
     read_only_login: bool = False
-    read_only_api: bool | None = None  # None = leave the existing setting unchanged
     accept_incoming_connections: AcceptIncomingConnections = (
         AcceptIncomingConnections.MANUAL
     )
@@ -397,13 +393,6 @@ class Config:
     # transient login failure, logout, a crash during login); the loop then stops
     # with RestartCapExceededError. A lap that reaches READY resets the count.
     restart_cap: int = 3
-
-    # AutoRestartTime "hh:mm AM/PM" format (e.g. "08:00 AM")
-    auto_restart_time: str | None = None  # None = leave the existing setting unchanged
-    # AutoLogoffTime "hh:mm AM/PM" format (e.g. "08:00 AM"); shares one Lock and
-    # Exit radio-button pair with auto_restart_time -- if both are set, the latter
-    # wins (applied last, matching builtin_settings.toml's order and IBC itself).
-    auto_logoff_time: str | None = None  # None = leave the existing setting unchanged
 
     # Self-scheduled shutdown actions (applies to TWS and Gateway alike), consumed
     # by schedule.py/control_loop.py -- not GUI settings written to TWS/Gateway.

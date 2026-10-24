@@ -3,13 +3,11 @@ need beyond argument parsing, which is deliberately kept there (this module has 
 `typer` dependency, so it stays directly testable/runnable without going through a CLI
 invocation -- `python -m ibcontroller.main` still works).
 
-**Config-dir scaffolding (`ensure_config_scaffold`)** Three bundled
+**Config-dir scaffolding (`ensure_config_scaffold`)** Two bundled
 templates ship under `ibcontroller/data/` (`ibcontroller.toml.example`,
-`ibkr_settings.toml.example`, `labels.json.example`) and get copied into `config_dir`
-the first time each is missing -- but only `ibcontroller.toml` is copied under its
-*real* filename. The other two keep their `.example` suffix: `Config.settings_file`
-defaults to `None` (inert until a user points `[settings] file` at a renamed copy) and,
-more importantly, `labels.load_labels(config_dir=...)` applies `{config_dir}/
+`labels.json.example`) and get copied into `config_dir` the first time each is
+missing -- but only `ibcontroller.toml` is copied under its *real* filename. The other
+keeps its `.example` suffix: `labels.load_labels(config_dir=...)` applies `{config_dir}/
 labels.json` *unconditionally* the moment that exact filename exists -- auto-creating
 it live would be exactly the silent behavior change. A user must deliberately rename it
 to opt in.
@@ -37,6 +35,7 @@ import anyio.to_thread
 
 from ibcontroller.app_dirs import resolve_app_dirs
 from ibcontroller.config import (
+    ConfigError,
     DeclarativeInput,
     load_config,
     load_declarative_input,
@@ -51,26 +50,53 @@ from ibcontroller.dialogs import (
 )
 from ibcontroller.labels import load_labels
 from ibcontroller.launcher import LauncherError
+from ibcontroller.settings import (
+    SettingCatalog,
+    SettingChoice,
+    load_setting_catalog,
+    parse_custom_settings,
+    resolve_settings,
+)
 
 logger = logging.getLogger("ibcontroller.main")
 
 # dest filename in config_dir -> bundled resource name under ibcontroller/data/. Only
 # "ibcontroller.toml" is copied under its real, load-bearing name -- see module
-# docstring for why the other two deliberately keep their ".example" suffix.
+# docstring for why the other deliberately keeps its ".example" suffix.
 _SCAFFOLD_FILES: dict[str, str] = {
     "ibcontroller.toml": "ibcontroller.toml.example",
-    "ibkr_settings.toml.example": "ibkr_settings.toml.example",
     "labels.json.example": "labels.json.example",
 }
 
 
-def _resolve_dialog_choices(
-    catalog: DialogCatalog, declarative: DeclarativeInput
-) -> list[DialogChoice]:
-    """Parses the user's `[[dialog]]` entries and picks a mode per dialog. Runs at
-    startup so a bad value stops the run before launch."""
-    custom = parse_custom_dialogs(declarative.dialogs, source="ibcontroller.toml")
-    return resolve_dialogs(catalog, custom, declarative.ibkr, declarative.ibkr_sources)
+def _resolve_choices(
+    dialog_catalog: DialogCatalog,
+    setting_catalog: SettingCatalog,
+    declarative: DeclarativeInput,
+) -> tuple[list[DialogChoice], list[SettingChoice]]:
+    """Parses the user's `[[dialog]]` and `[[setting]]` entries and picks a mode
+    per dialog and a checked value per setting. Runs at startup so a bad value
+    stops the run before launch. `[ibkr]` is one namespace: a name shared by a
+    dialog and a setting is an error, a name that is neither is a warning."""
+    source = "ibcontroller.toml"
+    custom_dialogs = parse_custom_dialogs(declarative.dialogs, source=source)
+    custom_settings = parse_custom_settings(declarative.settings, source=source)
+    dialog_names = {e.name for e in [*dialog_catalog.dialog, *custom_dialogs]}
+    setting_names = {e.name for e in [*setting_catalog.setting, *custom_settings]}
+    if clash := sorted(dialog_names & setting_names):
+        raise ConfigError(f"names used by both a dialog and a setting: {clash}")
+    if unknown := sorted(set(declarative.ibkr) - dialog_names - setting_names):
+        logger.warning(
+            "IBController > [ibkr] names no setting or dialog, ignored: %s",
+            ", ".join(unknown),
+        )
+    dialogs = resolve_dialogs(
+        dialog_catalog, custom_dialogs, declarative.ibkr, declarative.ibkr_sources
+    )
+    settings = resolve_settings(
+        setting_catalog, custom_settings, declarative.ibkr, declarative.ibkr_sources
+    )
+    return dialogs, settings
 
 
 def _load_jar_path() -> Path:
@@ -158,13 +184,16 @@ async def run_async(
     labels = await anyio.to_thread.run_sync(
         functools.partial(load_labels, config_dir=config_dir)
     )
-    catalog = await anyio.to_thread.run_sync(load_catalog)
-    dialogs = _resolve_dialog_choices(catalog, declarative)
+    dialog_catalog = await anyio.to_thread.run_sync(load_catalog)
+    setting_catalog = await anyio.to_thread.run_sync(load_setting_catalog)
+    dialogs, settings = _resolve_choices(dialog_catalog, setting_catalog, declarative)
     agent_jar_path = await anyio.to_thread.run_sync(_load_jar_path)
 
     loop = asyncio.get_running_loop()
     task = asyncio.ensure_future(
-        run_control_loop(config, agent_jar_path, labels=labels, dialogs=dialogs)
+        run_control_loop(
+            config, agent_jar_path, labels=labels, dialogs=dialogs, settings=settings
+        )
     )
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, task.cancel)

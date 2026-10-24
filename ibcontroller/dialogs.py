@@ -21,7 +21,7 @@ import attrs
 import cattrs
 
 from ibcontroller.actions import click
-from ibcontroller.config import ConfigError
+from ibcontroller.config import ENV_FALSE, ENV_TRUE, ConfigError
 from ibcontroller.dispatch import Dispatcher
 
 
@@ -162,6 +162,7 @@ def parse_catalog(raw: str, *, source: str) -> DialogCatalog:
         data = tomllib.loads(raw)
     except tomllib.TOMLDecodeError as exc:
         raise DialogsError(f"{source}: invalid TOML: {exc}") from exc
+    data.pop("setting", None)  # same file also holds the settings entries
     return _structure_catalog(data, source)
 
 
@@ -194,18 +195,14 @@ class DialogChoice:
     source: str
 
 
-_ENV_TRUE = frozenset({"true", "yes"})
-_ENV_FALSE = frozenset({"false", "no"})
-
-
 def _mode_for(entry: DialogEntry, value: object, source: str) -> str:
     """Maps a configured value to one of the entry's modes: a boolean is `on` or
     `off`, a string is a mode name, ignoring case. From the environment
     `true`/`yes` and `false`/`no` count as booleans."""
     if source == "env" and isinstance(value, str):
         word = value.strip().casefold()
-        if word in _ENV_TRUE | _ENV_FALSE:
-            value = word in _ENV_TRUE
+        if word in ENV_TRUE | ENV_FALSE:
+            value = word in ENV_TRUE
     where = f"dialog {entry.name!r} ({source})"
     if isinstance(value, bool):
         mode = "on" if value else "off"

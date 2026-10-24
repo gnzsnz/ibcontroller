@@ -1,8 +1,7 @@
 """control_loop.py -- the top-level orchestrator.
 
 launch -> login (with the always-on background watcher running concurrently) ->
-declarative settings (built-in entries always, a user's own ibkr_settings.toml
-merged in when configured -- see settings.py's own "Two tiers, not one" section) ->
+declarative settings (the entries that have a value in `[ibkr]`) ->
 a main loop that keeps the instance alive -> clean shutdown, whatever the reason.
 
 Ties together L1/L5/L6/L7 (`launcher.py`/`recognisers.py`/`login.py`/
@@ -88,7 +87,7 @@ from ibcontroller.recognisers import (
     watch_for_unprompted_windows,
 )
 from ibcontroller.schedule import ScheduledAction, next_scheduled_shutdown
-from ibcontroller.settings import apply_declarative_settings
+from ibcontroller.settings import SettingChoice, apply_declarative_settings
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +206,7 @@ async def _apply_declarative_settings_or_log(
     labels: Labels,
     config: Config,
     session: SessionState,
+    settings: Sequence[SettingChoice],
 ) -> None:
     """`apply_declarative_settings`, with a local error boundary -- a
     Settings-application failure must not tear down an otherwise-healthy,
@@ -220,6 +220,7 @@ async def _apply_declarative_settings_or_log(
             labels,
             config,
             session,
+            settings,
             after_apply=_settings_sweep(launched.dispatcher, labels, config),
         )
     except (AgentClientError, TimeoutError) as exc:  # expected: bad path, no dialog
@@ -241,6 +242,7 @@ async def run_control_loop(
     *,
     labels: Labels,
     dialogs: Sequence[DialogChoice],
+    settings: Sequence[SettingChoice] = (),
 ) -> ShutdownCause:
     """The outer loop -- ports IBC's own `ibcstart.sh` shape (a `while` loop
     wrapped around the entire JVM invocation) around one lap of
@@ -298,6 +300,7 @@ async def run_control_loop(
                     agent_jar,
                     labels,
                     dialogs,
+                    settings,
                     restart_hash=restart_hash,
                     lap=lap,
                 )
@@ -588,11 +591,12 @@ def _log_dialog_choices(dialogs: Sequence[DialogChoice]) -> None:
         )
 
 
-async def _run_one_cycle(  # noqa: PLR0915
+async def _run_one_cycle(  # noqa: PLR0913, PLR0915
     config: Config,
     agent_jar: str | Path,
     labels: Labels,
     dialogs: Sequence[DialogChoice],
+    settings: Sequence[SettingChoice] = (),
     *,
     restart_hash: str | None = None,
     lap: _Lap | None = None,
@@ -660,7 +664,9 @@ async def _run_one_cycle(  # noqa: PLR0915
             _log_transition(state, StartupState.APPLYING_SETTINGS)
             state = StartupState.APPLYING_SETTINGS
             await _run_phase_watching_process(
-                _apply_declarative_settings_or_log(launched, labels, config, manager),
+                _apply_declarative_settings_or_log(
+                    launched, labels, config, manager, settings
+                ),
                 process_done=process_done,
                 dispatcher_tasks=launched.dispatcher.tasks,
                 process=launched.process,

@@ -1,11 +1,40 @@
-# Bundled dialog catalog: one [[dialog]] entry per pop-up ibcontroller knows how to
-# handle. An entry has a name, a default mode, match groups (any group matching is
+# Bundled catalog: the settings and the dialogs ibcontroller knows how to handle.
+# Names are unique across both; a value in [ibkr] (or IBKR_<NAME>) is looked up by name.
+#
+# A [[setting]] has a name, the tree_path of its Global Configuration section, an
+# action (toggle, type_text, type_text_near_label, auto_restart_time,
+# auto_logoff_time) and the control's label (a literal "label", or a "label_ref"
+# naming an entry of labels.json's settings.controls). It carries no value: a
+# setting with no value in [ibkr] is left untouched. Settings are applied in the
+# order listed here.
+#
+# A [[dialog]] has a name, a default mode, match groups (any group matching is
 # enough; inside a group every field must match, ignoring case) and modes, each an
 # ordered list of steps run on the matched window. A mode with no steps leaves the
 # dialog to the user.
 #
-# Strings come from the dialogs' own text. Entries marked "unverified" come from
-# IBC's source and have not been checked against a live window.
+# Dialog strings come from the dialogs' own text. Entries marked "unverified" come
+# from IBC's source and have not been checked against a live window.
+
+# auto_logoff_time is applied BEFORE auto_restart_time: both write the same Lock and
+# Exit radio-button pair, so when both have a value the last one applied wins the
+# radio group. Listing auto_logoff_time first makes auto_restart_time win, matching
+# IBC's own stated precedence. Do not reorder these two entries.
+[[setting]]
+name = "auto_logoff_time"
+tree_path = "Lock and Exit"
+action = "auto_logoff_time"
+
+[[setting]]
+name = "auto_restart_time"
+tree_path = "Lock and Exit"
+action = "auto_restart_time"
+
+[[setting]]
+name = "read_only_api"
+tree_path = "API/Settings"
+action = "toggle"
+label_ref = "read_only_api"
 
 [[dialog]]
 name = "non_brokerage_account"

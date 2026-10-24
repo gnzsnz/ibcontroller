@@ -269,6 +269,13 @@ def test_parse_catalog_rejects_duplicate_names():
         parse_catalog(_VALID + _VALID, source="test.toml")
 
 
+def test_parse_catalog_ignores_the_setting_entries_of_the_shared_file():
+    """The bundled catalog holds `[[setting]]` entries too; they are read by
+    `settings.py`, not rejected here as unknown keys."""
+    raw = '[[setting]]\nname = "x"\n' + _VALID
+    assert [e.name for e in parse_catalog(raw, source="t").dialog] == ["warn"]
+
+
 def test_parse_catalog_accepts_an_empty_file():
     assert parse_catalog("", source="test.toml").dialog == []
 

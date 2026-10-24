@@ -26,13 +26,13 @@
 # The file has one table per concern:
 #   [ibcontroller]  ibcontroller's own settings (env prefix IBC_). The schema is
 #                   closed: an unknown key is rejected at startup with a clean error.
-#   [ibkr]          what ibcontroller does with IBKR's own pop-ups, by name
-#                   (env prefix IBKR_). A value given as an environment variable
-#                   wins over the file.
+#   [ibkr]          values for IBKR's own settings and pop-ups, by name (env
+#                   prefix IBKR_). A value given as an environment variable wins
+#                   over the file.
+#   [[setting]]     a Global Configuration setting the bundled catalog does not
+#                   know, described by you.
 #   [[dialog]]      a pop-up the bundled catalog does not know, described by you.
 # Keys at the top of the file, outside any table, and unknown tables are rejected.
-# Global Configuration settings still go in ibkr_settings.toml, see
-# ibkr_settings.toml.example.
 
 [ibcontroller]
 
@@ -70,13 +70,6 @@
 # when unset (env: IBC_TRADING_MODE)
 # Default "paper"
 # trading_mode = "paper"
-
-# Which ibkr_settings.toml to apply at startup (settings.py's own
-# apply_settings_from_file) -- see ibkr_settings.toml.example. Omit this key (the
-# default) to apply nothing declaratively.
-# (env: IBC_SETTINGS_FILE)
-# settings_file = "~/.config/ibcontroller/ibkr_settings.toml"
-# settings_file = "~/Library/Application Support/ibcontroller/ibkr_settings.toml"
 
 # Where ibcontroller's own log and trace files live (env: IBC_LOG_DIR).
 # Optional: when unset, defaults to the platformdirs user-log dir (or
@@ -142,11 +135,6 @@
 # Default false
 # read_only_login = false
 
-# IBC: ReadOnlyApi -- true/false sets it; omit to leave the existing setting unchanged
-# (env: IBC_READ_ONLY_API)
-# Default None - not set
-# read_only_api = false
-
 # IBC: ExistingSessionDetectedAction -- how ibcontroller itself reacts to Gateway's
 # "existing session detected", "Re-login is required" and "Trading Login Handoff" dialogs:
 # manual/primary/primaryoverride/secondary (table in docs/Configuration.md)
@@ -184,22 +172,6 @@
 # login failure, TWS logout, crash during login), then exit code 70. Default 3
 # restart_cap = 3
 
-# IBC: AutoRestartTime -- same name, same "hh:mm AM/PM" format (e.g. "08:00 AM"), a
-# single space between the two parts. Drives settings.py's "auto_restart_time" action
-# (see ibkr_settings.toml.example) -- omit this key (the default) to leave Gateway's
-# existing Auto Restart setting unchanged (env: IBC_AUTO_RESTART_TIME)
-# Default None - not set
-# auto_restart_time = "08:00 AM"
-
-# IBC: AutoLogoffTime -- same "hh:mm AM/PM" format, same Lock and Exit control as
-# auto_restart_time above (a shared radio-button pair: "Auto restart"/"Auto logoff").
-# If you set BOTH keys, auto_restart_time wins (builtin_settings.toml applies it
-# last, matching IBC's own precedence) -- set only one of the two in practice.
-# Omit this key (the default) to leave the existing setting unchanged
-# (env: IBC_AUTO_LOGOFF_TIME)
-# Default None - not set
-# auto_logoff_time = "08:00 AM"
-
 # --- Applies to TWS and Gateway alike (ported from IBC's IbcTws.java, the shared
 # --- base class both programs use). Both are ibcontroller's own scheduled actions,
 # --- not GUI settings written to TWS/Gateway -- see control_loop.py. If both are
@@ -231,7 +203,26 @@
 
 [ibkr]
 
-# Pop-ups ibcontroller handles, one line each. A dialog takes the name of one of its
+# --- Global Configuration settings, one line each, written once at startup. A setting
+# with no value is left as it is in Gateway/TWS. Values are checked at startup.
+# Env: IBKR_<NAME> (e.g. IBKR_READ_ONLY_API=true; true/false/yes/no in any case).
+
+# IBC: AutoLogoffTime. Time of the daily logoff, "hh:mm AM/PM" with one space,
+# e.g. "08:00 AM". Shares the Lock and Exit radio pair with auto_restart_time below:
+# if you set both, auto_restart_time wins, as in IBC.
+# Default: not set
+# auto_logoff_time = "08:00 AM"
+
+# IBC: AutoRestartTime. Time of the daily restart, "hh:mm AM/PM" with one space,
+# e.g. "08:00 AM".
+# Default: not set
+# auto_restart_time = "08:00 AM"
+
+# IBC: ReadOnlyApi. API/Settings, "Read-Only API": true or false.
+# Default: not set
+# read_only_api = true
+
+# --- Pop-ups ibcontroller handles, one line each. A dialog takes the name of one of its
 # modes, or true (mode "on") / false (mode "off"). In the environment, true/false/yes/no
 # in any case count as booleans (env: IBKR_<NAME>, e.g. IBKR_BLIND_TRADING=true).
 # A mode with no steps ("off") leaves the dialog for you to answer.
@@ -253,6 +244,20 @@
 # "Override and Transmit" or "Yes". Unverified, as above.
 # Modes "off", "on". Default "off"
 # blind_trading = "off"
+
+# A Global Configuration setting the catalog lacks. It carries no value: give it one
+# in [ibkr] under its name, or as IBKR_<NAME>. A custom name must not be a catalog name,
+# nor the name of a dialog. tree_path: the section of the Global Configuration tree.
+# action: "toggle" (checkbox, value true/false), "type_text" (field with a label, value
+# text or number), "type_text_near_label" (field with no name of its own, found by
+# position below the label; field_index counts from 0, default 0). The control is named
+# with label (literal text) or label_ref (an entry of labels.json settings.controls).
+# [[setting]]
+# name = "master_api_client_id"
+# tree_path = "API/Settings"
+# action = "type_text_near_label"
+# label = "Master API client ID"
+# field_index = 0
 
 # A pop-up the catalog lacks. A custom entry is checked before catalog ones and needs a
 # name that no catalog entry uses. match: a list of groups, any one is enough; inside a
