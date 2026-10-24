@@ -23,12 +23,16 @@
 # are actually required to run -- everything else here has a safe default or is
 # auto-detected from the real install.
 #
-# IMPORTANT: this schema is closed. Every key here must already be a real field in
-# ibcontroller/config.py -- an unknown key is rejected at startup (a clean error
-# message + non-zero exit, not silently ignored, not a crash-with-traceback). You
-# cannot add a new TWS/Gateway-settings toggle by just adding a key here.
-# See if  a declarative setting via "value_from_config" in ibkr_settings.toml.
-# Check ibkr_settings.toml.example for working examples.
+# The file has one table per concern:
+#   [ibcontroller]  ibcontroller's own settings (env prefix IBC_). The schema is
+#                   closed: an unknown key is rejected at startup with a clean error.
+#   [ibkr]          what ibcontroller does with IBKR's own pop-ups, by name
+#                   (env prefix IBKR_). A value given as an environment variable
+#                   wins over the file.
+#   [[dialog]]      a pop-up the bundled catalog does not know, described by you.
+# Keys at the top of the file, outside any table, and unknown tables are rejected.
+# Global Configuration settings still go in ibkr_settings.toml, see
+# ibkr_settings.toml.example.
 
 [ibcontroller]
 
@@ -224,3 +228,43 @@
 
 # Set time zone on jts.ini
 # time_zone = "America/New_York"
+
+[ibkr]
+
+# Pop-ups ibcontroller handles, one line each. A dialog takes the name of one of its
+# modes, or true (mode "on") / false (mode "off"). In the environment, true/false/yes/no
+# in any case count as booleans (env: IBKR_<NAME>, e.g. IBKR_BLIND_TRADING=true).
+# A mode with no steps ("off") leaves the dialog for you to answer.
+
+# "This is not a brokerage account" warning: clicks "I understand and accept"
+# Modes "off", "on". Default "on"
+# non_brokerage_account = "on"
+
+# Confirmation shown after Gateway/TWS is set to restart automatically: clicks "OK"
+# Modes "off", "on". Default "on"
+# auto_restart_confirmation = "on"
+
+# Password expiry notice (title "Password Notice"): clicks "OK". Unverified, the text
+# comes from IBC's source and was not seen on a live window.
+# Modes "off", "on". Default "off"
+# password_expiry_warning = "off"
+
+# Blind trading warning on an order for a product without market data: clicks
+# "Override and Transmit" or "Yes". Unverified, as above.
+# Modes "off", "on". Default "off"
+# blind_trading = "off"
+
+# A pop-up the catalog lacks. A custom entry is checked before catalog ones and needs a
+# name that no catalog entry uses. match: a list of groups, any one is enough; inside a
+# group every field must match, ignoring case. Fields: title, text, text_also.
+# modes: each mode is a list of steps, run in order on the window. A step is
+# { click = "OK" } or { click = ["OK", "Yes"] }, the first button found is clicked.
+# default: the mode used when [ibkr] gives no value. The entry's name also works as a
+# key in [ibkr] and as IBKR_<NAME>.
+# [[dialog]]
+# name = "my_custom_warning"
+# default = "on"
+# match = [ { title = "Warning", text = "some phrase" }, { text = "another phrase" } ]
+# [dialog.modes]
+# off = []
+# on = [ { click = ["OK", "Yes"] } ]

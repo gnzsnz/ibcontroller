@@ -288,8 +288,11 @@ US/Eastern invalidation window if that's the intent.
 
 ## Declarative configuration
 
-Beyond `ibcontroller.toml`, two things let you shape ibcontroller's behavior without
-writing any Python: **`labels.json`** (window/button text) and **`ibkr_settings.toml`** (Global Configuration settings applied to Gateway/TWS
+Inside `ibcontroller.toml`, the `[ibkr]` table chooses what ibcontroller does with
+IBKR's own pop-ups (for example `blind_trading = "on"`, or `IBKR_BLIND_TRADING=on` in
+the environment) and `[[dialog]]` describes a pop-up the bundled catalog lacks; see
+"Dialogs" in [docs/Configuration.md](./docs/Configuration.md). Beyond that, two
+things let you shape ibcontroller's behavior without writing any Python: **`labels.json`** (window/button text) and **`ibkr_settings.toml`** (Global Configuration settings applied to Gateway/TWS
 at startup). Each is covered below.
 
 ### `labels.json` — window/button text
