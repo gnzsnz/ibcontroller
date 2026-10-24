@@ -36,7 +36,7 @@ from typing import Any
 import anyio.to_thread
 
 from ibcontroller.app_dirs import resolve_app_dirs
-from ibcontroller.config import load_config
+from ibcontroller.config import load_config, load_declarative_input
 from ibcontroller.control_loop import ShutdownCause, run_control_loop
 from ibcontroller.dialogs import load_catalog
 from ibcontroller.labels import load_labels
@@ -134,6 +134,8 @@ async def run_async(
             cli_overrides=cli_overrides,
         )
     )
+    # after load_config, which loads the dotenv; validates the file's structure
+    await anyio.to_thread.run_sync(load_declarative_input, config_dir)
     labels = await anyio.to_thread.run_sync(
         functools.partial(load_labels, config_dir=config_dir)
     )

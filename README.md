@@ -127,8 +127,8 @@ invocation, for pointing each instance's config/log/run dirs somewhere different
 
 ## Configuration
 
-`ibcontroller` is configured through a **flat** TOML file (no `[section]` headers) and/or
-environment variables, with precedence `defaults < TOML file < .env < environment`. Environment
+`ibcontroller` is configured through a TOML file (its own settings under an
+`[ibcontroller]` table) and/or environment variables, with precedence `defaults < TOML file < .env < environment`. Environment
 can be loaded from a `.env` file. Credentials are environment-variable-only and must
 never appear in the config file.
 

@@ -17,6 +17,7 @@ from ibcontroller.config import (
     TradingMode,
     _default_time_zone,
     load_config,
+    load_declarative_input,
 )
 
 
@@ -24,6 +25,11 @@ def _write_toml(tmp_path, text):
     path = tmp_path / "ibcontroller.toml"
     path.write_text(text)
     return path
+
+
+def _write_ibc(tmp_path, body):
+    """Writes `body` under an `[ibcontroller]` table."""
+    return _write_toml(tmp_path, f"[ibcontroller]\n{body}")
 
 
 def _set_credentials(monkeypatch):
@@ -35,7 +41,7 @@ def test_toml_values_are_actually_applied(monkeypatch, tmp_path):
     """`TomlFormat("")` used to look up settings[""] instead of the top-level dict,
     silently discarding the whole file."""
     _set_credentials(monkeypatch)
-    toml_path = _write_toml(tmp_path, 'trading_mode = "live"\nread_only_api = true\n')
+    toml_path = _write_ibc(tmp_path, 'trading_mode = "live"\nread_only_api = true\n')
     config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
     assert config.trading_mode is TradingMode.LIVE
     assert config.read_only_api is True
@@ -45,7 +51,7 @@ def test_env_var_overrides_toml_value(monkeypatch, tmp_path):
     """No `EnvLoader` was wired into `load_config`'s loader list at all -- env vars
     had zero effect on the loaded Config."""
     _set_credentials(monkeypatch)
-    toml_path = _write_toml(tmp_path, 'trading_mode = "paper"\n')
+    toml_path = _write_ibc(tmp_path, 'trading_mode = "paper"\n')
     monkeypatch.setenv("IBC_TRADING_MODE", "live")
     config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
     assert config.trading_mode is TradingMode.LIVE
@@ -56,7 +62,7 @@ def test_log_dir_tilde_is_expanded(monkeypatch, tmp_path):
     downstream `Path(log_dir)` calls (logging_setup.py, launcher.py) don't expanduser()
     themselves, so an unexpanded `~` becomes a literal `~` directory."""
     _set_credentials(monkeypatch)
-    toml_path = _write_toml(tmp_path, 'log_dir = "~/some/sub/dir"\n')
+    toml_path = _write_ibc(tmp_path, 'log_dir = "~/some/sub/dir"\n')
     config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
     assert "~" not in config.log_dir
     assert config.log_dir == str(Path("~/some/sub/dir").expanduser())
@@ -68,7 +74,7 @@ def test_optional_path_fields_tilde_is_expanded(monkeypatch, tmp_path, field):
     a literal `~` must be expanded here too, not left for a consumption site to
     forget."""
     _set_credentials(monkeypatch)
-    toml_path = _write_toml(tmp_path, f'{field} = "~/some/sub/path"\n')
+    toml_path = _write_ibc(tmp_path, f'{field} = "~/some/sub/path"\n')
     config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
     value = getattr(config, field)
     assert value is not None
@@ -123,7 +129,7 @@ def test_invalid_enum_value_from_env_names_the_field(monkeypatch, tmp_path):
 
 def test_invalid_enum_value_from_toml_names_the_field(monkeypatch, tmp_path):
     _set_credentials(monkeypatch)
-    _write_toml(tmp_path, 'trading_mode = "xyz"\n')
+    _write_ibc(tmp_path, 'trading_mode = "xyz"\n')
     with pytest.raises(ConfigError, match="trading_mode") as exc_info:
         load_config(config_dir=tmp_path, log_dir=tmp_path)
     assert "sub-exception" not in str(exc_info.value)
@@ -205,7 +211,7 @@ def test_password_file_suffix_wins_over_plain_var(monkeypatch, tmp_path):
 
 def test_credentials_in_toml_are_rejected(monkeypatch, tmp_path):
     _set_credentials(monkeypatch)
-    toml_path = _write_toml(tmp_path, 'userid = "sneaky"\n')
+    toml_path = _write_ibc(tmp_path, 'userid = "sneaky"\n')
     with pytest.raises(ConfigError, match="credentials must not be set"):
         load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
 
@@ -215,7 +221,7 @@ def test_cli_overrides_win_over_env_and_toml(monkeypatch, tmp_path):
     whole point of letting `cli.py`'s `run` pick trading_mode/etc. per invocation
     regardless of what a shared ibcontroller.toml or .env file says."""
     _set_credentials(monkeypatch)
-    toml_path = _write_toml(tmp_path, 'trading_mode = "paper"\n')
+    toml_path = _write_ibc(tmp_path, 'trading_mode = "paper"\n')
     monkeypatch.setenv("IBC_TRADING_MODE", "paper")
     config = load_config(
         config_dir=tmp_path,
@@ -241,7 +247,7 @@ def test_cli_overrides_feed_instance_template(monkeypatch, tmp_path):
 
 def test_empty_cli_overrides_do_not_affect_config(monkeypatch, tmp_path):
     _set_credentials(monkeypatch)
-    toml_path = _write_toml(tmp_path, 'trading_mode = "paper"\n')
+    toml_path = _write_ibc(tmp_path, 'trading_mode = "paper"\n')
     config = load_config(
         config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path, cli_overrides={}
     )
@@ -334,16 +340,153 @@ def test_time_zone_env_var_overrides_tz_default(monkeypatch, tmp_path):
 
 
 def test_legacy_section_headers_raise_clearly(monkeypatch, tmp_path):
-    """A [section]-header config must not silently drop every key
-    inside it: typed-settings' own `FileLoader` catches this via
-    `InvalidOptionsError` (`gateway.tws_version` isn't a real flat field), so no
-    hand-written check is needed."""
+    """A legacy `[gateway]`-style table must not silently drop every key inside it."""
     _set_credentials(monkeypatch)
     toml_path = _write_toml(
         tmp_path, '[gateway]\ntws_version = "10.45"\n\n[auth]\ntrading_mode = "paper"\n'
     )
-    with pytest.raises(ConfigError, match=r"gateway\.tws_version"):
+    with pytest.raises(ConfigError, match=r"gateway"):
         load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+
+
+def test_flat_file_is_rejected_pointing_to_ibcontroller_table(monkeypatch, tmp_path):
+    """A pre-sections file (top-level keys) would otherwise load as all defaults."""
+    _set_credentials(monkeypatch)
+    toml_path = _write_toml(tmp_path, 'trading_mode = "live"\n')
+    with pytest.raises(ConfigError, match=r"trading_mode.*\[ibcontroller\]"):
+        load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+
+
+def test_mixed_flat_and_sectioned_file_is_rejected(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    toml_path = _write_toml(
+        tmp_path, 'trading_mode = "live"\n[ibcontroller]\nprogram = "tws"\n'
+    )
+    with pytest.raises(ConfigError, match=r"trading_mode"):
+        load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+
+
+def test_unknown_top_level_table_is_rejected(monkeypatch, tmp_path):
+    """A typo such as `[ibkrr]` must not silently drop its settings."""
+    _set_credentials(monkeypatch)
+    toml_path = _write_toml(tmp_path, "[ibkrr]\nblind_trading = true\n")
+    with pytest.raises(ConfigError, match=r"ibkrr"):
+        load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+
+
+def test_unknown_key_in_ibcontroller_table_is_rejected(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    toml_path = _write_ibc(tmp_path, "no_such_field = 1\n")
+    with pytest.raises(ConfigError, match=r"no_such_field"):
+        load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+
+
+def test_file_without_ibcontroller_table_loads_defaults(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    toml_path = _write_toml(tmp_path, "[ibkr]\nblind_trading = true\n")
+    config = load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+    assert config.program is Program.GATEWAY
+
+
+def test_credentials_in_ibkr_table_are_rejected(monkeypatch, tmp_path):
+    _set_credentials(monkeypatch)
+    toml_path = _write_toml(tmp_path, '[ibkr]\npassword = "sneaky"\n')
+    with pytest.raises(ConfigError, match="credentials must not be set"):
+        load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+
+
+def test_wrong_table_shape_is_rejected(monkeypatch, tmp_path):
+    """`ibkr` must be a table, `setting`/`dialog` arrays of tables."""
+    _set_credentials(monkeypatch)
+    for text in ("ibkr = 1\n", "ibcontroller = 1\n", "[setting]\na = 1\n"):
+        toml_path = _write_toml(tmp_path, text)
+        with pytest.raises(ConfigError):
+            load_config(config_dir=tmp_path, log_dir=tmp_path, toml_path=toml_path)
+
+
+def _declarative(tmp_path, text=None):
+    toml_path = _write_toml(tmp_path, text) if text is not None else None
+    return load_declarative_input(config_dir=tmp_path, toml_path=toml_path)
+
+
+def test_declarative_input_reads_raw_sections(tmp_path):
+    result = _declarative(
+        tmp_path,
+        '[ibcontroller]\nprogram = "tws"\n'
+        "[ibkr]\nblind_trading = true\nauto_restart_time = '23:45'\n"
+        '[[setting]]\nname = "a"\n[[setting]]\nname = "b"\n'
+        '[[dialog]]\nname = "d"\n[dialog.modes]\non = []\n',
+    )
+    assert dict(result.ibkr) == {"blind_trading": True, "auto_restart_time": "23:45"}
+    assert [s["name"] for s in result.settings] == ["a", "b"]
+    assert result.dialogs[0]["modes"] == {"on": []}
+
+
+def test_declarative_input_missing_file_is_empty(tmp_path):
+    result = _declarative(tmp_path)
+    assert dict(result.ibkr) == {}
+    assert result.settings == ()
+    assert result.dialogs == ()
+
+
+def test_declarative_input_rejects_bad_structure(tmp_path):
+    with pytest.raises(ConfigError, match="trading_mode"):
+        _declarative(tmp_path, 'trading_mode = "live"\n')
+
+
+def test_ibkr_env_collected_lowercase_and_wins_over_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("IBKR_BLIND_TRADING", "on")
+    monkeypatch.setenv("IBKR_NSE_COMPLIANCE", "off")
+    result = _declarative(tmp_path, "[ibkr]\nblind_trading = false\nother = 1\n")
+    assert dict(result.ibkr) == {
+        "blind_trading": "on",
+        "nse_compliance": "off",
+        "other": 1,
+    }
+
+
+def test_ibkr_env_empty_counts_as_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("IBKR_BLIND_TRADING", "")
+    result = _declarative(tmp_path, "[ibkr]\nblind_trading = true\n")
+    assert dict(result.ibkr) == {"blind_trading": True}
+
+
+def test_ibkr_env_file_suffix_wins_over_plain_var(monkeypatch, tmp_path):
+    secret = tmp_path / "value"
+    secret.write_text("on\n")
+    monkeypatch.setenv("IBKR_BLIND_TRADING", "off")
+    monkeypatch.setenv("IBKR_BLIND_TRADING_FILE", str(secret))
+    assert dict(_declarative(tmp_path).ibkr) == {"blind_trading": "on"}
+
+
+def test_ibkr_env_empty_file_falls_back_to_plain_var(monkeypatch, tmp_path):
+    secret = tmp_path / "value"
+    secret.write_text("\n")
+    monkeypatch.setenv("IBKR_BLIND_TRADING", "off")
+    monkeypatch.setenv("IBKR_BLIND_TRADING_FILE", str(secret))
+    assert dict(_declarative(tmp_path).ibkr) == {"blind_trading": "off"}
+
+
+def test_ibkr_env_unreadable_file_is_config_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("IBKR_BLIND_TRADING_FILE", str(tmp_path / "missing"))
+    with pytest.raises(ConfigError, match="IBKR_BLIND_TRADING_FILE"):
+        _declarative(tmp_path)
+
+
+def test_ibkr_env_bare_prefix_is_ignored(monkeypatch, tmp_path):
+    monkeypatch.setenv("IBKR_", "x")
+    assert dict(_declarative(tmp_path).ibkr) == {}
+
+
+def test_env_dump_lists_ibkr_vars_masking_sensitive_ones(monkeypatch, tmp_path, capsys):
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("IBKR_BLIND_TRADING", "on")
+    monkeypatch.setenv("IBKR_SOME_TOKEN", "hunter2")
+    load_config(config_dir=tmp_path, log_dir=tmp_path)
+    out = capsys.readouterr().out
+    assert "env IBKR_BLIND_TRADING=on" in out
+    assert "env IBKR_SOME_TOKEN=******" in out
+    assert "hunter2" not in out
 
 
 def test_env_dump_masks_sensitive_ibc_vars(monkeypatch, tmp_path, capsys):

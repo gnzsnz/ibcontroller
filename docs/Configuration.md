@@ -1,8 +1,24 @@
 # IBController Configuration
 
-`ibcontroller` reads a single flat TOML file, `ibcontroller.toml` (no `[section]`
-headers), found in the config directory. Every key is optional except the
-credentials, which are environment-variable-only (see below).
+`ibcontroller` reads a single TOML file, `ibcontroller.toml`, found in the config
+directory. Every key is optional except the credentials, which are
+environment-variable-only (see below).
+
+## File layout
+
+One table per concern:
+
+| Table | Holds | Environment |
+| ----- | ----- | ----------- |
+| `[ibcontroller]` | ibcontroller's own settings, every field documented below | `IBC_<FIELD>` |
+| `[ibkr]` | values for IBKR settings and dialogs, by name | `IBKR_<NAME>` |
+| `[[setting]]`, `[[dialog]]` | custom setting and dialog entries | none |
+
+The file is rejected at startup if it has a top-level key outside a table (a file
+from before the tables existed) or any table other than the four above. `[ibkr]`,
+`[[setting]]` and `[[dialog]]` are read but not applied yet. `IBKR_<NAME>` also
+accepts a `_FILE` variant, an empty value counts as missing, and the startup
+environment dump lists these variables with the same masking as `IBC_*`.
 
 Precedence, highest first:
 
@@ -10,8 +26,8 @@ Precedence, highest first:
 2. Config file
 3. Built-in defaults
 
-Schema is closed: any key not declared below is rejected at startup with a clean
-error, never silently ignored.
+Schema is closed: any key in `[ibcontroller]` not declared below is rejected at
+startup with a clean error, never silently ignored.
 
 Every config-field also has an environment-variable spelling:
 `IBC_` + the field name upper-cased and in snake-case, e.g.

@@ -1,4 +1,4 @@
-# ibcontroller configuration file -- flat, no [section] headers.
+# ibcontroller configuration file. Keys below belong under the [ibcontroller] table.
 #
 # Precedence (highest to lowest):
 #   1. Environment variables (override everything)
@@ -29,6 +29,8 @@
 # cannot add a new TWS/Gateway-settings toggle by just adding a key here.
 # See if  a declarative setting via "value_from_config" in ibkr_settings.toml.
 # Check ibkr_settings.toml.example for working examples.
+
+[ibcontroller]
 
 # Socket/instance name (env: IBC_INSTANCE). Optional: when unset,
 # defaults to "{program}-{trading_mode}" (e.g. "gateway-paper").
