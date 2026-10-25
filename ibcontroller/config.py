@@ -322,19 +322,6 @@ class MfaTimeoutAction(StrEnum):
     RESTART = "restart"
 
 
-class AcceptIncomingConnections(StrEnum):
-    """AcceptIncomingConnections is the user's choice for what to do when ibcontroller
-    detects incoming API connections (see `AcceptIncomingConnectionsRecognizer` in
-    recognisers.py). The default is MANUAL, which leaves the user to decide what to do
-    in the GUI. ACCEPT and REJECT are the two automatic options, and MANUAL is a special
-    case that forces the user to decide what to do in the GUI.
-    """
-
-    ACCEPT = "accept"
-    REJECT = "reject"
-    MANUAL = "manual"
-
-
 @ts.settings
 class Config:
     """
@@ -363,9 +350,6 @@ class Config:
     trading_mode: TradingMode = TradingMode.PAPER
     # IBC: ReadOnlyLogin -- TWS only, clicks "Enter Read Only" on the 2FA frame.
     read_only_login: bool = False
-    accept_incoming_connections: AcceptIncomingConnections = (
-        AcceptIncomingConnections.MANUAL
-    )
     existing_session_action: ExistingSessionAction = ExistingSessionAction.MANUAL
 
     # jts.ini's TimeZone (IANA name, e.g. "Europe/Zurich") -- written by

@@ -19,9 +19,6 @@ def test_bundled_default_loads_and_structures():
     assert labels.mfa.tws_frame_label == "SECOND FACTOR AUTHENTICATION"
     assert labels.mfa.read_only_button == "Enter Read Only"
     assert labels.existing_session.title == "Existing session detected"
-    assert labels.accept_incoming_connection.title == "Accept incoming connection"
-    assert labels.accept_incoming_connection.accept_buttons == ["OK", "Yes"]
-    assert labels.accept_incoming_connection.reject_buttons == ["No"]
     assert labels.login_failed.title == "Login failed"
     assert labels.login_error.title == "Login Error"
     assert labels.unrecognized_credentials.title == "Unrecognized Username or Password"
@@ -120,8 +117,6 @@ def test_wrong_type_is_rejected_naming_file_and_field(tmp_path, override, field)
         ("login", "login_buttons"),
         ("existing_session", "continue_buttons"),
         ("existing_session", "cancel_buttons"),
-        ("accept_incoming_connection", "accept_buttons"),
-        ("accept_incoming_connection", "reject_buttons"),
     ],
 )
 def test_empty_candidate_list_is_rejected(tmp_path, group, name):

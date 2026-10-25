@@ -37,14 +37,12 @@ from ibcontroller.agent_client import (
     WindowGoneError,
 )
 from ibcontroller.config import (
-    AcceptIncomingConnections,
     Config,
     ExistingSessionAction,
 )
 from ibcontroller.dialogs import DialogChoice, DialogEntry, MatchGroup, run_steps
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import (
-    AcceptIncomingConnectionLabels,
     ExistingSessionLabels,
     GatewayConnectionFailedLabels,
     Labels,
@@ -596,53 +594,6 @@ class TradingLoginHandoffRecognizer:
             )
 
 
-class AcceptIncomingConnectionsRecognizer:
-    """Matches the "Accept incoming connection" dialog TWS/Gateway shows when
-    a client connects on the API socket, by window title (ported from IBC's
-    own `AcceptIncomingConnectionDialogHandler`; title matching, not IBC's
-    body-label search, like every other simple dialog here).
-    `action` (`AcceptIncomingConnections`: manual/accept/reject) selects the
-    response; `MANUAL` leaves the dialog for the user, matching IBC's own
-    handler."""
-
-    def __init__(
-        self,
-        labels: AcceptIncomingConnectionLabels,
-        action: AcceptIncomingConnections,
-    ) -> None:
-        self._labels = labels
-        self._action = action
-
-    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
-
-    async def handle(
-        self,
-        event: WindowEvent,
-        components: list[Component],
-        dispatcher: Dispatcher,
-    ) -> None:
-        if self._action is AcceptIncomingConnections.MANUAL:
-            logger.info(
-                "IBController > incoming API connection -- manual, leaving for the user"
-            )
-            return
-        if self._action is AcceptIncomingConnections.ACCEPT:
-            await click(
-                dispatcher,
-                self._labels.accept_buttons,
-                window_id=event.window.window_id,
-            )
-            logger.info("IBController > incoming API connection -- accepted")
-        else:
-            await click(
-                dispatcher,
-                self._labels.reject_buttons,
-                window_id=event.window.window_id,
-            )
-            logger.info("IBController > incoming API connection -- rejected")
-
-
 class ExitKind(Enum):
     """What TWS/Gateway is about to do, read from the progress window it shows
     just before its process exits."""
@@ -778,10 +729,6 @@ def build_default_registry(
             ReloginRecognizer(labels.relogin, config.existing_session_action),
             TradingLoginHandoffRecognizer(
                 labels.trading_login_handoff, config.existing_session_action
-            ),
-            AcceptIncomingConnectionsRecognizer(
-                labels.accept_incoming_connection,
-                config.accept_incoming_connections,
             ),
         ]
     )

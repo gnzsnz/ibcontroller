@@ -32,11 +32,6 @@
     "title": "Trading Login Handoff",
     "disconnect_buttons": ["Disconnect Other Session"]
   },
-  "accept_incoming_connection": {
-    "title": "Accept incoming connection",
-    "accept_buttons": ["OK", "Yes"],
-    "reject_buttons": ["No"]
-  },
   "login_failed": {
     "title": "Login failed",
     "dismiss_button": "OK"

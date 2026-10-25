@@ -127,16 +127,6 @@ class TradingLoginHandoffLabels:
 
 
 @attrs.define(frozen=True)
-class AcceptIncomingConnectionLabels:
-    """`accept_buttons` tries "OK" then "Yes" in order; `reject_buttons` is
-    "No"."""
-
-    title: str
-    accept_buttons: list[str] = attrs.field(validator=_non_empty)
-    reject_buttons: list[str] = attrs.field(validator=_non_empty)
-
-
-@attrs.define(frozen=True)
 class LoginFailedLabels:
     """The "Login failed" dialog -- despite the wording, IB reuses this
     title for a "server disconnected" condition, not rejected credentials
@@ -276,7 +266,6 @@ class Labels:
     existing_session: ExistingSessionLabels
     relogin: ReloginLabels
     trading_login_handoff: TradingLoginHandoffLabels
-    accept_incoming_connection: AcceptIncomingConnectionLabels
     login_failed: LoginFailedLabels
     login_error: LoginErrorLabels
     unrecognized_credentials: UnrecognizedCredentialsLabels

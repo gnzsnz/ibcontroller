@@ -289,6 +289,7 @@ def test_bundled_catalog_loads_with_the_expected_entries():
         "password_expiry_warning",
         "blind_trading",
         "socket_port_confirmation",
+        "accept_incoming_connections",
     ]
     assert {n: e.default for n, e in entries.items()} == {
         "non_brokerage_account": "on",
@@ -296,6 +297,7 @@ def test_bundled_catalog_loads_with_the_expected_entries():
         "password_expiry_warning": "off",  # nosec B105
         "blind_trading": "off",
         "socket_port_confirmation": "off",  # nosec B105
+        "accept_incoming_connections": "manual",
     }
 
 
@@ -334,8 +336,21 @@ def test_bundled_socket_port_confirmation_answers_yes_or_no_and_defaults_to_off(
     assert entry.default == "off"
 
 
+def test_bundled_accept_incoming_connections_has_manual_accept_and_reject_modes():
+    entry = {e.name: e for e in load_catalog().dialog}["accept_incoming_connections"]
+    assert entry.match == [MatchGroup(text="Accept incoming connection")]
+    assert entry.modes == {
+        "manual": [],
+        "accept": [ClickStep(["OK", "Yes"])],
+        "reject": [ClickStep(["No"])],
+    }
+    assert entry.default == "manual"
+
+
 def test_every_bundled_entry_has_an_off_and_an_on_mode():
     for entry in load_catalog().dialog:
+        if entry.name == "accept_incoming_connections":
+            continue  # modes are manual/accept/reject, so no boolean shorthand
         assert {"off", "on"} <= set(entry.modes), entry.name
 
 
@@ -454,6 +469,14 @@ def test_resolve_boolean_needs_on_and_off_modes():
     (custom,) = parse_custom_dialogs([raw], source="x")
     with pytest.raises(DialogsError, match=r"my_warning.*boolean.*on.*off"):
         _resolve({"my_warning": True}, custom=[custom])
+
+
+def test_resolve_accept_incoming_connections_takes_modes_and_rejects_a_boolean():
+    choices = _by_name(_resolve({"accept_incoming_connections": "reject"}))
+    assert choices["accept_incoming_connections"].mode == "reject"
+    assert _by_name(_resolve())["accept_incoming_connections"].mode == "manual"
+    with pytest.raises(DialogsError, match=r"accept_incoming_connections.*boolean"):
+        _resolve({"accept_incoming_connections": True})
 
 
 def test_resolve_custom_entry_with_catalog_name_is_rejected():

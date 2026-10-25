@@ -166,3 +166,16 @@ match = [ { text = "apply the new socket port setting immediately" } ]
 off = []
 on = [ { click = ["Yes"] } ]
 no = [ { click = ["No"] } ]
+
+# Unverified (IBC: AcceptIncomingConnectionDialogHandler). Shown when an API client
+# outside the trusted IPs connects; matched by message text, as the window title is not
+# the phrase. "manual" leaves it to the user; the secure choice is "reject" plus a trusted
+# IP list in the API settings.
+[[dialog]]
+name = "accept_incoming_connections"
+default = "manual"
+match = [ { text = "Accept incoming connection" } ]
+[dialog.modes]
+manual = []
+accept = [ { click = ["OK", "Yes"] } ]
+reject = [ { click = ["No"] } ]

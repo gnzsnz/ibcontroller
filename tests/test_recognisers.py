@@ -20,7 +20,6 @@ from ibcontroller.agent_client import (
     WindowInfo,
 )
 from ibcontroller.config import (
-    AcceptIncomingConnections,
     Config,
     ExistingSessionAction,
     Program,
@@ -43,7 +42,6 @@ from ibcontroller.login import (
     TransientLoginError,
 )
 from ibcontroller.recognisers import (
-    AcceptIncomingConnectionsRecognizer,
     DialogRecognizer,
     ExistingSessionRecognizer,
     ExitKind,
@@ -919,80 +917,79 @@ def test_session_exit_codes():
     assert InvalidSessionStateError.exit_code == 76
 
 
-async def test_accept_incoming_connection_recognises_by_title():
-    recognizer = AcceptIncomingConnectionsRecognizer(
-        LABELS.accept_incoming_connection, AcceptIncomingConnections.MANUAL
-    )
-    assert recognizer.recognises(_event("Accept incoming connection"), []) is True
-    assert recognizer.recognises(_event("IBKR Gateway"), []) is False
+def _accept_recognizer(mode: str) -> DialogRecognizer:
+    entry = next(e for e in CATALOG.dialog if e.name == "accept_incoming_connections")
+    return DialogRecognizer(entry, mode)
+
+
+async def test_accept_incoming_connection_recognises_by_message_text():
+    """The window title is not the phrase; the dialog's label is, with the
+    client address in it."""
+    recognizer = _accept_recognizer("accept")
+    event = _event("IBKR Gateway")
+    prompt = _component(text="Accept incoming connection attempt from 10.0.0.5?")
+    assert recognizer.recognises(event, [prompt]) is True
+    assert recognizer.recognises(event, [_component(text="ACCEPT INCOMING CONNECTION")])
+    assert recognizer.recognises(event, [_component(text="something else")]) is False
+    assert recognizer.recognises(_event("Accept incoming connection"), []) is False
+
+
+async def test_accept_incoming_connection_manual_leaves_the_dialog_unrecognised():
+    recognizer = _accept_recognizer("manual")
+    prompt = _component(text="Accept incoming connection attempt?")
+    assert recognizer.recognises(_event("IBKR Gateway"), [prompt]) is False
+
+
+async def _run_accept(sock_path, event_sock_path, mode: str, respond) -> list:
+    seen = []
+    async with (
+        FakeCommandServer(
+            sock_path, lambda req: (seen.append(req["target"]), respond(req))[1]
+        ),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await _accept_recognizer(mode).handle(
+                _event("Accept incoming connection"), [], dispatcher
+            )
+        finally:
+            await dispatcher.stop()
+    return seen
 
 
 async def test_accept_incoming_connection_manual_does_nothing(
     sock_path, event_sock_path
 ):
-    calls = []
-
-    async with (
-        FakeCommandServer(sock_path, lambda req: (calls.append(req), {"ok": True})[1]),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            recognizer = AcceptIncomingConnectionsRecognizer(
-                LABELS.accept_incoming_connection, AcceptIncomingConnections.MANUAL
-            )
-            await recognizer.handle(
-                _event("Accept incoming connection"), [], dispatcher
-            )
-        finally:
-            await dispatcher.stop()
-
-    assert calls == []
+    seen = await _run_accept(
+        sock_path, event_sock_path, "manual", lambda r: {"ok": True}
+    )
+    assert seen == []
 
 
 async def test_accept_incoming_connection_accept_clicks_ok(sock_path, event_sock_path):
-    seen = []
-
-    async with (
-        FakeCommandServer(
-            sock_path, lambda req: (seen.append(req["target"]), {"ok": True})[1]
-        ),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            recognizer = AcceptIncomingConnectionsRecognizer(
-                LABELS.accept_incoming_connection, AcceptIncomingConnections.ACCEPT
-            )
-            await recognizer.handle(
-                _event("Accept incoming connection"), [], dispatcher
-            )
-        finally:
-            await dispatcher.stop()
-
+    seen = await _run_accept(
+        sock_path, event_sock_path, "accept", lambda r: {"ok": True}
+    )
     assert seen == ["OK"]
 
 
+async def test_accept_incoming_connection_accept_falls_back_to_yes(
+    sock_path, event_sock_path
+):
+    def respond(req):
+        if req["target"] == "OK":
+            return {"ok": False, "error": "not_found", "detail": "no such button"}
+        return {"ok": True}
+
+    seen = await _run_accept(sock_path, event_sock_path, "accept", respond)
+    assert seen == ["OK", "Yes"]
+
+
 async def test_accept_incoming_connection_reject_clicks_no(sock_path, event_sock_path):
-    seen = []
-
-    async with (
-        FakeCommandServer(
-            sock_path, lambda req: (seen.append(req["target"]), {"ok": True})[1]
-        ),
-        FakeEventServer(event_sock_path, []),
-    ):
-        dispatcher = await _start(sock_path, event_sock_path)
-        try:
-            recognizer = AcceptIncomingConnectionsRecognizer(
-                LABELS.accept_incoming_connection, AcceptIncomingConnections.REJECT
-            )
-            await recognizer.handle(
-                _event("Accept incoming connection"), [], dispatcher
-            )
-        finally:
-            await dispatcher.stop()
-
+    seen = await _run_accept(
+        sock_path, event_sock_path, "reject", lambda r: {"ok": True}
+    )
     assert seen == ["No"]
 
 
@@ -1641,7 +1638,6 @@ def test_build_registry_contains_declarative_rules_and_hand_written_built_ins():
         ExistingSessionRecognizer,
         ReloginRecognizer,
         TradingLoginHandoffRecognizer,
-        AcceptIncomingConnectionsRecognizer,
         NotCurrentlyAvailableRecognizer,
         LoginFailedRecognizer,
         LoginErrorRecognizer,

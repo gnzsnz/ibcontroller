@@ -228,7 +228,6 @@ TWS/ibgateway settings
 | --- | --- | --- | --- |
 | `trading_mode` | `IBC_TRADING_MODE`, `--trading-mode` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
 | `read_only_login` | `IBC_READ_ONLY_LOGIN` | TWS-only (Gateway warns and logs in normally); clicks "Enter Read Only" on the 2FA frame instead of waiting for the push, no effect without 2FA (paper) | `false` |
-| `accept_incoming_connections` | `IBC_ACCEPT_INCOMING_CONNECTIONS` | `manual`/`accept`/`reject` | `"manual"` |
 | `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | `manual`/`primary`/`primaryoverride`/`secondary` | `"manual"` |
 | `login_dialog_display_timeout` | `IBC_LOGIN_DIALOG_DISPLAY_TIMEOUT` | Seconds to wait for the login dialog | `60.0` |
 | `mfa_timeout` | `IBC_MFA_TIMEOUT` | IB's 2FA limit in seconds; a dialog closing at or after it counts as timed out | `180.0` |

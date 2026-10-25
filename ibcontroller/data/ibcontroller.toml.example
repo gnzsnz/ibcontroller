@@ -142,15 +142,6 @@
 # Default "manual"
 # existing_session_action = "manual"
 
-# IBC: AcceptIncomingConnectionAction -- how ibcontroller reacts to TWS/Gateway's
-# "Accept incoming connection" dialog, shown when an API client connects.
-# If set to 'accept', ibcontroller automatically accepts incoming API connection
-# dialogs. If set to 'reject', ibcontroller automatically rejects incoming API
-# connection dialogs. If set to 'manual', the user must decide whether to accept
-# or reject incoming API connection dialogs. The default is 'manual'.
-# (env: IBC_ACCEPT_INCOMING_CONNECTIONS)
-# accept_incoming_connections = "manual"
-
 # --- Login/2FA timeout and retry settings -- ibcontroller's own policy, not written to
 # --- Gateway/TWS itself (though mfa_timeout mirrors IBKR's real 2FA limit).
 # IBC: LoginDialogDisplayTimeout, default 60
@@ -285,6 +276,13 @@
 # once), "no" clicks "No" (it takes effect when the GUI restarts), "off" leaves it to you.
 # Modes "off", "on", "no". Default "off"
 # socket_port_confirmation = "off"
+
+# "Accept incoming connection" dialog, shown when an API client connects: "accept" clicks
+# "OK" or "Yes", "reject" clicks "No", "manual" leaves it to you. Rejecting everything and
+# listing the trusted IP addresses in the API settings is the more secure setup.
+# Unverified, the text comes from IBC's source and was not seen on a live window.
+# Modes "manual", "accept", "reject" (no true/false). Default "manual"
+# accept_incoming_connections = "manual"
 
 # A Global Configuration setting the catalog lacks. It carries no value: give it one
 # in [ibkr] under its name, or as IBKR_<NAME>. A custom name must not be a catalog name,

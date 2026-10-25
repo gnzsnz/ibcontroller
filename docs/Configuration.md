@@ -52,7 +52,7 @@ startup with a clean error, never silently ignored.
 
 Every config-field also has an environment-variable spelling:
 `IBC_` + the field name upper-cased and in snake-case, e.g.
-`accept_incoming_connections` -> `IBC_ACCEPT_INCOMING_CONNECTIONS`.
+`existing_session_action` -> `IBC_EXISTING_SESSION_ACTION`.
 Environment variables override the config file.
 
 Credentials are never accepted from the config file -- `userid`/`password` in the
@@ -96,24 +96,8 @@ Settings related to TWS/ibgateway.
 | --- | --- | --- | --- |
 | `trading_mode` | `IBC_TRADING_MODE` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
 | `read_only_login` | `IBC_READ_ONLY_LOGIN` | TWS only (Gateway logs a warning and logs in normally). Clicks "Enter Read Only" on the 2FA frame instead of waiting for the push; no effect without 2FA (paper) | `false` |
-| `accept_incoming_connections` | `IBC_ACCEPT_INCOMING_CONNECTIONS` | How to handle incoming API connection dialogs -- see below | `"manual"` |
 | `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | What to do when an existing session is detected -- see below | `"manual"` |
 | `time_zone` | `IBC_TIME_ZONE` | IANA zone name, e.g. `"Europe/Zurich"`, written to `jts.ini`'s `TimeZone` -- see below | auto-detected |
-
-### Accept Incoming Connection
-
-**key:** `accept_incoming_connections`
-**Environment variable:** `IBC_ACCEPT_INCOMING_CONNECTIONS`
-
-If set to 'accept', ibcontroller automatically accepts incoming API connection
-dialogs. If set to 'reject', ibcontroller automatically rejects them. If set to
-'manual', the user must decide whether to accept or reject each incoming API
-connection dialog. The default is 'manual'.
-
-NB: it is recommended to set this to 'reject', and to explicitly configure which
-IP addresses can connect to the API in TWS's API configuration page, as this is
-much more secure (in this case, no incoming API connection dialogs will occur for
-those IP addresses).
 
 ### Existing Session Detected Action
 
@@ -330,14 +314,20 @@ exit-progress dialogs.
 | `auto_restart_confirmation` | on | text "trading platform restart automatically" | clicks "OK" |
 | `password_expiry_warning` | off | title "Password Notice" | clicks "OK" |
 | `blind_trading` | off | "Order Preview" with "blind trading", or the confirmation text | clicks "Override and Transmit", else "Yes" |
+| `accept_incoming_connections` | manual | text "Accept incoming connection" (shown when an untrusted API client connects) | `accept` clicks "OK", else "Yes"; `reject` clicks "No"; `manual` leaves it to you |
 | `socket_port_confirmation` | off | text "apply the new socket port setting immediately" (TWS only, after the port changed) | `on` clicks "Yes" (port applies at once), `no` clicks "No" (applies at the next GUI restart) |
 
 - Matching ignores case. Message text is compared with HTML tags removed and entities
   decoded, so a phrase can be copied as it shows on screen.
 - Candidate buttons are tried in order and the first one present is clicked.
 - An entry in a mode with no steps (`off`) leaves the dialog on screen for you.
-- `password_expiry_warning` and `blind_trading` come from IBC's source and have not been
-  checked against a live window.
+- `password_expiry_warning`, `blind_trading` and `accept_incoming_connections` come from
+  IBC's source and have not been checked against a live window.
+- `accept_incoming_connections` takes the modes `manual`, `accept` and `reject`, not a
+  boolean. It was the `accept_incoming_connections` key of `[ibcontroller]` and
+  `IBC_ACCEPT_INCOMING_CONNECTIONS`; both are gone, set it in `[ibkr]` or as
+  `IBKR_ACCEPT_INCOMING_CONNECTIONS`. Rejecting every connection and listing the trusted
+  IP addresses in the API settings is the more secure setup.
 - Entries are fixed to their default mode for now. Switching an entry and adding your own
   arrive with the `ibcontroller.toml` sections for declarative configuration.
 - A malformed catalog is a startup error (exit 78) that names the file and the entry.
