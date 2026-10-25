@@ -17,9 +17,22 @@ from ibcontroller.control_loop import ShutdownCause
 from ibcontroller.dialogs import DialogChoice, DialogsError
 from ibcontroller.labels import Labels
 from ibcontroller.launcher import LauncherError
+from ibcontroller.logging_setup import stop_logging
 from ibcontroller.settings import SettingChoice, SettingsError
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _restore_ibcontroller_logger():
+    """`run_async` configures the shared `ibcontroller` logger (handlers,
+    `propagate = False`); put it back so later tests' `caplog` still works."""
+    logger = logging.getLogger("ibcontroller")
+    saved = (logger.handlers, logger.propagate, logger.level)
+    yield
+    stop_logging()
+    logger.handlers, logger.propagate, logger.level = saved
+
 
 _BASE_ENV = {
     "IBC_USERID": "papuser",
@@ -251,40 +264,59 @@ async def test_run_async_name_shared_by_dialog_and_setting_is_an_error(
         await _run_capturing_dialogs(tmp_path, monkeypatch, toml)
 
 
+_FILE_SINK = "[ibcontroller]\nlog_sink = 'file'\n"
+
+
+def _log_text(tmp_path) -> str:
+    """The instance log file's text, after the listener thread drained."""
+    stop_logging()
+    (log_file,) = (tmp_path / "log").glob("ibcontroller-*.log")
+    return log_file.read_text()
+
+
 async def test_run_async_warns_about_a_custom_setting_without_a_value(
-    tmp_path, monkeypatch, caplog
+    tmp_path, monkeypatch
 ):
     """A custom `[[setting]]` carries no value of its own, so one never given a
-    value in `[ibkr]` does nothing; the warning names it."""
-    toml = (
+    value in `[ibkr]` does nothing; the warning names it and reaches the log
+    file, which only exists because logging is configured before resolution."""
+    toml = _FILE_SINK + (
         "[[setting]]\nname = 'my_port'\ntree_path = 'API/Settings'\n"
         "action = 'type_text'\nlabel = 'Socket port'\n"
     )
-    with caplog.at_level(logging.WARNING, logger="ibcontroller.main"):
-        await _run_capturing_dialogs(tmp_path, monkeypatch, toml)
-    assert "my_port" in caplog.text
-    assert "IBKR_MY_PORT" in caplog.text
+    await _run_capturing_dialogs(tmp_path, monkeypatch, toml)
+    text = _log_text(tmp_path)
+    assert "my_port" in text
+    assert "IBKR_MY_PORT" in text
     assert captured_settings == []
 
 
 async def test_run_async_no_warning_for_a_custom_setting_with_a_value(
-    tmp_path, monkeypatch, caplog
+    tmp_path, monkeypatch
 ):
-    toml = (
+    toml = _FILE_SINK + (
         "[ibkr]\nmy_port = 4002\n"
         "[[setting]]\nname = 'my_port'\ntree_path = 'API/Settings'\n"
         "action = 'type_text'\nlabel = 'Socket port'\n"
     )
-    with caplog.at_level(logging.WARNING, logger="ibcontroller.main"):
-        await _run_capturing_dialogs(tmp_path, monkeypatch, toml)
-    assert caplog.text == ""
+    await _run_capturing_dialogs(tmp_path, monkeypatch, toml)
+    assert "WARNING" not in _log_text(tmp_path)
 
 
 async def test_run_async_warns_about_ibkr_names_that_match_nothing(
-    tmp_path, monkeypatch, caplog
+    tmp_path, monkeypatch
 ):
-    with caplog.at_level(logging.WARNING, logger="ibcontroller.main"):
-        await _run_capturing_dialogs(
-            tmp_path, monkeypatch, "[ibkr]\nread_only_apii = true\n"
-        )
-    assert "read_only_apii" in caplog.text
+    await _run_capturing_dialogs(
+        tmp_path, monkeypatch, _FILE_SINK + "[ibkr]\nread_only_apii = true\n"
+    )
+    assert "read_only_apii" in _log_text(tmp_path)
+
+
+async def test_run_async_flushes_the_log_when_startup_fails(tmp_path, monkeypatch):
+    """A warning logged just before a startup error must still reach the file:
+    `run_control_loop`, which normally drains the log, never runs."""
+    toml = _FILE_SINK + "[ibkr]\nread_only_apii = true\nblind_trading = 'maybe'\n"
+    with pytest.raises(DialogsError):
+        await _run_capturing_dialogs(tmp_path, monkeypatch, toml)
+    (log_file,) = (tmp_path / "log").glob("ibcontroller-*.log")
+    assert "read_only_apii" in log_file.read_text()

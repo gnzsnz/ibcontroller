@@ -49,7 +49,8 @@ from ibcontroller.dialogs import (
     resolve_dialogs,
 )
 from ibcontroller.labels import load_labels
-from ibcontroller.launcher import LauncherError
+from ibcontroller.launcher import LauncherError, configure_app_logging
+from ibcontroller.logging_setup import stop_logging
 from ibcontroller.settings import (
     SettingCatalog,
     SettingChoice,
@@ -189,15 +190,28 @@ async def run_async(
             cli_overrides=cli_overrides,
         )
     )
-    # after load_config, which loads the dotenv; validates the file's structure
-    declarative = await anyio.to_thread.run_sync(load_declarative_input, config_dir)
-    labels = await anyio.to_thread.run_sync(
-        functools.partial(load_labels, config_dir=config_dir)
-    )
-    dialog_catalog = await anyio.to_thread.run_sync(load_catalog)
-    setting_catalog = await anyio.to_thread.run_sync(load_setting_catalog)
-    dialogs, settings = _resolve_choices(dialog_catalog, setting_catalog, declarative)
-    agent_jar_path = await anyio.to_thread.run_sync(_load_jar_path)
+    # Order matters: config first (it carries the logging settings), logging second,
+    # declarative resolution third, so the warnings it emits reach the log file and
+    # not only stderr. An error inside load_config happens before logging exists and
+    # goes straight to the CLI error path (exit 78).
+    await anyio.to_thread.run_sync(configure_app_logging, config)
+    try:
+        # after load_config, which loads the dotenv; validates the file's structure
+        declarative = await anyio.to_thread.run_sync(load_declarative_input, config_dir)
+        labels = await anyio.to_thread.run_sync(
+            functools.partial(load_labels, config_dir=config_dir)
+        )
+        dialog_catalog = await anyio.to_thread.run_sync(load_catalog)
+        setting_catalog = await anyio.to_thread.run_sync(load_setting_catalog)
+        dialogs, settings = _resolve_choices(
+            dialog_catalog, setting_catalog, declarative
+        )
+        agent_jar_path = await anyio.to_thread.run_sync(_load_jar_path)
+    except BaseException:
+        # run_control_loop is what stops the log listener; on a startup error it
+        # never runs, so drain it here or the last records stay in its queue.
+        stop_logging()
+        raise
 
     loop = asyncio.get_running_loop()
     task = asyncio.ensure_future(

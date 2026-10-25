@@ -912,10 +912,10 @@ async def _abort_launch(
     await asyncio.gather(stdout_drain_task, return_exceptions=True)
 
 
-def _configure_instance_logging(config: Config) -> logging.Logger:
-    """Sets up `ibcontroller` logging, the wire trace and the Gateway/TWS
-    stdout logger for this instance. Creates directories and opens files, so
-    `launch_instance` runs it off the event loop. Returns the stdout logger."""
+def configure_app_logging(config: Config) -> None:
+    """Sets up the `ibcontroller` application log for this instance. Safe to
+    repeat: it replaces the handlers. Creates the log directory and opens the
+    file, so callers run it off the event loop."""
     configure_logging(
         level=config.log_level,
         log_dir=config.log_dir,
@@ -924,6 +924,13 @@ def _configure_instance_logging(config: Config) -> logging.Logger:
         max_bytes=config.log_max_bytes,
         backup_count=config.log_backup_count,
     )
+
+
+def _configure_instance_logging(config: Config) -> logging.Logger:
+    """Sets up `ibcontroller` logging, the wire trace and the Gateway/TWS
+    stdout logger for this instance. Creates directories and opens files, so
+    `launch_instance` runs it off the event loop. Returns the stdout logger."""
+    configure_app_logging(config)
     configure_trace(
         instance=config.instance,
         enabled=config.trace_enabled,
