@@ -52,6 +52,7 @@ from ibcontroller.login import (
 )
 from ibcontroller.recognisers import ExitKind
 from ibcontroller.schedule import ScheduledAction, ScheduledShutdown
+from ibcontroller.settings import SettingsError
 from tests.fakes import FakeProcess
 
 pytestmark = pytest.mark.asyncio
@@ -796,6 +797,7 @@ async def test_run_control_loop_mfa_timeout_propagates_when_action_is_exit(
     [
         (ElementNotFoundError("no component Configure/Nope"), False),
         (TimeoutError("dialog never opened"), False),
+        (SettingsError("settings not committed"), False),
         (RuntimeError("bug"), True),
     ],
 )

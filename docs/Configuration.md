@@ -307,7 +307,10 @@ value is left as it is in Gateway/TWS (leave-unchanged, as IBC's empty value).
 When no setting has a value (the default configuration), the Global Configuration dialog is
 not opened. If one entry fails (a missing control, an agent error), the others are still
 applied and "OK" commits them. If the dialog closes under the program, the step ends without
-clicking "OK".
+clicking "OK". If the dialog is still open a few seconds after "OK", Gateway/TWS rejected a
+value and nothing was committed: an error is logged with the text of the error window (for
+example `The value must be between 1024 and 65535 in Socket port`), the window is left open and
+startup goes on.
 
 Only the TWS Mosaic layout is supported: the dialog is opened with
 `File > Global Configuration...`. On the TWS Classic layout that menu item does not exist, no

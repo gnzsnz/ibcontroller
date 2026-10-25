@@ -1137,11 +1137,12 @@ async def test_apply_declarative_settings_passes_second_factor_timeout(
     monkeypatch.setattr(settings, "open_settings_dialog", _fake_open_settings_dialog)
     monkeypatch.setattr(settings, "apply_settings", _noop)
     monkeypatch.setattr(settings, "close_settings_dialog", _noop)
+    monkeypatch.setattr(settings, "_ensure_dialog_closed", _closed)
 
     session = types.SimpleNamespace(main_window_id="w5", is_logged_in=lambda: False)
     config = _config(mfa_timeout=42.0)
     await apply_declarative_settings(
-        None,  # type: ignore[arg-type]
+        _NO_WINDOWS,  # type: ignore[arg-type]
         LABELS,
         config,
         session,  # type: ignore[arg-type]
@@ -1171,10 +1172,11 @@ async def test_apply_declarative_settings_runs_after_apply_before_close(monkeypa
     monkeypatch.setattr(settings, "open_settings_dialog", _open)
     monkeypatch.setattr(settings, "apply_settings", _apply)
     monkeypatch.setattr(settings, "close_settings_dialog", _close)
+    monkeypatch.setattr(settings, "_ensure_dialog_closed", _closed)
 
     session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
     await apply_declarative_settings(
-        None,  # type: ignore[arg-type]
+        _NO_WINDOWS,  # type: ignore[arg-type]
         LABELS,
         _config(),
         session,  # type: ignore[arg-type]
@@ -1183,6 +1185,102 @@ async def test_apply_declarative_settings_runs_after_apply_before_close(monkeypa
     )
 
     assert order == ["apply", "after:w9", "close"]
+
+
+def _popup_responder(calls: list[dict], texts: dict[str, list[str]]):
+    def responder(request):
+        calls.append(request)
+        if request.get("cmd") == "dump":
+            return {
+                "ok": True,
+                "components": [
+                    {"class": "javax.swing.JLabel", "showing": True, "text": t}
+                    for t in texts.get(request["window_id"], [])
+                ],
+            }
+        return {"ok": True}
+
+    return responder
+
+
+async def _ensure_closed_with(
+    sock_path, event_sock_path, monkeypatch, windows: dict[str, str], texts
+) -> list[dict]:
+    """Runs `_ensure_dialog_closed` for dialog `w9` against a registry holding
+    `windows` (id -> title) and a known set of `{"w1"}`; returns the commands
+    sent."""
+    monkeypatch.setattr(settings, "_DIALOG_CLOSE_TIMEOUT", 0.05)
+    calls: list[dict] = []
+    async with (
+        FakeCommandServer(sock_path, _popup_responder(calls, texts)),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            for window_id, title in windows.items():
+                dispatcher._windows[window_id] = WindowInfo(
+                    class_="c", title=title, window_id=window_id
+                )
+            await settings._ensure_dialog_closed(dispatcher, "w9", {"w1", "w9"})
+        finally:
+            await dispatcher.stop()
+    return calls
+
+
+async def test_ensure_dialog_closed_returns_when_dialog_is_gone(
+    sock_path, event_sock_path, monkeypatch
+):
+    calls = await _ensure_closed_with(
+        sock_path, event_sock_path, monkeypatch, {"w1": "Main"}, {}
+    )
+
+    assert calls == []
+
+
+async def test_ensure_dialog_closed_names_the_rejection_popup(
+    sock_path, event_sock_path, monkeypatch
+):
+    """A rejected "OK" leaves the dialog open and opens an error window; its
+    text goes into the error, and only windows opened after the click are read
+    (the main window is not dumped), with nothing clicked."""
+    texts = {
+        "w1": ["main window text"],
+        "w2": ["Error : The value must be between 1024 and 65535 in Socket port"],
+    }
+    calls: list[dict] = []
+    with pytest.raises(SettingsError, match="between 1024 and 65535") as err:
+        calls = await _ensure_closed_with(
+            sock_path,
+            event_sock_path,
+            monkeypatch,
+            {"w1": "Main", "w9": "Configuration", "w2": "IBKR Gateway"},
+            texts,
+        )
+
+    assert "still open after OK" in str(err.value)
+    assert "main window text" not in str(err.value)
+    assert calls == []
+
+
+async def test_ensure_dialog_closed_without_popup_text(
+    sock_path, event_sock_path, monkeypatch
+):
+    with pytest.raises(SettingsError, match=r"still open after OK$"):
+        await _ensure_closed_with(
+            sock_path,
+            event_sock_path,
+            monkeypatch,
+            {"w9": "Configuration"},
+            {},
+        )
+
+
+_NO_WINDOWS = types.SimpleNamespace(windows={})
+"""Stands in for a dispatcher when the open/apply/close steps are replaced."""
+
+
+async def _closed(*_args, **_kwargs) -> None:
+    return None
 
 
 def _patch_dialog_steps(monkeypatch) -> list[str]:
@@ -1202,6 +1300,7 @@ def _patch_dialog_steps(monkeypatch) -> list[str]:
     monkeypatch.setattr(settings, "open_settings_dialog", _open)
     monkeypatch.setattr(settings, "apply_settings", _apply)
     monkeypatch.setattr(settings, "close_settings_dialog", _close)
+    monkeypatch.setattr(settings, "_ensure_dialog_closed", _closed)
     return order
 
 
@@ -1236,7 +1335,7 @@ async def test_apply_declarative_settings_opens_dialog_for_after_apply_hook(
         order.append("after")
 
     await apply_declarative_settings(
-        None,  # type: ignore[arg-type]
+        _NO_WINDOWS,  # type: ignore[arg-type]
         LABELS,
         _config(),
         session,  # type: ignore[arg-type]
@@ -1245,6 +1344,34 @@ async def test_apply_declarative_settings_opens_dialog_for_after_apply_hook(
     )
 
     assert order == ["open", "apply", "after", "close"]
+
+
+async def test_apply_declarative_settings_does_not_log_applied_when_ok_rejected(
+    monkeypatch, caplog
+):
+    """A dialog that stays open after "OK" raises and the success line is
+    not written."""
+    _patch_dialog_steps(monkeypatch)
+
+    async def _still_open(*_args, **_kwargs):
+        raise SettingsError("settings not committed")
+
+    monkeypatch.setattr(settings, "_ensure_dialog_closed", _still_open)
+    session = types.SimpleNamespace(main_window_id=None, is_logged_in=lambda: False)
+
+    with (
+        caplog.at_level(logging.INFO, logger="ibcontroller.settings"),
+        pytest.raises(SettingsError),
+    ):
+        await apply_declarative_settings(
+            _NO_WINDOWS,  # type: ignore[arg-type]
+            LABELS,
+            _config(),
+            session,  # type: ignore[arg-type]
+            _ONE_CHOICE,
+        )
+
+    assert "declarative settings applied" not in caplog.text
 
 
 def _two_toggle_entries() -> list[SettingChoice]:
@@ -1322,7 +1449,7 @@ async def test_apply_declarative_settings_skips_ok_when_dialog_or_agent_gone(
 
     with pytest.raises(type(error)):
         await apply_declarative_settings(
-            None,  # type: ignore[arg-type]
+            _NO_WINDOWS,  # type: ignore[arg-type]
             LABELS,
             _config(),
             session,  # type: ignore[arg-type]

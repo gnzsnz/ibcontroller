@@ -87,7 +87,11 @@ from ibcontroller.recognisers import (
     watch_for_unprompted_windows,
 )
 from ibcontroller.schedule import ScheduledAction, next_scheduled_shutdown
-from ibcontroller.settings import SettingChoice, apply_declarative_settings
+from ibcontroller.settings import (
+    SettingChoice,
+    SettingsError,
+    apply_declarative_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +227,11 @@ async def _apply_declarative_settings_or_log(
             settings,
             after_apply=_settings_sweep(launched.dispatcher, labels, config),
         )
-    except (AgentClientError, TimeoutError) as exc:  # expected: bad path, no dialog
+    except (
+        AgentClientError,
+        SettingsError,
+        TimeoutError,
+    ) as exc:  # expected: bad path, no dialog, OK rejected
         logger.error(
             "IBController > declarative settings application failed: %s -- "
             "continuing without them",

@@ -44,6 +44,7 @@ import cattrs
 
 from ibcontroller.actions import (
     click,
+    dump,
     expand_tree,
     navigate_menu,
     toggle,
@@ -70,6 +71,10 @@ _NOON_HOUR = 12  # datetime.hour is 0-23; below this is AM, at/above is PM
 _TIME_ACTIONS = frozenset({"auto_restart_time", "auto_logoff_time"})
 _TEXT_ACTIONS = frozenset({"type_text", "type_text_near_label"})
 _ACTIONS = _TIME_ACTIONS | _TEXT_ACTIONS | {"toggle"}
+
+_DIALOG_CLOSE_TIMEOUT = 5.0
+"""Seconds to wait, after the "OK" click, for the Configuration dialog to
+close. It stays open when the application rejects a value."""
 
 
 class SettingsError(ConfigError):
@@ -378,6 +383,42 @@ async def close_settings_dialog(
     await click(dispatcher, labels.ok_button, window_id=window_id)
 
 
+async def _new_window_text(dispatcher: Dispatcher, known: set[str]) -> str:
+    """Text shown by the windows opened since `known`, joined with " | ".
+    Read-only: nothing is clicked. A window that closes meanwhile is skipped."""
+    texts: list[str] = []
+    for window_id in dispatcher.windows.keys() - known:
+        try:
+            components = await dump(dispatcher, window_id=window_id)
+        except AgentError:
+            continue
+        texts.extend(c.text for c in components if c.showing and c.text)
+    return " | ".join(texts)
+
+
+async def _ensure_dialog_closed(
+    dispatcher: Dispatcher, window_id: str | None, known: set[str]
+) -> None:
+    """Raises `SettingsError` when the dialog `window_id` is still open after
+    "OK", naming the text of any window opened since `known` (the rejection
+    popup). `None` (no ID to follow) is not checked."""
+    if window_id is None:
+        return
+    try:
+        await wait_for_window(
+            dispatcher,
+            lambda w: w.window_id == window_id,
+            closed=True,
+            timeout=_DIALOG_CLOSE_TIMEOUT,
+        )
+    except TimeoutError:
+        detail = await _new_window_text(dispatcher, known)
+        raise SettingsError(
+            "settings not committed, the Configuration dialog is still open "
+            f"after OK{': ' + detail if detail else ''}"
+        ) from None
+
+
 async def _apply_time(
     dispatcher: Dispatcher,
     labels: Labels,
@@ -491,7 +532,9 @@ async def apply_declarative_settings(
 
     The "OK" click always runs, committing the entries applied so far, except
     when the dialog or the agent is gone (`WindowGoneError`/`ProtocolError`),
-    which is re-raised without it.
+    which is re-raised without it. When the dialog is still open after the
+    click the application rejected a value: `SettingsError` is raised with the
+    text of the popup, and the popup is left for the user.
 
     Returns without opening the dialog when there are no choices and no
     `after_apply` hook."""
@@ -506,6 +549,7 @@ async def apply_declarative_settings(
         timeout=config.mfa_timeout,
         main_window_id=session.main_window_id,
     )
+    known = set(dispatcher.windows)  # popups opened after this are the OK's reply
     dialog_gone = False
     try:
         await apply_settings(dispatcher, labels, choices, window_id=window_id)
@@ -519,4 +563,5 @@ async def apply_declarative_settings(
             await close_settings_dialog(
                 dispatcher, labels.settings, window_id=window_id
             )
+    await _ensure_dialog_closed(dispatcher, window_id, known)
     logger.info("IBController > declarative settings applied (%d)", len(choices))
