@@ -284,6 +284,13 @@
 # Modes "manual", "accept", "reject" (no true/false). Default "manual"
 # accept_incoming_connections = "manual"
 
+# Cryptocurrency order confirmation, shown when a cryptocurrency order is placed:
+# "transmit" clicks "Transmit" and places the order with no check by you, "cancel" clicks
+# "Cancel" and drops it, "manual" leaves it to you.
+# Unverified, the text comes from IBC's source and was not seen on a live window.
+# Modes "manual", "transmit", "cancel" (no true/false). Default "manual"
+# crypto_order_confirmation = "manual"
+
 # A Global Configuration setting the catalog lacks. It carries no value: give it one
 # in [ibkr] under its name, or as IBKR_<NAME>. A custom name must not be a catalog name,
 # nor the name of a dialog. tree_path: the section of the Global Configuration tree.

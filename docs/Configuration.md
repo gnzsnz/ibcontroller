@@ -315,14 +315,17 @@ exit-progress dialogs.
 | `password_expiry_warning` | off | title "Password Notice" | clicks "OK" |
 | `blind_trading` | off | "Order Preview" with "blind trading", or the confirmation text | clicks "Override and Transmit", else "Yes" |
 | `accept_incoming_connections` | manual | text "Accept incoming connection" (shown when an untrusted API client connects) | `accept` clicks "OK", else "Yes"; `reject` clicks "No"; `manual` leaves it to you |
+| `crypto_order_confirmation` | manual | title "Cryptocurrency order confirmation" (shown when a cryptocurrency order is placed) | `transmit` clicks "Transmit" (the order is placed with no check by you); `cancel` clicks "Cancel" (the order is dropped); `manual` leaves it to you |
 | `socket_port_confirmation` | off | text "apply the new socket port setting immediately" (TWS only, after the port changed) | `on` clicks "Yes" (port applies at once), `no` clicks "No" (applies at the next GUI restart) |
 
 - Matching ignores case. Message text is compared with HTML tags removed and entities
   decoded, so a phrase can be copied as it shows on screen.
 - Candidate buttons are tried in order and the first one present is clicked.
 - An entry in a mode with no steps (`off`) leaves the dialog on screen for you.
-- `password_expiry_warning`, `blind_trading` and `accept_incoming_connections` come from
-  IBC's source and have not been checked against a live window.
+- `password_expiry_warning`, `blind_trading`, `accept_incoming_connections` and
+  `crypto_order_confirmation` come from IBC's source and have not been checked against a live window.
+- `crypto_order_confirmation` takes the modes `manual`, `transmit` and `cancel`, not a
+  boolean. `transmit` places every cryptocurrency order without asking you.
 - `accept_incoming_connections` takes the modes `manual`, `accept` and `reject`, not a
   boolean. It was the `accept_incoming_connections` key of `[ibcontroller]` and
   `IBC_ACCEPT_INCOMING_CONNECTIONS`; both are gone, set it in `[ibkr]` or as

@@ -993,6 +993,48 @@ async def test_accept_incoming_connection_reject_clicks_no(sock_path, event_sock
     assert seen == ["No"]
 
 
+def _crypto_recognizer(mode: str) -> DialogRecognizer:
+    entry = next(e for e in CATALOG.dialog if e.name == "crypto_order_confirmation")
+    return DialogRecognizer(entry, mode)
+
+
+async def test_crypto_order_confirmation_recognises_by_title():
+    event = _event("Cryptocurrency Order Confirmation")
+    assert _crypto_recognizer("transmit").recognises(event, []) is True
+    assert _crypto_recognizer("cancel").recognises(event, []) is True
+    assert (
+        _crypto_recognizer("transmit").recognises(_event("IBKR Gateway"), []) is False
+    )
+
+
+async def test_crypto_order_confirmation_manual_leaves_the_dialog_unrecognised():
+    event = _event("Cryptocurrency order confirmation")
+    assert _crypto_recognizer("manual").recognises(event, []) is False
+
+
+@pytest.mark.parametrize(
+    ("mode", "button"), [("transmit", "Transmit"), ("cancel", "Cancel")]
+)
+async def test_crypto_order_confirmation_clicks_the_mode_button(
+    sock_path, event_sock_path, mode, button
+):
+    seen = []
+    async with (
+        FakeCommandServer(
+            sock_path, lambda req: (seen.append(req["target"]), {"ok": True})[1]
+        ),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            await _crypto_recognizer(mode).handle(
+                _event("Cryptocurrency order confirmation"), [], dispatcher
+            )
+        finally:
+            await dispatcher.stop()
+    assert seen == [button]
+
+
 async def test_registry_dispatch_first_match_wins(sock_path, event_sock_path):
     """Two recognisers that would both match -- only the first in registry order
     actually runs."""

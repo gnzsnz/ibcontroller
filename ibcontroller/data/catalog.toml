@@ -179,3 +179,14 @@ match = [ { text = "Accept incoming connection" } ]
 manual = []
 accept = [ { click = ["OK", "Yes"] } ]
 reject = [ { click = ["No"] } ]
+
+# Unverified (IBC: CryptoOrderConfirmationDialogHandler). Shown when a cryptocurrency
+# order is placed. "transmit" places the order with no human check; "cancel" drops it.
+[[dialog]]
+name = "crypto_order_confirmation"
+default = "manual"
+match = [ { title = "Cryptocurrency order confirmation" } ]
+[dialog.modes]
+manual = []
+transmit = [ { click = ["Transmit"] } ]
+cancel = [ { click = ["Cancel"] } ]

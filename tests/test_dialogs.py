@@ -290,6 +290,7 @@ def test_bundled_catalog_loads_with_the_expected_entries():
         "blind_trading",
         "socket_port_confirmation",
         "accept_incoming_connections",
+        "crypto_order_confirmation",
     ]
     assert {n: e.default for n, e in entries.items()} == {
         "non_brokerage_account": "on",
@@ -298,6 +299,7 @@ def test_bundled_catalog_loads_with_the_expected_entries():
         "blind_trading": "off",
         "socket_port_confirmation": "off",  # nosec B105
         "accept_incoming_connections": "manual",
+        "crypto_order_confirmation": "manual",
     }
 
 
@@ -347,10 +349,24 @@ def test_bundled_accept_incoming_connections_has_manual_accept_and_reject_modes(
     assert entry.default == "manual"
 
 
+def test_bundled_crypto_order_confirmation_has_transmit_and_cancel_modes():
+    entry = {e.name: e for e in load_catalog().dialog}["crypto_order_confirmation"]
+    assert entry.match == [MatchGroup(title="Cryptocurrency order confirmation")]
+    assert entry.modes == {
+        "manual": [],
+        "transmit": [ClickStep(["Transmit"])],
+        "cancel": [ClickStep(["Cancel"])],
+    }
+    assert entry.default == "manual"
+
+
+_MODE_ENTRIES = {"accept_incoming_connections", "crypto_order_confirmation"}
+
+
 def test_every_bundled_entry_has_an_off_and_an_on_mode():
     for entry in load_catalog().dialog:
-        if entry.name == "accept_incoming_connections":
-            continue  # modes are manual/accept/reject, so no boolean shorthand
+        if entry.name in _MODE_ENTRIES:
+            continue  # named modes, so no boolean shorthand
         assert {"off", "on"} <= set(entry.modes), entry.name
 
 
@@ -477,6 +493,14 @@ def test_resolve_accept_incoming_connections_takes_modes_and_rejects_a_boolean()
     assert _by_name(_resolve())["accept_incoming_connections"].mode == "manual"
     with pytest.raises(DialogsError, match=r"accept_incoming_connections.*boolean"):
         _resolve({"accept_incoming_connections": True})
+
+
+def test_resolve_crypto_order_confirmation_takes_modes_and_rejects_a_boolean():
+    choices = _by_name(_resolve({"crypto_order_confirmation": "transmit"}))
+    assert choices["crypto_order_confirmation"].mode == "transmit"
+    assert _by_name(_resolve())["crypto_order_confirmation"].mode == "manual"
+    with pytest.raises(DialogsError, match=r"crypto_order_confirmation.*boolean"):
+        _resolve({"crypto_order_confirmation": False})
 
 
 def test_resolve_custom_entry_with_catalog_name_is_rejected():
