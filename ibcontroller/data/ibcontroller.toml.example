@@ -233,8 +233,9 @@
 # master_api_client_id = 0
 
 # IBC: SendMarketDataInLotsForUSstocks. API/Settings, "Send market data in lots for US
-# stocks for dual-mode API clients": true or false. Unverified: ticking the box may open
-# a confirmation window that ibcontroller does not handle yet.
+# stocks for dual-mode API clients": true or false. Do not set true yet: ticking the box
+# opens a confirmation window that ibcontroller does not handle, and the settings step
+# blocks on it. false is safe.
 # Default: not set
 # send_market_data_in_lots_us_stocks = false
 
@@ -242,6 +243,9 @@
 # it. IBC: BypassOrderPrecautions, BypassBondWarning, BypassNegativeYieldToWorstConfirmation,
 # BypassCalledBondWarning, BypassSameActionPairTradeWarning, BypassPriceBasedVolatilityWarning,
 # BypassRedirectOrderWarning, BypassNoOverfillProtection, BypassRouteMarketableToBBOWarning.
+# Do not set api_precautions_bypass_route_marketable_to_bbo to true yet: it opens a
+# confirmation window that ibcontroller does not handle, and the settings step blocks on
+# it. false is safe.
 # Default: not set
 # api_precautions_bypass_order_precautions = true
 # api_precautions_bypass_bond_warning = true

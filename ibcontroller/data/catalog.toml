@@ -55,7 +55,8 @@ action = "type_text_near_label"
 label_ref = "master_api_client_id"
 field_index = 1
 
-# Unverified: ticking the box may open a confirmation modal that is not captured yet.
+# Ticking the box opens a confirmation modal that is not handled yet and blocks the
+# settings step; unticking is safe.
 [[setting]]
 name = "send_market_data_in_lots_us_stocks"
 tree_path = "API/Settings"
@@ -110,6 +111,8 @@ tree_path = "API/Precautions"
 action = "toggle"
 label_ref = "api_precautions_bypass_no_overfill_protection"
 
+# Setting true opens a confirmation modal that is not handled yet and blocks the settings
+# step; false is safe.
 [[setting]]
 name = "api_precautions_bypass_route_marketable_to_bbo"
 tree_path = "API/Precautions"

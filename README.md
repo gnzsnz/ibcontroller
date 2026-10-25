@@ -331,7 +331,7 @@ The value is checked at startup, a wrong one stops the run with an error naming 
 | `read_only_api` | `true`/`false` | API/Settings "Read-Only API". |
 | `socket_port` | number or text | API/Settings "Socket port". IBKR defaults: 7496 TWS live, 7497 TWS paper, 4001 Gateway live, 4002 Gateway paper. On TWS, changing it opens a confirmation dialog after OK, see `socket_port_confirmation`. |
 | `master_api_client_id` | number or text | API/Settings "Master API client ID". |
-| `send_market_data_in_lots_us_stocks` | `true`/`false` | API/Settings, lots for US stocks. Unverified: a confirmation window may open. |
+| `send_market_data_in_lots_us_stocks` | `true`/`false` | API/Settings, lots for US stocks. Do not set `true` yet: it opens a confirmation window that is not handled and blocks the settings step. |
 | `api_precautions_bypass_order_precautions` | `true`/`false` | API/Precautions: bypass the order precautions for API orders. |
 | `api_precautions_bypass_bond_warning` | `true`/`false` | API/Precautions: bypass the bond warning for API orders. |
 | `api_precautions_bypass_negative_yield_to_worst` | `true`/`false` | API/Precautions: bypass the negative yield to worst confirmation for API orders. |
@@ -340,7 +340,7 @@ The value is checked at startup, a wrong one stops the run with an error naming 
 | `api_precautions_bypass_price_based_volatility` | `true`/`false` | API/Precautions: bypass the price-based volatility risk warning for API orders. |
 | `api_precautions_bypass_redirect_order_warning` | `true`/`false` | API/Precautions: bypass the redirect order warning (stock orders) for API orders. |
 | `api_precautions_bypass_no_overfill_protection` | `true`/`false` | API/Precautions: bypass the no overfill protection precaution for API orders. |
-| `api_precautions_bypass_route_marketable_to_bbo` | `true`/`false` | API/Precautions: bypass the route marketable to BBO warning for API orders. |
+| `api_precautions_bypass_route_marketable_to_bbo` | `true`/`false` | API/Precautions: bypass the route marketable to BBO warning for API orders. Do not set `true` yet: it opens a confirmation window that is not handled and blocks the settings step. |
 
 ```toml
 [ibkr]
