@@ -76,7 +76,7 @@ from ibcontroller.agent_client import ElementNotFoundError, WindowGoneError
 from ibcontroller.config import Config, Program, TradingMode
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.errors import IBControllerError, TransientError
-from ibcontroller.labels import Labels
+from ibcontroller.labels import Labels, label_matches
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +233,7 @@ class LoginManager:
         try:
             login_frame = await wait_for_window(
                 self._dispatcher,
-                lambda w: w.title in titles,
+                lambda w: any(label_matches(t, w.title) for t in titles),
                 timeout=login_timeout,
             )
         except TimeoutError as exc:
@@ -395,7 +395,8 @@ class LoginManager:
                 logger.warning("IBController > 2FA frame poll stopped: %s", exc)
                 return
             if self.state is LoginState.LOGGING_IN and any(
-                label in (c.accessible_name, c.text) for c in components
+                label_matches(label, c.accessible_name) or label_matches(label, c.text)
+                for c in components
             ):
                 self.state = LoginState.MFA_IN_PROGRESS
                 logger.info("IBController > second factor authentication in progress")
@@ -452,9 +453,8 @@ class LoginManager:
                             event = await anext(sub)
                     except TimeoutError as exc:
                         raise self._exit_interval_error() from exc
-                    if (
-                        event.kind == "window_closed"
-                        and event.window.title == mfa_title
+                    if event.kind == "window_closed" and label_matches(
+                        mfa_title, event.window.title
                     ):
                         self.state = LoginState.MFA_IN_PROGRESS
                         interval = await self._after_mfa_closed()
@@ -473,7 +473,7 @@ class LoginManager:
                         continue
                     seen.add(window.window_id)
 
-                if window.title == mfa_title:
+                if label_matches(mfa_title, window.title):
                     self.state = LoginState.MFA_IN_PROGRESS
                     watchdog = None
                     logger.info(
@@ -532,9 +532,13 @@ class LoginManager:
                         event = await anext(sub)
                 except TimeoutError as exc:
                     raise self._exit_interval_error() from exc
-                if event.kind == "window_closed" and event.window.title == splash_title:
+                if event.kind == "window_closed" and label_matches(
+                    splash_title, event.window.title
+                ):
                     break
-                if event.kind == "window_opened" and event.window.title == mfa_title:
+                if event.kind == "window_opened" and label_matches(
+                    mfa_title, event.window.title
+                ):
                     self.state = LoginState.MFA_IN_PROGRESS
                     watchdog = None
                     logger.info(
@@ -543,7 +547,7 @@ class LoginManager:
                     # No cap: IB closes the dialog itself, and when decides the branch
                     await sub.wait(
                         "window_closed",
-                        lambda e: e.window.title == mfa_title,
+                        lambda e: label_matches(mfa_title, e.window.title),
                         timeout=None,
                     )
                     interval = await self._after_mfa_closed()
@@ -564,7 +568,7 @@ class LoginManager:
         for window in list(self._dispatcher.windows.values()):
             if (
                 window.window_id is None
-                or window.title not in titles
+                or not any(label_matches(t, window.title) for t in titles)
                 or window.class_ == self._login_frame_class
             ):
                 continue

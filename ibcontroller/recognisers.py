@@ -19,7 +19,6 @@ events and routing each one through `handle_window_opened`.
 
 from __future__ import annotations
 
-import html
 import logging
 import re
 from collections.abc import Callable, Sequence
@@ -54,6 +53,9 @@ from ibcontroller.labels import (
     TooManyFailedLoginAttemptsLabels,
     TradingLoginHandoffLabels,
     UnrecognizedCredentialsLabels,
+    strip_html,
+    text_matches,
+    text_starts_with,
 )
 from ibcontroller.login import (
     CredentialsRejectedError,
@@ -69,8 +71,6 @@ _WAIT_PATTERN = re.compile(
     r"Please wait (?:(\d+) minutes? )?(?:& )?(?:(\d+) seconds?)?"
 )
 
-_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
-
 
 def _parse_wait_seconds(message: str) -> float:
     """Parses a wait duration out of a "too many failed login attempts"
@@ -80,23 +80,6 @@ def _parse_wait_seconds(message: str) -> float:
     minutes = int(match.group(1)) if match and match.group(1) else 0
     seconds = int(match.group(2)) if match and match.group(2) else 0
     return float(minutes * 60 + seconds + 3)
-
-
-def _strip_html(text: str) -> str:
-    """Strips HTML tags from an IB `JTextPane` message (always HTML, e.g.
-    `<html>...<br><br>...</html>`), collapsing the whitespace left behind."""
-    return re.sub(r"\s+", " ", _HTML_TAG_PATTERN.sub(" ", text)).strip()
-
-
-def _text_matches(match_text: str, value: str) -> bool:
-    """Case-insensitive. Raw match first; then HTML-stripped, since IB message
-    panes are HTML and a phrase copied from the screen can span a tag or hold
-    an entity (`&quot;`)."""
-    needle = match_text.casefold()
-    return (
-        needle in value.casefold()
-        or needle in html.unescape(_strip_html(value)).casefold()
-    )
 
 
 async def _dismiss(dispatcher: Dispatcher, label: str, window_id: str | None) -> None:
@@ -160,16 +143,15 @@ class DialogRecognizer:
     def _group_matches(
         group: MatchGroup, event: WindowEvent, components: list[Component]
     ) -> bool:
-        if (
-            group.title is not None
-            and group.title.casefold() not in (event.window.title or "").casefold()
+        if group.title is not None and not text_matches(
+            group.title, event.window.title or ""
         ):
             return False
         values = [
             v for c in components for v in (c.accessible_name, c.text) if v is not None
         ]
         return all(
-            any(_text_matches(wanted, v) for v in values)
+            any(text_matches(wanted, v) for v in values)
             for wanted in (group.text, group.text_also)
             if wanted is not None
         )
@@ -225,9 +207,11 @@ class TooManyFailedLoginAttemptsRecognizer:
     def _matched_text(self, components: list[Component]) -> str | None:
         prefix = self._labels.message_prefix
         for c in components:
-            if c.text is not None and prefix in c.text:
+            if c.text is not None and text_matches(prefix, c.text):
                 return c.text
-            if c.accessible_name is not None and prefix in c.accessible_name:
+            if c.accessible_name is not None and text_matches(
+                prefix, c.accessible_name
+            ):
                 return c.accessible_name
         return None
 
@@ -267,7 +251,7 @@ class LoginFailedRecognizer:
         self._labels = labels
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -291,7 +275,7 @@ class LoginErrorRecognizer:
         self._labels = labels
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -303,7 +287,7 @@ class LoginErrorRecognizer:
         for c in components:
             raw = c.text if c.text is not None else c.accessible_name
             if raw is not None:
-                texts.append(_strip_html(raw))
+                texts.append(strip_html(raw))
         logger.warning("IBController > login error: %s", " | ".join(texts))
         await _dismiss(dispatcher, self._labels.dismiss_button, event.window.window_id)
         raise TransientLoginError("login error dialog; server disconnected")
@@ -320,7 +304,7 @@ class UnrecognizedCredentialsRecognizer:
         self._labels = labels
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -355,13 +339,13 @@ class GatewayConnectionFailedRecognizer:
             raw = c.text if c.text is not None else c.accessible_name
             if raw is None:
                 continue
-            stripped = _strip_html(raw)
-            if stripped.startswith(self._labels.message_prefix):
+            stripped = strip_html(raw)
+            if text_starts_with(self._labels.message_prefix, stripped):
                 return stripped
         return None
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        if self._labels.title not in (event.window.title or ""):
+        if not text_matches(self._labels.title, event.window.title or ""):
             return False
         return self._stripped_text(components) is not None
 
@@ -374,7 +358,7 @@ class GatewayConnectionFailedRecognizer:
         text = self._stripped_text(components) or ""
         logger.warning("IBController > %s", text)
         await _dismiss(dispatcher, self._labels.dismiss_button, event.window.window_id)
-        if any(reason in text for reason in self._labels.known_reasons):
+        if any(text_matches(reason, text) for reason in self._labels.known_reasons):
             raise CredentialsRejectedError(f"gateway connection failed: {text}")
         raise TransientLoginError(f"gateway connection failed: {text}")
 
@@ -390,9 +374,8 @@ class NotCurrentlyAvailableRecognizer:
         self._labels = labels
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        marker = self._labels.message_marker.lower()
         return any(
-            marker in _strip_html(raw).lower()
+            text_matches(self._labels.message_marker, raw)
             for c in components
             if (raw := c.text if c.text is not None else c.accessible_name) is not None
         )
@@ -450,7 +433,7 @@ class ExistingSessionRecognizer:
         self._attempted = False
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -524,7 +507,7 @@ class ReloginRecognizer:
         self._action = action
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -566,7 +549,7 @@ class TradingLoginHandoffRecognizer:
         self._action = action
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -613,9 +596,9 @@ class ExitProgressRecognizer:
 
     def kind_of(self, event: WindowEvent) -> ExitKind | None:
         title = event.window.title or ""
-        if self._labels.shutdown_progress_title in title:
+        if text_matches(self._labels.shutdown_progress_title, title):
             return ExitKind.SHUTDOWN
-        if self._labels.restart_progress_title in title:
+        if text_matches(self._labels.restart_progress_title, title):
             return ExitKind.RESTART
         return None
 

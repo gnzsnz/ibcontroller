@@ -60,7 +60,7 @@ from ibcontroller.agent_client import (
 )
 from ibcontroller.config import ENV_FALSE, ENV_TRUE, Config, ConfigError, Program
 from ibcontroller.dispatch import Dispatcher
-from ibcontroller.labels import Labels, SettingsLabels
+from ibcontroller.labels import Labels, SettingsLabels, text_matches
 
 if TYPE_CHECKING:
     from ibcontroller.login import SessionState
@@ -298,7 +298,7 @@ async def _await_menu_ready(
     waits for its `window_closed`."""
     await wait_for_window(
         dispatcher,
-        lambda w: labels.splash_title_marker in (w.title or ""),
+        lambda w: text_matches(labels.splash_title_marker, w.title or ""),
         closed=True,
         timeout=timeout,
     )
@@ -360,7 +360,7 @@ async def open_settings_dialog(
         )
         event = await sub.wait(
             "window_opened",
-            lambda e: labels.dialog_title_marker in (e.window.title or ""),
+            lambda e: text_matches(labels.dialog_title_marker, e.window.title or ""),
             timeout=timeout,
         )
     return event.window.window_id

@@ -1650,3 +1650,58 @@ def test_resolve_settings_rejects_a_custom_name_of_a_catalog_entry():
     custom = parse_custom_settings([_toggle()], source="x")
     with pytest.raises(SettingsError, match="read_only_api"):
         _resolve({}, custom=custom)
+
+
+async def test_settings_waits_ignore_title_case(sock_path, event_sock_path):
+    """The splash wait and the dialog wait both match their title ignoring case."""
+    calls: list[dict] = []
+    responder = _tracking_responder(calls)
+    async with (
+        FakeCommandServer(sock_path, responder),
+        FakeEventServer(
+            event_sock_path,
+            [
+                {
+                    "type": "snapshot",
+                    "windows": [
+                        {
+                            "class": "some.splash.class",
+                            "title": "STARTING APPLICATION...",
+                            "window_id": "w1",
+                        }
+                    ],
+                }
+            ],
+        ),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            while "w1" not in dispatcher.windows:
+                await asyncio.sleep(0.01)
+            task = asyncio.ensure_future(
+                open_settings_dialog(dispatcher, LABELS.settings, timeout=5.0)
+            )
+            await asyncio.sleep(0.05)
+            assert not any(c.get("cmd") == "navigate_menu" for c in calls)
+            dispatcher._window_events.emit(
+                _window_event(
+                    1,
+                    "window_closed",
+                    "some.splash.class",
+                    "STARTING APPLICATION...",
+                    "w1",
+                )
+            )
+            await asyncio.sleep(0.05)
+            dispatcher._window_events.emit(
+                _window_event(
+                    2,
+                    "window_opened",
+                    "feature.configure.ai",
+                    "DU123 TRADER WORKSTATION CONFIGURATION (SIMULATED TRADING)",
+                    window_id="w9",
+                )
+            )
+            assert await asyncio.wait_for(task, timeout=5.0) == "w9"
+        finally:
+            await dispatcher.stop()

@@ -8,7 +8,15 @@ import logging
 import pytest
 
 from ibcontroller.config import ConfigError
-from ibcontroller.labels import Labels, LabelsError, load_labels
+from ibcontroller.labels import (
+    Labels,
+    LabelsError,
+    label_matches,
+    load_labels,
+    strip_html,
+    text_matches,
+    text_starts_with,
+)
 
 
 def test_bundled_default_loads_and_structures():
@@ -169,3 +177,41 @@ def test_unknown_keys_are_logged_and_ignored(tmp_path, caplog):
 def test_settings_sweep_paths_are_in_the_bundled_file():
     paths = load_labels().settings.sweep_paths
     assert {"API/Settings", "Lock and Exit", "Orders/Smart Routing"} <= set(paths)
+
+
+def teststrip_html_collapses_tags_and_whitespace():
+    raw = (
+        "<html>Connection to server failed:  <br><br>  The specified user has "
+        "multiple Paper Trading users associated with it.<br><br>Please log on "
+        "using one of the Paper Trading users and corresponding password.</html>"
+    )
+    stripped = strip_html(raw)
+    assert stripped.startswith("Connection to server failed:")
+    assert "multiple Paper Trading users associated with it" in stripped
+    assert "<" not in stripped
+
+
+def test_text_matches_ignores_case_and_html():
+    assert text_matches("login failed", "Some LOGIN FAILED here") is True
+    assert text_matches("failed: the user", "<html>Failed:<br>The user</html>") is True
+    assert text_matches('say "hi"', "say &quot;hi&quot;") is True
+    assert text_matches("absent", "<html>Nothing</html>") is False
+
+
+def test_label_matches_ignores_case_and_surrounding_whitespace():
+    assert label_matches("Log In", "log in") is True
+    assert label_matches("OK", " ok ") is True
+
+
+def test_label_matches_is_whole_label_and_null_safe():
+    assert label_matches("Log In", "Paper Log In") is False
+    assert label_matches("OK", "Book") is False
+    assert label_matches("OK", None) is False
+
+
+def test_text_starts_with_is_anchored_ignores_case_and_html():
+    prefix = "Connection to server failed:"
+    assert text_starts_with(prefix, "<html>CONNECTION TO SERVER FAILED: x</html>")
+    assert not text_starts_with(
+        prefix, "<html>Oops connection to server failed:</html>"
+    )

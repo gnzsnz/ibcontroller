@@ -10,12 +10,19 @@ field at a time (`{"login": {"gateway_titles": [...]}}` overrides just that
 one field, leaving every other label and domain untouched), not a full
 replacement. Dialog handling that needs no code (match a window, click a
 button) is not here: it lives in the bundled dialog catalog (`dialogs.py`).
+
+The module also holds the pure matching helpers every domain shares, so all
+comparisons of UI text ignore case the same way: `text_matches` (substring),
+`text_starts_with` (anchored prefix), `label_matches` (whole label) and
+`strip_html`.
 """
 
 from __future__ import annotations
 
+import html
 import json
 import logging
+import re
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
@@ -27,6 +34,39 @@ import cattrs
 from ibcontroller.config import ConfigError
 
 logger = logging.getLogger(__name__)
+
+_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+
+
+def strip_html(text: str) -> str:
+    """Strips HTML tags from an IB `JTextPane` message (always HTML, e.g.
+    `<html>...<br><br>...</html>`), collapsing the whitespace left behind."""
+    return re.sub(r"\s+", " ", _HTML_TAG_PATTERN.sub(" ", text)).strip()
+
+
+def text_matches(match_text: str, value: str) -> bool:
+    """Case-insensitive substring test. Raw match first; then HTML-stripped,
+    since IB message panes are HTML and a phrase copied from the screen can
+    span a tag or hold an entity (`&quot;`)."""
+    needle = match_text.casefold()
+    return (
+        needle in value.casefold()
+        or needle in html.unescape(strip_html(value)).casefold()
+    )
+
+
+def label_matches(target: str, actual: str | None) -> bool:
+    """Case-insensitive whole-label test, ignoring surrounding whitespace.
+    A missing (`None`) label never matches."""
+    if actual is None:
+        return False
+    return target.strip().casefold() == actual.strip().casefold()
+
+
+def text_starts_with(prefix: str, value: str) -> bool:
+    """Case-insensitive anchored prefix test on the HTML-stripped `value`."""
+    return strip_html(value).casefold().startswith(prefix.casefold())
+
 
 converter = cattrs.Converter()
 

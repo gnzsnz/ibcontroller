@@ -56,7 +56,6 @@ from ibcontroller.recognisers import (
     TradingLoginHandoffRecognizer,
     UnrecognizedCredentialsRecognizer,
     _parse_wait_seconds,
-    _strip_html,
     build_default_registry,
     handle_window_opened,
     is_credential_entry,
@@ -498,18 +497,6 @@ async def test_login_failed_handle_dismisses_then_raises(sock_path, event_sock_p
                 await recognizer.handle(_event("Login failed"), [], dispatcher)
         finally:
             await dispatcher.stop()
-
-
-def test_strip_html_collapses_tags_and_whitespace():
-    raw = (
-        "<html>Connection to server failed:  <br><br>  The specified user has "
-        "multiple Paper Trading users associated with it.<br><br>Please log on "
-        "using one of the Paper Trading users and corresponding password.</html>"
-    )
-    stripped = _strip_html(raw)
-    assert stripped.startswith("Connection to server failed:")
-    assert "multiple Paper Trading users associated with it" in stripped
-    assert "<" not in stripped
 
 
 async def test_login_error_recognises_by_title():
@@ -1802,3 +1789,88 @@ def test_exit_progress_recognizer_classifies_by_title():
     assert recognizer.kind_of(_event("Something else")) is None
     assert recognizer.recognises(_event("Restart in progress"), [])
     assert not recognizer.recognises(_event("Something else"), [])
+
+
+@pytest.mark.parametrize(
+    ("recognizer", "title"),
+    [
+        (LoginFailedRecognizer(LABELS.login_failed), LABELS.login_failed.title),
+        (LoginErrorRecognizer(LABELS.login_error), LABELS.login_error.title),
+        (
+            UnrecognizedCredentialsRecognizer(LABELS.unrecognized_credentials),
+            LABELS.unrecognized_credentials.title,
+        ),
+        (
+            ExistingSessionRecognizer(
+                LABELS.existing_session, ExistingSessionAction.MANUAL, lambda: False
+            ),
+            LABELS.existing_session.title,
+        ),
+        (
+            ReloginRecognizer(LABELS.relogin, ExistingSessionAction.PRIMARY),
+            LABELS.relogin.title,
+        ),
+        (
+            TradingLoginHandoffRecognizer(
+                LABELS.trading_login_handoff, ExistingSessionAction.PRIMARY
+            ),
+            LABELS.trading_login_handoff.title,
+        ),
+    ],
+)
+def test_title_recognisers_ignore_title_case(recognizer, title):
+    assert recognizer.recognises(_event(title.upper()), []) is True
+    assert recognizer.recognises(_event(title.lower()), []) is True
+
+
+def test_gateway_connection_failed_ignores_title_and_prefix_case():
+    recognizer = GatewayConnectionFailedRecognizer(LABELS.gateway_connection_failed)
+    prefix = LABELS.gateway_connection_failed.message_prefix
+    title = LABELS.gateway_connection_failed.title
+    anchored = [_component(text=f"<html>{prefix.upper()} some reason</html>")]
+    mid_text = [_component(text=f"<html>Hello {prefix.upper()} x</html>")]
+
+    assert recognizer.recognises(_event(title.upper()), anchored) is True
+    assert recognizer.recognises(_event(title), mid_text) is False
+
+
+async def test_gateway_connection_failed_known_reason_ignores_case(
+    sock_path, event_sock_path
+):
+    async with (
+        FakeCommandServer(sock_path, lambda _req: {"ok": True}),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        try:
+            recognizer = GatewayConnectionFailedRecognizer(
+                LABELS.gateway_connection_failed
+            )
+            reason = LABELS.gateway_connection_failed.known_reasons[0]
+            prefix = LABELS.gateway_connection_failed.message_prefix
+            components = [_component(text=f"<html>{prefix} {reason.upper()}</html>")]
+            with pytest.raises(CredentialsRejectedError):
+                await recognizer.handle(_event("Gateway"), components, dispatcher)
+        finally:
+            await dispatcher.stop()
+
+
+def test_too_many_failed_login_attempts_ignores_prefix_case():
+    recognizer = TooManyFailedLoginAttemptsRecognizer(
+        LABELS.too_many_failed_login_attempts,
+        relogin_enabled=True,
+        schedule_retry=lambda _wait: None,
+    )
+    prefix = LABELS.too_many_failed_login_attempts.message_prefix.upper()
+    event = _event("Warning")
+    assert recognizer.recognises(event, [_component(text=f"{prefix} x")]) is True
+    assert (
+        recognizer.recognises(event, [_component(accessible_name=f"{prefix} x")])
+        is True
+    )
+
+
+def test_exit_progress_recognizer_ignores_title_case():
+    recognizer = ExitProgressRecognizer(LABELS.shutdown)
+    assert recognizer.kind_of(_event("SHUTDOWN PROGRESS")) is ExitKind.SHUTDOWN
+    assert recognizer.kind_of(_event("restart in progress")) is ExitKind.RESTART

@@ -1614,10 +1614,8 @@ async def test_tws_poll_ignores_the_login_heading(
     sock_path, event_sock_path, monkeypatch
 ):
     components = [
-        {
-            "class": "javax.swing.JLabel",
-            "accessible_name": "Second Factor Authentication",
-        }
+        {"class": "javax.swing.JLabel", "accessible_name": "LOGIN"},
+        {"accessible_name": "Login"},
     ]
     _, _, mid_state = await _poll_run(
         sock_path,
@@ -1857,3 +1855,181 @@ async def test_gateway_main_window_gone_before_probe_is_skipped(
     manager = await _gateway_capture(sock_path, event_sock_path, responder)
 
     assert manager.main_window_id is None
+
+
+async def test_gateway_frame_wait_ignores_title_case(sock_path, event_sock_path):
+    async with (
+        FakeCommandServer(sock_path, _tracking_responder([])),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
+        try:
+            task = asyncio.ensure_future(manager.run(login_timeout=5.0))
+            await _feed(
+                dispatcher,
+                [
+                    _window_event(1, "window_opened", "ibgateway.ax", "ibkr gateway"),
+                    _splash_closed_event(2),
+                ],
+            )
+            await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+    assert manager.state is LoginState.LOGGED_IN
+
+
+async def test_frame_wait_matches_the_whole_title_not_a_substring(
+    sock_path, event_sock_path
+):
+    async with (
+        FakeCommandServer(sock_path, _tracking_responder([])),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
+        try:
+            task = asyncio.ensure_future(manager.run(login_timeout=0.3))
+            await _feed(
+                dispatcher,
+                [_window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway 2")],
+            )
+            with pytest.raises(LoginFrameTimeoutError):
+                await asyncio.wait_for(task, timeout=2.0)
+        finally:
+            await dispatcher.stop()
+
+
+async def test_gateway_mfa_title_and_splash_ignore_case(
+    sock_path, event_sock_path, caplog
+):
+    caplog.set_level(logging.INFO)
+    async with (
+        FakeCommandServer(sock_path, _tracking_responder([])),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(_config(), LABELS, dispatcher, restart_expected=False)
+        try:
+            task = asyncio.ensure_future(manager.run(login_timeout=5.0))
+            await _feed(
+                dispatcher,
+                [
+                    _window_event(1, "window_opened", "ibgateway.ax", "IBKR Gateway"),
+                    _window_event(
+                        2, "window_opened", _MFA_CLASS, _MFA_TITLE.upper(), "w-mfa"
+                    ),
+                    _window_event(3, "window_closed", _MFA_CLASS, _MFA_TITLE.upper()),
+                    _window_event(4, "window_opened", "ibgateway.aw", "IBKR Gateway"),
+                    _window_event(
+                        5,
+                        "window_closed",
+                        _SPLASH_CLASS,
+                        "STARTING APPLICATION...",
+                    ),
+                ],
+            )
+            await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+    assert manager.state is LoginState.LOGGED_IN
+    assert "second factor authentication in progress" in caplog.text
+
+
+async def test_tws_mfa_window_opened_ignores_title_case(
+    sock_path, event_sock_path, caplog
+):
+    caplog.set_level(logging.INFO)
+    async with (
+        FakeCommandServer(sock_path, _tracking_responder([])),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        manager = LoginManager(
+            _config(program=Program.TWS), LABELS, dispatcher, restart_expected=False
+        )
+        try:
+            task = asyncio.ensure_future(manager.run(login_timeout=5.0))
+            await _feed(
+                dispatcher,
+                [
+                    _window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE),
+                    _window_event(
+                        2, "window_opened", _MFA_CLASS, _MFA_TITLE.lower(), "w-mfa"
+                    ),
+                    _window_event(
+                        3, "window_opened", _TWS_MAIN_CLASS, _TWS_TITLE, "w-main"
+                    ),
+                ],
+            )
+            await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            await dispatcher.stop()
+    assert "second factor authentication in progress" in caplog.text
+
+
+async def test_tws_2fa_close_ignores_title_case(sock_path, event_sock_path):
+    async with (
+        FakeCommandServer(sock_path, _tracking_responder([])),
+        FakeEventServer(event_sock_path, []),
+    ):
+        dispatcher = await _start(sock_path, event_sock_path)
+        config = _config(
+            program=Program.TWS,
+            relogin_after_mfa_timeout=True,
+            mfa_timeout=5.0,
+            mfa_exit_interval=0.2,
+        )
+        manager = LoginManager(config, LABELS, dispatcher, restart_expected=False)
+        task = asyncio.ensure_future(manager.run(login_timeout=5.0))
+        try:
+            await _feed(
+                dispatcher,
+                [
+                    _window_event(1, "window_opened", _TWS_LOGIN_CLASS, _TWS_TITLE),
+                    _window_event(2, "window_closed", _MFA_CLASS, _MFA_TITLE.upper()),
+                ],
+            )
+            with pytest.raises(MfaTimeoutError):
+                await asyncio.wait_for(task, timeout=2.0)
+        finally:
+            await dispatcher.stop()
+
+
+async def test_tws_poll_ignores_label_case(sock_path, event_sock_path, monkeypatch):
+    components = [
+        {
+            "class": "javax.swing.JLabel",
+            "accessible_name": "second factor authentication",
+        }
+    ]
+    manager, _, mid_state = await _poll_run(
+        sock_path,
+        event_sock_path,
+        monkeypatch,
+        components,
+        trading_mode=TradingMode.LIVE,
+    )
+    assert mid_state is LoginState.MFA_IN_PROGRESS
+    assert manager.state is LoginState.LOGGED_IN
+
+
+async def test_gateway_main_window_title_ignores_case(sock_path, event_sock_path):
+    snapshot = {
+        "type": "snapshot",
+        "windows": [
+            {"class": _GW_LOGIN_CLASS, "title": "IBKR Gateway", "window_id": "w1"},
+            {"class": _GW_MAIN_CLASS, "title": "ibkr gateway", "window_id": "w2"},
+        ],
+    }
+
+    def responder(request):
+        if request.get("cmd") == "menu_item_exists":
+            hit = request["window_id"] == "w2" and request["path"].endswith("Gateway")
+            return {"ok": True, "exists": hit, "enabled": hit}
+        return {"ok": True}
+
+    manager = await _gateway_capture(
+        sock_path, event_sock_path, responder, snapshot=snapshot
+    )
+    assert manager.main_window_id == "w2"
