@@ -26,4 +26,5 @@ repos:
   - id: pyrefly-check
     name: Pyrefly (type checking)
     pass_filenames: true
-    language: system # Use system-installed pyrefly
+    entry: uv run pyrefly check # the locked pyrefly of the project, not one on PATH
+    language: system
