@@ -193,6 +193,9 @@ final class ComponentLookup {
      * ({@code SwingUtils.findButton}/{@code findCheckBox}/{@code findTextField} take an explicit
      * container). {@code scope == null} scans every {@code Window.getWindows()}.
      *
+     * <p>Names match as a whole label, ignoring case and surrounding whitespace, never by
+     * substring.
+     *
      * <p>Scoping matters when two windows show buttons with the same label (for example "OK"):
      * an unscoped search can pick the wrong one.
      */
@@ -238,14 +241,25 @@ final class ComponentLookup {
         throw new ElementNotFoundException(target, allNames);
     }
 
-    private static List<Component> matchesByAccessibleName(Component component, String target) {
+    static List<Component> matchesByAccessibleName(Component component, String target) {
         List<Component> matches = new ArrayList<>();
         collectMatches(component, target, matches);
         return matches;
     }
 
+    /**
+     * True when {@code actual} equals {@code target} as a whole, ignoring case and surrounding
+     * whitespace. Never a substring match, so "Log In" does not select "Paper Log In".
+     */
+    static boolean labelMatches(String target, String actual) {
+        if (target == null || actual == null) {
+            return false;
+        }
+        return target.strip().equalsIgnoreCase(actual.strip());
+    }
+
     private static void collectMatches(Component component, String target, List<Component> out) {
-        if (target.equals(accessibleName(component))) {
+        if (labelMatches(target, accessibleName(component))) {
             out.add(component);
         }
         if (component instanceof Container container) {

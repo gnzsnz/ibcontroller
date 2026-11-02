@@ -20,7 +20,11 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.awt.Component;
 import javax.swing.JButton;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 
 /** Dependency-free unit tests for the agent; run with {@code make test}. */
@@ -36,6 +40,16 @@ public final class AgentTests {
         run("get_text with a stale window_id is window_gone", AgentTests::getTextStaleWindow);
         run("get_text without a target is bad_request", AgentTests::getTextBadRequest);
         run("event stream is hello, snapshot, then newer events", AgentTests::eventStreamOrder);
+        run("labelMatches ignores case and surrounding whitespace", AgentTests::labelIgnoresCase);
+        run("labelMatches is a whole-label match", AgentTests::labelWholeOnly);
+        run("lookup finds a button whose case differs", AgentTests::lookupCase);
+        run("lookup does not match a longer button label", AgentTests::lookupNoSubstring);
+        run("lookup prefers the whole label among similar buttons", AgentTests::lookupWhole);
+        run("lookup finds a text field by accessible name ignoring case", AgentTests::lookupField);
+        run("lookup searches nested containers", AgentTests::lookupNested);
+        run("label lookup matches text ignoring case and not by substring", AgentTests::labelLookup);
+        run("label lookup prefers nothing longer", AgentTests::labelLookupWhole);
+        run("config dialog title ignores case", AgentTests::configTitle);
         if (failures > 0) {
             System.out.println(failures + " test(s) failed");
             System.exit(1);
@@ -239,5 +253,84 @@ public final class AgentTests {
         info.put("class", "test.Window");
         info.put("window_id", id);
         return info;
+    }
+
+    private static void labelIgnoresCase() {
+        check(ComponentLookup.labelMatches("Log In", "log in"), "case");
+        check(ComponentLookup.labelMatches("OK", " ok "), "whitespace");
+        check(!ComponentLookup.labelMatches(null, "x"), "null target");
+        check(!ComponentLookup.labelMatches("x", null), "null actual");
+    }
+
+    private static void labelWholeOnly() {
+        check(!ComponentLookup.labelMatches("Log In", "Paper Log In"), "suffix");
+        check(!ComponentLookup.labelMatches("No", "Not now"), "prefix");
+        check(!ComponentLookup.labelMatches("OK", "Book"), "inner");
+    }
+
+    private static void lookupCase() {
+        JPanel panel = new JPanel();
+        JButton button = new JButton("Log In");
+        panel.add(button);
+        List<Component> found = ComponentLookup.matchesByAccessibleName(panel, "log in");
+        check(found.size() == 1 && found.get(0) == button, "button not found");
+    }
+
+    private static void lookupNoSubstring() {
+        JPanel panel = new JPanel();
+        panel.add(new JButton("Paper Log In"));
+        check(ComponentLookup.matchesByAccessibleName(panel, "Log In").isEmpty(), "substring matched");
+    }
+
+    private static void lookupWhole() {
+        JPanel panel = new JPanel();
+        panel.add(new JButton("Paper Log In"));
+        JButton exact = new JButton("Log In");
+        panel.add(exact);
+        List<Component> found = ComponentLookup.matchesByAccessibleName(panel, "LOG IN");
+        check(found.size() == 1 && found.get(0) == exact, "wrong match");
+    }
+
+    private static void lookupField() {
+        JPanel panel = new JPanel();
+        JTextField field = new JTextField();
+        field.getAccessibleContext().setAccessibleName("Password");
+        panel.add(field);
+        List<Component> found = ComponentLookup.matchesByAccessibleName(panel, "password");
+        check(found.size() == 1 && found.get(0) == field, "field not found");
+    }
+
+    private static void lookupNested() {
+        JPanel panel = new JPanel();
+        JPanel child = new JPanel();
+        JButton button = new JButton("Log In");
+        child.add(button);
+        panel.add(child);
+        List<Component> found = ComponentLookup.matchesByAccessibleName(panel, "LOG in");
+        check(found.size() == 1 && found.get(0) == button, "nested not found");
+    }
+
+    private static void labelLookup() {
+        JPanel panel = new JPanel();
+        JLabel label = new JLabel("Socket port");
+        panel.add(label);
+        check(WriteOps.findLabelByTextIn(panel, "SOCKET PORT") == label, "label not found");
+        check(WriteOps.findLabelByTextIn(panel, "Socket") == null, "substring matched");
+    }
+
+    private static void labelLookupWhole() {
+        JPanel panel = new JPanel();
+        panel.add(new JLabel("Socket port (read-only)"));
+        JLabel exact = new JLabel("Socket port");
+        panel.add(exact);
+        check(WriteOps.findLabelByTextIn(panel, "socket port") == exact, "wrong label");
+    }
+
+    private static void configTitle() {
+        check(WriteOps.isConfigDialogTitle("Global Configuration"), "title case");
+        check(WriteOps.isConfigDialogTitle("global configuration"), "lower");
+        check(WriteOps.isConfigDialogTitle("Configuration"), "bare");
+        check(!WriteOps.isConfigDialogTitle("Settings"), "settings");
+        check(!WriteOps.isConfigDialogTitle(null), "null");
     }
 }
