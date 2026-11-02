@@ -14,6 +14,8 @@ Heavily inspired by [IBC](https://github.com/IbcAlpha/IBC) project, now archived
 
 It provides a "**declarative**" engine, so settings and pop-ups can be "declared" by configuration entries.
 
+**v0.2.0 is a breaking change**; see [docs/Upgrading.md](./docs/Upgrading.md).
+
 ## How to use it
 
 To use `ibcontroller` the recommended way is to install with uv/pipx or pip:
@@ -282,7 +284,8 @@ US/Eastern invalidation window if that's the intent.
 
 Inside `ibcontroller.toml`, the `[ibkr]` table gives values to IBKR's own settings and
 pop-ups, by name, and the environment can do the same as `IBKR_<NAME>` (it wins over the
-file). Two table kinds describe entries the bundled catalog lacks: `[[setting]]` and
+file). The `IBKR_` prefix is reserved for ibcontroller: a variable that names no setting or
+dialog is logged as a warning and ignored. Two table kinds describe entries the bundled catalog lacks: `[[setting]]` and
 `[[dialog]]`. The catalog is `ibcontroller/data/catalog.toml`. Beyond that, **`labels.json`**
 (window/button text) lets you shape ibcontroller without writing any Python. Each is covered
 below; the full reference is in [docs/Configuration.md](./docs/Configuration.md).
@@ -304,12 +307,14 @@ handler recognises (default `OK`, `Close`, `Dismiss`).
 
 Pop-ups that are always handled the same simple way (match a window, click a button) are
 not in `labels.json`: they are entries of the bundled dialog catalog (`data/catalog.toml`).
-Today those are the non-brokerage-account warning and the auto-restart confirmation notice,
-both handled automatically; entries for the password-expiry notice, blind-trading
-confirmation and the TWS socket-port confirmation ship switched off. Matching ignores case.
-Switch an entry with its name in `[ibkr]` and add your own with `[[dialog]]` in
-`ibcontroller.toml`. A `dismiss_rules` key in `labels.json` is no longer read: it is logged as an
-unknown key and ignored.
+Today those are the non-brokerage-account warning and the auto-restart confirmation, both
+handled automatically; the password-expiry notice, blind-trading confirmation and the TWS
+socket-port confirmation ship switched off; incoming connections and crypto order confirmation
+default to `manual`, which leaves the dialog to you. Matching: windows by substring, controls by
+whole label, case never matters; see [Matching](./docs/Configuration.md#matching). Switch an entry
+with its name in `[ibkr]` and add your own with `[[dialog]]` in `ibcontroller.toml`. Some entries
+have not been checked against a live window; the list is in
+[docs/Upgrading.md](./docs/Upgrading.md#not-verified-live).
 
 Login-outcome dialogs ("Login failed", "Unrecognized Username or Password", the connection
 and too-many-attempts warnings) and the "Shutdown progress" / "Restart in progress" windows
@@ -370,12 +375,7 @@ field_index = 0                           # only type_text_near_label: 0-based f
 
 A custom name must not be the name of a catalog entry or of a dialog.
 
-**Moved from earlier versions:** `read_only_api`, `auto_restart_time` and `auto_logoff_time`
-are no longer `[ibcontroller]` keys and `IBC_READ_ONLY_API`, `IBC_AUTO_RESTART_TIME` and
-`IBC_AUTO_LOGOFF_TIME` are no longer read (they are ignored silently). Use the `[ibkr]` table
-or `IBKR_READ_ONLY_API`, `IBKR_AUTO_RESTART_TIME`, `IBKR_AUTO_LOGOFF_TIME`. `settings_file`,
-`IBC_SETTINGS_FILE` and `ibkr_settings.toml` are gone too: custom entries go in
-`ibcontroller.toml`.
+Settings that moved or were removed since v0.1.x: see [docs/Upgrading.md](./docs/Upgrading.md).
 
 ## Logging
 

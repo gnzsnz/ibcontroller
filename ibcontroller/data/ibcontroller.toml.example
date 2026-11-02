@@ -201,6 +201,7 @@
 # IBC: AutoLogoffTime. Time of the daily logoff, "hh:mm AM/PM" with one space,
 # e.g. "08:00 AM". Shares the Lock and Exit radio pair with auto_restart_time below:
 # if you set both, auto_restart_time wins, as in IBC.
+# Unverified: not applied on a live run yet.
 # Default: not set
 # auto_logoff_time = "08:00 AM"
 
@@ -252,12 +253,15 @@
 # modes, or true (mode "on") / false (mode "off"). In the environment, true/false/yes/no
 # in any case count as booleans (env: IBKR_<NAME>, e.g. IBKR_BLIND_TRADING=true).
 # A mode with no steps ("off") leaves the dialog for you to answer.
+# Matching ignores case: windows by substring of title or text, controls (buttons) by
+# whole label. See docs/Configuration.md, Matching.
 
 # "This is not a brokerage account" warning: clicks "I understand and accept"
 # Modes "off", "on". Default "on"
 # non_brokerage_account = "on"
 
-# Confirmation shown after Gateway/TWS is set to restart automatically: clicks "OK"
+# Confirmation shown after Gateway/TWS is set to restart automatically: clicks "OK".
+# Unverified, the text comes from IBC's source and was not seen on a live window.
 # Modes "off", "on". Default "on"
 # auto_restart_confirmation = "on"
 
@@ -308,7 +312,8 @@
 # name that no catalog entry uses. match: a list of groups, any one is enough; inside a
 # group every field must match, ignoring case. Fields: title, text, text_also.
 # modes: each mode is a list of steps, run in order on the window. A step is
-# { click = "OK" } or { click = ["OK", "Yes"] }, the first button found is clicked.
+# { click = "OK" } or { click = ["OK", "Yes"] }, the first button found is clicked, so put
+# the most specific label first. Buttons match by whole label, ignoring case.
 # default: the mode used when [ibkr] gives no value. The entry's name also works as a
 # key in [ibkr] and as IBKR_<NAME>.
 # [[dialog]]

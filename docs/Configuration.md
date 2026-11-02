@@ -19,6 +19,12 @@ from before the tables existed) or any table other than the four above.
 `IBKR_<NAME>` also accepts a `_FILE` variant, an empty value counts as missing, and
 the startup environment dump lists these variables with the same masking as `IBC_*`.
 
+Every environment variable that starts with `IBKR_` is read as an `[ibkr]` key. One whose name
+matches no catalog or custom entry is logged as a warning ("names no setting or dialog, ignored")
+and otherwise ignored, so treat the prefix as reserved for ibcontroller.
+
+Coming from v0.1.x or from IBC? See [Upgrading](Upgrading.md).
+
 ### Dialogs
 
 ibcontroller handles the pop-ups listed in its bundled catalog (`catalog.toml`).
@@ -283,10 +289,9 @@ value is left as it is in Gateway/TWS (leave-unchanged, as IBC's empty value).
   `field_index` (0-based field below the label) for a field with no label of its own. The
   entry's value comes from `[ibkr]` like any other; a custom setting with no value
   is logged as a warning at startup and left untouched. A custom name cannot reuse a catalog name.
-- **Moved:** `read_only_api`, `auto_restart_time` and `auto_logoff_time` are no longer
-  `[ibcontroller]` keys, and `IBC_READ_ONLY_API`, `IBC_AUTO_RESTART_TIME` and
-  `IBC_AUTO_LOGOFF_TIME` are no longer read (ignored silently). `settings_file`,
-  `IBC_SETTINGS_FILE` and `ibkr_settings.toml` are gone.
+- `auto_logoff_time` has not been applied on a live run yet. Its mechanism is the same as
+  `auto_restart_time`'s.
+- Settings that moved or were removed since v0.1.x: see [Upgrading](Upgrading.md).
 
 When no setting has a value (the default configuration), the Global Configuration dialog is
 not opened. If one entry fails (a missing control, an agent error), the others are still
@@ -318,24 +323,20 @@ exit-progress dialogs.
 | `crypto_order_confirmation` | manual | title "Cryptocurrency order confirmation" (shown when a cryptocurrency order is placed) | `transmit` clicks "Transmit" (the order is placed with no check by you); `cancel` clicks "Cancel" (the order is dropped); `manual` leaves it to you |
 | `socket_port_confirmation` | off | text "apply the new socket port setting immediately" (TWS only, after the port changed) | `on` clicks "Yes" (port applies at once), `no` clicks "No" (applies at the next GUI restart) |
 
-- Matching ignores case. Message text is compared with HTML tags removed and entities
-  decoded, so a phrase can be copied as it shows on screen.
+- Matching: see [Matching](#matching).
 - Candidate buttons are tried in order and the first one present is clicked.
 - An entry in a mode with no steps (`off`) leaves the dialog on screen for you.
-- `password_expiry_warning`, `blind_trading`, `accept_incoming_connections` and
-  `crypto_order_confirmation` come from IBC's source and have not been checked against a live window.
+- `auto_restart_confirmation`, `password_expiry_warning`, `blind_trading`,
+  `accept_incoming_connections` and `crypto_order_confirmation` come from IBC's source and
+  have not been checked against a live window.
 - `crypto_order_confirmation` takes the modes `manual`, `transmit` and `cancel`, not a
   boolean. `transmit` places every cryptocurrency order without asking you.
 - `accept_incoming_connections` takes the modes `manual`, `accept` and `reject`, not a
-  boolean. It was the `accept_incoming_connections` key of `[ibcontroller]` and
-  `IBC_ACCEPT_INCOMING_CONNECTIONS`; both are gone, set it in `[ibkr]` or as
-  `IBKR_ACCEPT_INCOMING_CONNECTIONS`. Rejecting every connection and listing the trusted
+  boolean. It moved from `[ibcontroller]` to `[ibkr]` (see [Upgrading](Upgrading.md)); set it
+  there or as `IBKR_ACCEPT_INCOMING_CONNECTIONS`. Rejecting every connection and listing the trusted
   IP addresses in the API settings is the more secure setup.
-- Entries are fixed to their default mode for now. Switching an entry and adding your own
-  arrive with the `ibcontroller.toml` sections for declarative configuration.
+- Switch an entry by its name in `[ibkr]`; add your own with `[[dialog]]` in `ibcontroller.toml`.
 - A malformed catalog is a startup error (exit 78) that names the file and the entry.
-- `dismiss_rules` in `labels.json` is no longer read: it is logged as an unknown key and
-  ignored.
 
 **Order.** Login-outcome dialogs ("Login failed", "Unrecognized Username or Password", the
 connection and too-many-attempts warnings) and the "Shutdown progress" / "Restart in
@@ -343,3 +344,25 @@ progress" windows are always handled first. A catalog entry that matches one of 
 runs, so a credential rejection still exits with code 77 and a restart is still recognised
 as one. Catalog entries run before the other built-in handlers (existing session, re-login,
 incoming API connections).
+
+### Matching
+
+Matching ignores case everywhere, in the Python side and in the Java agent. Windows are recognised
+by a substring of their title or message text; message text is compared with HTML tags removed and
+entities decoded. Controls (buttons, checkboxes, text fields, and the label next to a field) are
+found by their whole label, ignoring case and surrounding whitespace: `Log In` does not match
+`Paper Log In`. A few title checks (login frame, two-factor, splash) also compare the whole title.
+A label that IBKR renames or localises goes in a candidate list, tried in order. There is no
+ambiguity error: when several controls carry the same whole label, the first one showing wins.
+
+Writing candidate lists and match strings:
+
+- Button lists (`click = [...]`) are tried in order and the first label found in the window is
+  clicked. Put the most specific label first (`["Override and Transmit", "Yes"]`). A short label
+  cannot hit a longer one, because controls match by whole label.
+- Window and message strings (`match = [...]`) match by substring, and a window matches when any
+  entry matches, so order does not matter there. Use distinctive phrases; a short string widens
+  the match wherever it sits in the list. To narrow a match, require a title and a text together.
+- For two dialog entries that could match the same window, the first recogniser that matches
+  handles it, and custom entries are checked before catalog ones. Put the specific entry before
+  the general one.

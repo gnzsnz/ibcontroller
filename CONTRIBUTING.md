@@ -25,7 +25,8 @@ getting a dev environment running, see
 
 6. **Commit.** Use a conventional-commit-style prefix (`feat:`, `fix:`, `refactor:`, `doc:`/
    `docs:`, `test:`) matching this repo's existing history (`git log --oneline`). No trailing
-   whitespace; every user-facing string belongs in `labels.json`, not a Python literal.
+   whitespace; every string the code matches or clicks belongs in `labels.json` or `catalog.toml`, not a Python
+   literal.
 7. **Open a pull request** against `master`, with a summary of the change and a link to the issue
    it addresses.
 
