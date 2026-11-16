@@ -43,9 +43,8 @@ def test_init_scaffolds_config_dir(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "wrote ibcontroller.toml" in result.output
     assert (app_dir / "config" / "ibcontroller.toml").exists()
-    # the two example files keep their .example suffix -- deliberately inert, see
+    # labels.json.example keeps its .example suffix -- deliberately inert, see
     # main.py's own module docstring.
-    assert (app_dir / "config" / "ibkr_settings.toml.example").exists()
     assert (app_dir / "config" / "labels.json.example").exists()
 
 

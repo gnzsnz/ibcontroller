@@ -32,11 +32,6 @@
     "title": "Trading Login Handoff",
     "disconnect_buttons": ["Disconnect Other Session"]
   },
-  "accept_incoming_connection": {
-    "title": "Accept incoming connection",
-    "accept_buttons": ["OK", "Yes"],
-    "reject_buttons": ["No"]
-  },
   "login_failed": {
     "title": "Login failed",
     "dismiss_button": "OK"
@@ -58,18 +53,6 @@
   "generic": {
     "dismiss_buttons": ["OK", "Close", "Dismiss"]
   },
-  "dismiss_rules": [
-    {
-      "name": "non_brokerage_account",
-      "match_text": "This is not a brokerage account",
-      "click": "I understand and accept"
-    },
-    {
-      "name": "auto_restart_confirmation",
-      "match_text": "trading platform restart automatically",
-      "click": "OK"
-    }
-  ],
   "not_currently_available": {
     "message_marker": "not currently available",
     "dismiss_button": "OK"

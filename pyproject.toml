@@ -80,7 +80,8 @@ max-args = 6
 
 [tool.ruff.lint.per-file-ignores]
 # Expected values in assertions are the point of a test, not a magic number to name.
-"tests/*" = ["PLR2004"]
+# Test fakes repeat the signature of the function they replace.
+"tests/*" = ["PLR2004", "PLR0913"]
 
 [tool.ruff.format]
 # Like Black, use double quotes for strings.

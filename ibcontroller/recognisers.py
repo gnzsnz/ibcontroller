@@ -5,9 +5,9 @@ waits for directly via `actions.wait_for_window`.
 
 `RecognizerRegistry` holds an ordered list of `Recognizer`s, checked in
 order against each unprompted window; the first one whose `recognises()`
-returns `True` has its `handle()` awaited. `DeclarativeDismissRecognizer` is
-built from `labels.DismissRule` entries (`build_default_registry`) for
-the common "match text/title, click one button" case; the remaining classes
+returns `True` has its `handle()` awaited. `DialogRecognizer` is
+built from `dialogs.DialogEntry` catalog entries (`build_default_registry`) for
+the common "match text/title, run these steps" case; the remaining classes
 below handle cases with real conditional logic that isn't expressible as
 data. Every recogniser acts through `actions.py`'s primitives, the same as
 any other caller.
@@ -19,7 +19,6 @@ events and routing each one through `handle_window_opened`.
 
 from __future__ import annotations
 
-import html
 import logging
 import re
 from collections.abc import Callable, Sequence
@@ -37,14 +36,12 @@ from ibcontroller.agent_client import (
     WindowGoneError,
 )
 from ibcontroller.config import (
-    AcceptIncomingConnections,
     Config,
     ExistingSessionAction,
 )
+from ibcontroller.dialogs import DialogChoice, DialogEntry, MatchGroup, run_steps
 from ibcontroller.dispatch import Dispatcher
 from ibcontroller.labels import (
-    AcceptIncomingConnectionLabels,
-    DismissRule,
     ExistingSessionLabels,
     GatewayConnectionFailedLabels,
     Labels,
@@ -56,6 +53,9 @@ from ibcontroller.labels import (
     TooManyFailedLoginAttemptsLabels,
     TradingLoginHandoffLabels,
     UnrecognizedCredentialsLabels,
+    strip_html,
+    text_matches,
+    text_starts_with,
 )
 from ibcontroller.login import (
     CredentialsRejectedError,
@@ -71,8 +71,6 @@ _WAIT_PATTERN = re.compile(
     r"Please wait (?:(\d+) minutes? )?(?:& )?(?:(\d+) seconds?)?"
 )
 
-_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
-
 
 def _parse_wait_seconds(message: str) -> float:
     """Parses a wait duration out of a "too many failed login attempts"
@@ -82,12 +80,6 @@ def _parse_wait_seconds(message: str) -> float:
     minutes = int(match.group(1)) if match and match.group(1) else 0
     seconds = int(match.group(2)) if match and match.group(2) else 0
     return float(minutes * 60 + seconds + 3)
-
-
-def _strip_html(text: str) -> str:
-    """Strips HTML tags from an IB `JTextPane` message (always HTML, e.g.
-    `<html>...<br><br>...</html>`), collapsing the whitespace left behind."""
-    return re.sub(r"\s+", " ", _HTML_TAG_PATTERN.sub(" ", text)).strip()
 
 
 async def _dismiss(dispatcher: Dispatcher, label: str, window_id: str | None) -> None:
@@ -125,38 +117,44 @@ def is_credential_entry(components: list[Component]) -> bool:
     return any(c.credential_field and c.showing for c in components)
 
 
-class DeclarativeDismissRecognizer:
-    """One `Recognizer` per `labels.DismissRule`: matches `rule.match_title`
-    against the window's title and/or `rule.match_text` against any
-    component's `accessible_name`/`text`, then clicks `rule.click`. If both
-    `match_title` and `match_text` are given, both must match. `rule` is
-    public so a caller inspecting `RecognizerRegistry.handled` can identify
-    which rule fired, by name."""
+class DialogRecognizer:
+    """One `Recognizer` per `dialogs.DialogEntry`, applying the steps of the
+    chosen `mode`. A mode with no steps matches nothing, so the dialog stays on
+    screen for the user. Any of the entry's match groups is enough; inside a
+    group every given field must match, ignoring case and HTML markup. `entry`
+    is public so a caller inspecting `RecognizerRegistry.handled` can identify
+    which entry fired, by name."""
 
-    def __init__(self, rule: DismissRule) -> None:
-        self.rule = rule
+    def __init__(self, entry: DialogEntry, mode: str) -> None:
+        if mode not in entry.modes:
+            known = ", ".join(entry.modes)
+            raise ValueError(
+                f"dialog {entry.name!r} has no mode {mode!r}; modes: {known}"
+            )
+        self.entry = entry
+        self.mode = mode
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        rule = self.rule
-        if rule.match_title is not None and rule.match_title not in (
-            event.window.title or ""
-        ):
+        if not self.entry.modes[self.mode]:
             return False
-        if rule.match_text is not None and not any(
-            self._text_matches(rule.match_text, value)
-            for c in components
-            for value in (c.accessible_name, c.text)
-            if value is not None
-        ):
-            return False
-        return True
+        return any(self._group_matches(g, event, components) for g in self.entry.match)
 
     @staticmethod
-    def _text_matches(match_text: str, value: str) -> bool:
-        """Raw match first; then HTML-stripped, since IB message panes are HTML
-        and a phrase copied from the screen can span a tag or hold an entity
-        (`&quot;`)."""
-        return match_text in value or match_text in html.unescape(_strip_html(value))
+    def _group_matches(
+        group: MatchGroup, event: WindowEvent, components: list[Component]
+    ) -> bool:
+        if group.title is not None and not text_matches(
+            group.title, event.window.title or ""
+        ):
+            return False
+        values = [
+            v for c in components for v in (c.accessible_name, c.text) if v is not None
+        ]
+        return all(
+            any(text_matches(wanted, v) for v in values)
+            for wanted in (group.text, group.text_also)
+            if wanted is not None
+        )
 
     async def handle(
         self,
@@ -164,9 +162,20 @@ class DeclarativeDismissRecognizer:
         components: list[Component],
         dispatcher: Dispatcher,
     ) -> None:
-        """Clicks `rule.click`, scoped to `event.window.window_id`."""
-        await click(dispatcher, self.rule.click, window_id=event.window.window_id)
-        logger.info("dismissed %s (declarative rule)", self.rule.name)
+        """Runs the mode's steps, scoped to `event.window.window_id`. A failed
+        step is logged with the entry's name and re-raised for the caller."""
+        try:
+            await run_steps(
+                dispatcher,
+                self.entry.modes[self.mode],
+                window_id=event.window.window_id,
+            )
+        except AgentClientError as exc:
+            logger.warning(
+                "dialog %s (mode %s) failed: %s", self.entry.name, self.mode, exc
+            )
+            raise
+        logger.info("handled dialog %s (mode %s)", self.entry.name, self.mode)
 
 
 class TooManyFailedLoginAttemptsRecognizer:
@@ -198,9 +207,11 @@ class TooManyFailedLoginAttemptsRecognizer:
     def _matched_text(self, components: list[Component]) -> str | None:
         prefix = self._labels.message_prefix
         for c in components:
-            if c.text is not None and prefix in c.text:
+            if c.text is not None and text_matches(prefix, c.text):
                 return c.text
-            if c.accessible_name is not None and prefix in c.accessible_name:
+            if c.accessible_name is not None and text_matches(
+                prefix, c.accessible_name
+            ):
                 return c.accessible_name
         return None
 
@@ -240,7 +251,7 @@ class LoginFailedRecognizer:
         self._labels = labels
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -264,7 +275,7 @@ class LoginErrorRecognizer:
         self._labels = labels
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -276,7 +287,7 @@ class LoginErrorRecognizer:
         for c in components:
             raw = c.text if c.text is not None else c.accessible_name
             if raw is not None:
-                texts.append(_strip_html(raw))
+                texts.append(strip_html(raw))
         logger.warning("IBController > login error: %s", " | ".join(texts))
         await _dismiss(dispatcher, self._labels.dismiss_button, event.window.window_id)
         raise TransientLoginError("login error dialog; server disconnected")
@@ -293,7 +304,7 @@ class UnrecognizedCredentialsRecognizer:
         self._labels = labels
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -328,13 +339,13 @@ class GatewayConnectionFailedRecognizer:
             raw = c.text if c.text is not None else c.accessible_name
             if raw is None:
                 continue
-            stripped = _strip_html(raw)
-            if stripped.startswith(self._labels.message_prefix):
+            stripped = strip_html(raw)
+            if text_starts_with(self._labels.message_prefix, stripped):
                 return stripped
         return None
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        if self._labels.title not in (event.window.title or ""):
+        if not text_matches(self._labels.title, event.window.title or ""):
             return False
         return self._stripped_text(components) is not None
 
@@ -347,7 +358,7 @@ class GatewayConnectionFailedRecognizer:
         text = self._stripped_text(components) or ""
         logger.warning("IBController > %s", text)
         await _dismiss(dispatcher, self._labels.dismiss_button, event.window.window_id)
-        if any(reason in text for reason in self._labels.known_reasons):
+        if any(text_matches(reason, text) for reason in self._labels.known_reasons):
             raise CredentialsRejectedError(f"gateway connection failed: {text}")
         raise TransientLoginError(f"gateway connection failed: {text}")
 
@@ -363,9 +374,8 @@ class NotCurrentlyAvailableRecognizer:
         self._labels = labels
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        marker = self._labels.message_marker.lower()
         return any(
-            marker in _strip_html(raw).lower()
+            text_matches(self._labels.message_marker, raw)
             for c in components
             if (raw := c.text if c.text is not None else c.accessible_name) is not None
         )
@@ -423,7 +433,7 @@ class ExistingSessionRecognizer:
         self._attempted = False
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -497,7 +507,7 @@ class ReloginRecognizer:
         self._action = action
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -539,7 +549,7 @@ class TradingLoginHandoffRecognizer:
         self._action = action
 
     def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
+        return text_matches(self._labels.title, event.window.title or "")
 
     async def handle(
         self,
@@ -567,53 +577,6 @@ class TradingLoginHandoffRecognizer:
             )
 
 
-class AcceptIncomingConnectionsRecognizer:
-    """Matches the "Accept incoming connection" dialog TWS/Gateway shows when
-    a client connects on the API socket, by window title (ported from IBC's
-    own `AcceptIncomingConnectionDialogHandler`; title matching, not IBC's
-    body-label search, like every other simple dialog here).
-    `action` (`AcceptIncomingConnections`: manual/accept/reject) selects the
-    response; `MANUAL` leaves the dialog for the user, matching IBC's own
-    handler."""
-
-    def __init__(
-        self,
-        labels: AcceptIncomingConnectionLabels,
-        action: AcceptIncomingConnections,
-    ) -> None:
-        self._labels = labels
-        self._action = action
-
-    def recognises(self, event: WindowEvent, components: list[Component]) -> bool:
-        return self._labels.title in (event.window.title or "")
-
-    async def handle(
-        self,
-        event: WindowEvent,
-        components: list[Component],
-        dispatcher: Dispatcher,
-    ) -> None:
-        if self._action is AcceptIncomingConnections.MANUAL:
-            logger.info(
-                "IBController > incoming API connection -- manual, leaving for the user"
-            )
-            return
-        if self._action is AcceptIncomingConnections.ACCEPT:
-            await click(
-                dispatcher,
-                self._labels.accept_buttons,
-                window_id=event.window.window_id,
-            )
-            logger.info("IBController > incoming API connection -- accepted")
-        else:
-            await click(
-                dispatcher,
-                self._labels.reject_buttons,
-                window_id=event.window.window_id,
-            )
-            logger.info("IBController > incoming API connection -- rejected")
-
-
 class ExitKind(Enum):
     """What TWS/Gateway is about to do, read from the progress window it shows
     just before its process exits."""
@@ -633,9 +596,9 @@ class ExitProgressRecognizer:
 
     def kind_of(self, event: WindowEvent) -> ExitKind | None:
         title = event.window.title or ""
-        if self._labels.shutdown_progress_title in title:
+        if text_matches(self._labels.shutdown_progress_title, title):
             return ExitKind.SHUTDOWN
-        if self._labels.restart_progress_title in title:
+        if text_matches(self._labels.restart_progress_title, title):
             return ExitKind.RESTART
         return None
 
@@ -711,16 +674,18 @@ async def handle_window_opened(
 def build_default_registry(
     config: Config,
     labels: Labels,
+    dialogs: Sequence[DialogChoice],
     session: SessionState,
     schedule_retry: Callable[[float], None],
 ) -> RecognizerRegistry:
     """Signal recognisers first (login outcomes and the exit progress windows),
-    then declarative rules, then the other built-ins as the fallback. A
-    declarative rule cannot shadow a dialog that carries a login outcome or
-    announces an exit. `session` is read-only; `schedule_retry` is
-    `TooManyFailedLoginAttemptsRecognizer`'s retry hook."""
+    then one `DialogRecognizer` per dialog choice (custom entries before catalog
+    ones, each in its resolved mode), then the other built-ins as the fallback.
+    A dialog entry cannot shadow a dialog
+    that carries a login outcome or announces an exit. `session` is read-only;
+    `schedule_retry` is `TooManyFailedLoginAttemptsRecognizer`'s retry hook."""
     declarative: list[Recognizer] = [
-        DeclarativeDismissRecognizer(rule) for rule in labels.dismiss_rules
+        DialogRecognizer(choice.entry, choice.mode) for choice in dialogs
     ]
     signals: list[Recognizer] = [
         NotCurrentlyAvailableRecognizer(labels.not_currently_available),
@@ -747,10 +712,6 @@ def build_default_registry(
             ReloginRecognizer(labels.relogin, config.existing_session_action),
             TradingLoginHandoffRecognizer(
                 labels.trading_login_handoff, config.existing_session_action
-            ),
-            AcceptIncomingConnectionsRecognizer(
-                labels.accept_incoming_connection,
-                config.accept_incoming_connections,
             ),
         ]
     )

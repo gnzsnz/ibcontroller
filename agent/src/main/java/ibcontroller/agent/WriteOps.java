@@ -5,6 +5,7 @@ import java.awt.Container;
 import java.awt.Window;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.accessibility.AccessibleContext;
@@ -234,7 +235,7 @@ final class WriteOps {
      * <p>{@code windowId}, when given (captured from the Configuration dialog's {@code
      * window_opened} event), resolves straight to that {@link JDialog} via {@code EventBridge}'s
      * registry, as IBC uses the {@code ConfigDialogManager} reference. When {@code null}, the
-     * dialog is found by title ({@code title.contains("Configuration")}), as IBC's {@code
+     * dialog is found by title (title containing "Configuration" ignoring case), as IBC's {@code
      * GlobalConfigurationDialogHandler.recogniseWindow} does.
      */
     static void selectConfigSection(String path, String windowId) {
@@ -276,18 +277,23 @@ final class WriteOps {
         }
     }
 
-    /** Matches IBC's {@code GlobalConfigurationDialogHandler.recogniseWindow} exactly --
-     * see {@link #selectConfigSection} for why "contains", not an exact match. */
+    /** Same shape as IBC's {@code GlobalConfigurationDialogHandler.recogniseWindow} (title
+     * contains "Configuration") but ignoring case -- see {@link #selectConfigSection} for why
+     * "contains", not an exact match. */
     private static JDialog findConfigDialog() {
         for (Window window : Window.getWindows()) {
             if (window instanceof JDialog dialog
                     && dialog.isDisplayable()
-                    && dialog.getTitle() != null
-                    && dialog.getTitle().contains("Configuration")) {
+                    && isConfigDialogTitle(dialog.getTitle())) {
                 return dialog;
             }
         }
         return null;
+    }
+
+    /** True when the title contains "configuration", ignoring case. */
+    static boolean isConfigDialogTitle(String title) {
+        return title != null && title.toLowerCase(Locale.ROOT).contains("configuration");
     }
 
     /** Ported from IBC's {@code SwingUtils.findTree} -- the first {@code JTree}
@@ -420,15 +426,16 @@ final class WriteOps {
         return null;
     }
 
-    /** Matches on both accessible name and the label's own text -- the real case (Swing's
+    /** Matches, as a whole label ignoring case, on both accessible name and the label's own text -- the real case (Swing's
      * default {@code AccessibleJLabel} returns the label's text as its accessible name) and
      * a robustness fallback, same dual-check {@code NonBrokerageAccountRecognizer} already
      * uses on the Python side for the identical reason. */
-    private static Component findLabelByTextIn(Component component, String text) {
+    static Component findLabelByTextIn(Component component, String text) {
         if (component instanceof JLabel label) {
             AccessibleContext context = label.getAccessibleContext();
             String accessibleName = context != null ? context.getAccessibleName() : null;
-            if (text.equals(accessibleName) || text.equals(label.getText())) {
+            if (ComponentLookup.labelMatches(text, accessibleName)
+                    || ComponentLookup.labelMatches(text, label.getText())) {
                 return label;
             }
         }

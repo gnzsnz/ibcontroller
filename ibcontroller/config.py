@@ -5,9 +5,11 @@ Configuration settings hierarchy, precedence, and validation.
 Credentials (userid/password) are deliberately environment-variable-only, never accepted
 from a file. This is a security measure to avoid accidentally committing secrets to
 source control, and to support Docker secrets and other secret-management patterns.
-The config file (ibcontroller.toml) is intentionally flat (no [section] headers) to
-simplify parsing and avoid confusion. The config file is optional; if it doesn't exist,
-the defaults are used, and environment variables can override them.
+The config file (ibcontroller.toml) has one table per concern: `[ibcontroller]` is
+`Config`, `[ibkr]`, `[[setting]]` and `[[dialog]]` are read here as plain data
+(`load_declarative_input`) and interpreted by the settings and dialogs layers. The
+config file is optional; if it doesn't exist, the defaults are used, and environment
+variables can override them.
 
 The precedence is: defaults < config file < environment variables.
 """
@@ -42,6 +44,14 @@ from ibcontroller.app_dirs import resolve_app_dirs
 from ibcontroller.errors import IBControllerError
 
 ENV_PREFIX = "IBC_"
+IBKR_ENV_PREFIX = "IBKR_"
+# Words an environment variable may use for a boolean, compared in lower case.
+ENV_TRUE = frozenset({"true", "yes"})
+ENV_FALSE = frozenset({"false", "no"})
+_CONFIG_TABLE = "ibcontroller"
+_IBKR_TABLE = "ibkr"
+_ARRAY_TABLES = ("setting", "dialog")
+_KNOWN_TABLES = (_CONFIG_TABLE, _IBKR_TABLE, *_ARRAY_TABLES)
 ENV_SENSITIVE: list[str] = ["IBC_USERID", "IBC_PASSWORD"]
 # Name fragments masked in the env dump; covers vars we don't own (IBC_PASSWORD_PAPER)
 _SENSITIVE_FRAGMENTS = ("PASSWORD", "USERID", "SECRET", "TOKEN", "TOTP", "KEY")
@@ -109,6 +119,46 @@ def _reject_credentials_in_file(data: Mapping[str, Any], path: Path) -> None:
             "(IBC_USERID/IBC_PASSWORD, each also accepting a "
             "_FILE-suffixed variant)"
         )
+
+
+def _check_structure(data: Mapping[str, Any], path: Path) -> None:
+    """Raises ConfigError unless `data` has only the known top-level tables, each of
+    the right shape. A top-level scalar (a pre-sections file) and an unknown table
+    (a typo such as `[ibkrr]`) would otherwise drop their settings silently."""
+    for key, value in data.items():
+        if key not in _KNOWN_TABLES:
+            if isinstance(value, Mapping | list):
+                raise ConfigError(
+                    f"{path}: unknown table [{key}] -- known tables are "
+                    f"{', '.join(_KNOWN_TABLES)}"
+                )
+            raise ConfigError(
+                f"{path}: top-level key {key!r} -- ibcontroller settings belong under "
+                f"[{_CONFIG_TABLE}]"
+            )
+        if key in _ARRAY_TABLES:
+            if not isinstance(value, list):
+                raise ConfigError(
+                    f"{path}: [{key}] must be an array of tables, [[{key}]]"
+                )
+        elif not isinstance(value, Mapping):
+            raise ConfigError(f"{path}: {key} must be a table, [{key}]")
+
+
+def _read_toml(path: Path) -> dict[str, Any]:
+    """Parses `path` (empty when the file is absent) after the credential and
+    structure checks. Credentials are environment-variable-only -- rejected against
+    the raw parsed TOML, before typed-settings ever sees the file (it has no per-key
+    deny-list hook; userid/password are real Config fields, so InvalidOptionsError
+    would not catch this)."""
+    try:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+    except OSError:
+        return {}
+    _reject_credentials_in_file(data, path)
+    _check_structure(data, path)
+    return data
 
 
 class _FileBackedEnvLoader(EnvLoader):
@@ -272,31 +322,12 @@ class MfaTimeoutAction(StrEnum):
     RESTART = "restart"
 
 
-class AcceptIncomingConnections(StrEnum):
-    """AcceptIncomingConnections is the user's choice for what to do when ibcontroller
-    detects incoming API connections (see `AcceptIncomingConnectionsRecognizer` in
-    recognisers.py). The default is MANUAL, which leaves the user to decide what to do
-    in the GUI. ACCEPT and REJECT are the two automatic options, and MANUAL is a special
-    case that forces the user to decide what to do in the GUI.
-    """
-
-    ACCEPT = "accept"
-    REJECT = "reject"
-    MANUAL = "manual"
-
-
 @ts.settings
 class Config:
     """
     IBController's own config file, `ibcontroller.toml`.
     """
 
-    # The IBKR settings file to load (if any) -- see `ibkr_settings.toml.example`.
-    # Defaults to `None` (inert) until a user points `[settings] file` at a renamed
-    # copy of the example file. See module docstring for why this is deliberate.
-    settings_file: str | None = ts.option(
-        default=None, converter=_optional_path_converter
-    )
     # instance default: f"{program}-{trading_mode.value}".
     instance: str = "{program}-{trading_mode}"
     program: Program = Program.GATEWAY
@@ -319,10 +350,6 @@ class Config:
     trading_mode: TradingMode = TradingMode.PAPER
     # IBC: ReadOnlyLogin -- TWS only, clicks "Enter Read Only" on the 2FA frame.
     read_only_login: bool = False
-    read_only_api: bool | None = None  # None = leave the existing setting unchanged
-    accept_incoming_connections: AcceptIncomingConnections = (
-        AcceptIncomingConnections.MANUAL
-    )
     existing_session_action: ExistingSessionAction = ExistingSessionAction.MANUAL
 
     # jts.ini's TimeZone (IANA name, e.g. "Europe/Zurich") -- written by
@@ -350,13 +377,6 @@ class Config:
     # transient login failure, logout, a crash during login); the loop then stops
     # with RestartCapExceededError. A lap that reaches READY resets the count.
     restart_cap: int = 3
-
-    # AutoRestartTime "hh:mm AM/PM" format (e.g. "08:00 AM")
-    auto_restart_time: str | None = None  # None = leave the existing setting unchanged
-    # AutoLogoffTime "hh:mm AM/PM" format (e.g. "08:00 AM"); shares one Lock and
-    # Exit radio-button pair with auto_restart_time -- if both are set, the latter
-    # wins (applied last, matching builtin_settings.toml's order and IBC itself).
-    auto_logoff_time: str | None = None  # None = leave the existing setting unchanged
 
     # Self-scheduled shutdown actions (applies to TWS and Gateway alike), consumed
     # by schedule.py/control_loop.py -- not GUI settings written to TWS/Gateway.
@@ -441,7 +461,7 @@ def load_config(
     # display the env vars we actually read, but never print credentials in plaintext
     sys.stdout.write("IBController > Environment variable: \n")
     for key, val in env.items():
-        if not key.startswith(ENV_PREFIX):
+        if not key.startswith((ENV_PREFIX, IBKR_ENV_PREFIX)):
             continue
         shown = "******" if _is_sensitive_env(key) else val
         sys.stdout.write(f"IBController > env {key}={shown}\n")
@@ -450,23 +470,11 @@ def load_config(
     _config_file = (
         Path(toml_path) if toml_path else Path(config_dir) / "ibcontroller.toml"
     )
-    # Credentials are environment-variable-only -- reject them here, against the raw
-    # parsed TOML, before ts.load_settings ever sees the file (typed-settings has no
-    # per-key allow/deny-list hook of its own; userid/password are real Config fields,
-    # so InvalidOptionsError would not catch this). Silently skipped if the file
-    # doesn't exist, matching FileLoader's own optional-file handling.
-    try:
-        with _config_file.open("rb") as f:
-            _raw_toml = tomllib.load(f)
-    except OSError:
-        pass
-    else:
-        _reject_credentials_in_file(_raw_toml, _config_file)
+    _read_toml(_config_file)  # raises on credentials or bad structure
 
-    # section=None -- the TOML file is flat, no [section] headers. TomlFormat("")
-    # looks up settings[""] instead of returning the top-level dict, so it silently
-    # discards the whole file.
-    CONF_FORMATS = {"*.toml": TomlFormat(None)}
+    # section="ibcontroller" -- only that table is `Config`. TomlFormat("") would look
+    # up settings[""] instead and silently discard the whole file.
+    CONF_FORMATS = {"*.toml": TomlFormat(_CONFIG_TABLE)}
     # A caller-supplied log_dir (platform dirs in production, a tmp dir in tests) is
     # a low-priority DEFAULT -- first in the loader list, so every later loader wins
     # over it and `log_dir` in the config file (or IBC_LOG_DIR) genuinely
@@ -525,3 +533,61 @@ def load_config(
     sys.stdout.flush()  # same buffering reason as the env dump above
 
     return _config
+
+
+@attrs.frozen
+class DeclarativeInput:
+    """Raw `[ibkr]`, `[[setting]]` and `[[dialog]]` data, unvalidated: the settings and
+    dialogs layers own those schemas. `ibkr` already has `IBKR_*` environment values
+    merged over the file's; `ibkr_sources` says, per key, which one won (`file` or
+    `env`)."""
+
+    ibkr: Mapping[str, Any] = attrs.field(factory=dict)
+    ibkr_sources: Mapping[str, str] = attrs.field(factory=dict)
+    settings: tuple[Mapping[str, Any], ...] = ()
+    dialogs: tuple[Mapping[str, Any], ...] = ()
+
+
+def _collect_ibkr_env() -> dict[str, str]:
+    """`IBKR_<NAME>` variables as `{name.lower(): value}`. `IBKR_<NAME>_FILE` wins
+    over the plain variable when its contents are non-empty; an empty value counts as
+    missing, as for `IBC_*`."""
+    env = os.environ
+    names = {
+        key.removesuffix("_FILE")
+        for key in env
+        if key.startswith(IBKR_ENV_PREFIX) and len(key) > len(IBKR_ENV_PREFIX)
+    }
+    values: dict[str, str] = {}
+    for varname in sorted(names):
+        file_varname = f"{varname}_FILE"
+        value = ""
+        if file_varname in env:
+            try:
+                value = Path(env[file_varname]).read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise ConfigError(f"{file_varname}={env[file_varname]}: {exc}") from exc
+        value = value or env.get(varname, "")
+        if value:
+            values[varname.removeprefix(IBKR_ENV_PREFIX).lower()] = value
+    return values
+
+
+def load_declarative_input(
+    config_dir: str | Path, toml_path: str | Path | None = None
+) -> DeclarativeInput:
+    """Reads the declarative sections of `ibcontroller.toml` plus `IBKR_*` environment
+    values. Call after `load_config`, which loads the dotenv file."""
+    path = Path(toml_path) if toml_path else Path(config_dir) / "ibcontroller.toml"
+    data = _read_toml(path)
+    from_file = data.get(_IBKR_TABLE, {})
+    from_env = _collect_ibkr_env()
+    return DeclarativeInput(
+        ibkr={**from_file, **from_env},
+        ibkr_sources={
+            **dict.fromkeys(from_file, "file"),
+            **dict.fromkeys(from_env, "env"),
+        },
+        settings=tuple(data.get("setting", ())),
+        dialogs=tuple(data.get("dialog", ())),
+    )

@@ -1,0 +1,192 @@
+# Bundled catalog: the settings and the dialogs ibcontroller knows how to handle.
+# Names are unique across both; a value in [ibkr] (or IBKR_<NAME>) is looked up by name.
+#
+# A [[setting]] has a name, the tree_path of its Global Configuration section, an
+# action (toggle, type_text, type_text_near_label, auto_restart_time,
+# auto_logoff_time) and the control's label (a literal "label", or a "label_ref"
+# naming an entry of labels.json's settings.controls). It carries no value: a
+# setting with no value in [ibkr] is left untouched. Settings are applied in the
+# order listed here.
+#
+# A [[dialog]] has a name, a default mode, match groups (any group matching is
+# enough; inside a group every field must match, ignoring case) and modes, each an
+# ordered list of steps run on the matched window. A mode with no steps leaves the
+# dialog to the user.
+#
+# Dialog strings come from the dialogs' own text. Entries marked "unverified" come
+# from IBC's source and have not been checked against a live window.
+
+# auto_logoff_time is applied BEFORE auto_restart_time: both write the same Lock and
+# Exit radio-button pair, so when both have a value the last one applied wins the
+# radio group. Listing auto_logoff_time first makes auto_restart_time win, matching
+# IBC's own stated precedence. Do not reorder these two entries.
+[[setting]]
+name = "auto_logoff_time"
+tree_path = "Lock and Exit"
+action = "auto_logoff_time"
+
+[[setting]]
+name = "auto_restart_time"
+tree_path = "Lock and Exit"
+action = "auto_restart_time"
+
+[[setting]]
+name = "read_only_api"
+tree_path = "API/Settings"
+action = "toggle"
+label_ref = "read_only_api"
+
+# The API/Settings text fields have no accessible name, so they are found by position:
+# field_index counts the panel's text fields from the top (0 socket port, 1 master client
+# ID). A wrong index writes the value into the neighbouring field.
+# On TWS, changing the port opens a confirmation dialog after OK: see the
+# socket_port_confirmation dialog below.
+[[setting]]
+name = "socket_port"
+tree_path = "API/Settings"
+action = "type_text_near_label"
+label_ref = "socket_port"
+field_index = 0
+
+[[setting]]
+name = "master_api_client_id"
+tree_path = "API/Settings"
+action = "type_text_near_label"
+label_ref = "master_api_client_id"
+field_index = 1
+
+# Ticking the box opens a confirmation modal that is not handled yet and blocks the
+# settings step; unticking is safe.
+[[setting]]
+name = "send_market_data_in_lots_us_stocks"
+tree_path = "API/Settings"
+action = "toggle"
+label_ref = "send_market_data_in_lots_us_stocks"
+
+[[setting]]
+name = "api_precautions_bypass_order_precautions"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_order_precautions"
+
+[[setting]]
+name = "api_precautions_bypass_bond_warning"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_bond_warning"
+
+[[setting]]
+name = "api_precautions_bypass_negative_yield_to_worst"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_negative_yield_to_worst"
+
+[[setting]]
+name = "api_precautions_bypass_called_bond_warning"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_called_bond_warning"
+
+[[setting]]
+name = "api_precautions_bypass_same_action_pair_trade"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_same_action_pair_trade"
+
+[[setting]]
+name = "api_precautions_bypass_price_based_volatility"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_price_based_volatility"
+
+[[setting]]
+name = "api_precautions_bypass_redirect_order_warning"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_redirect_order_warning"
+
+[[setting]]
+name = "api_precautions_bypass_no_overfill_protection"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_no_overfill_protection"
+
+# Setting true opens a confirmation modal that is not handled yet and blocks the settings
+# step; false is safe.
+[[setting]]
+name = "api_precautions_bypass_route_marketable_to_bbo"
+tree_path = "API/Precautions"
+action = "toggle"
+label_ref = "api_precautions_bypass_route_marketable_to_bbo"
+
+[[dialog]]
+name = "non_brokerage_account"
+default = "on"
+match = [ { text = "This is not a brokerage account" } ]
+[dialog.modes]
+off = []
+on = [ { click = ["I understand and accept"] } ]
+
+[[dialog]]
+name = "auto_restart_confirmation"
+default = "on"
+match = [ { text = "trading platform restart automatically" } ]
+[dialog.modes]
+off = []
+on = [ { click = ["OK"] } ]
+
+# Unverified (IBC: DismissPasswordExpiryWarning).
+[[dialog]]
+name = "password_expiry_warning"
+default = "off"
+match = [ { title = "Password Notice" } ]
+[dialog.modes]
+off = []
+on = [ { click = ["OK"] } ]
+
+# Unverified (IBC: AllowBlindTrading). IBC matches two variants of this dialog.
+[[dialog]]
+name = "blind_trading"
+default = "off"
+match = [
+  { title = "Order Preview", text = "blind trading" },
+  { text = "blind trading", text_also = "Are you sure you want to submit this order?" },
+]
+[dialog.modes]
+off = []
+on = [ { click = ["Override and Transmit", "Yes"] } ]
+
+# TWS only: shown after OK when the socket port changed. "on" answers Yes (the new port
+# takes effect at once), "no" answers No (it takes effect when the GUI restarts).
+[[dialog]]
+name = "socket_port_confirmation"
+default = "off"
+match = [ { text = "apply the new socket port setting immediately" } ]
+[dialog.modes]
+off = []
+on = [ { click = ["Yes"] } ]
+no = [ { click = ["No"] } ]
+
+# Unverified (IBC: AcceptIncomingConnectionDialogHandler). Shown when an API client
+# outside the trusted IPs connects; matched by message text, as the window title is not
+# the phrase. "manual" leaves it to the user; the secure choice is "reject" plus a trusted
+# IP list in the API settings.
+[[dialog]]
+name = "accept_incoming_connections"
+default = "manual"
+match = [ { text = "Accept incoming connection" } ]
+[dialog.modes]
+manual = []
+accept = [ { click = ["OK", "Yes"] } ]
+reject = [ { click = ["No"] } ]
+
+# Unverified (IBC: CryptoOrderConfirmationDialogHandler). Shown when a cryptocurrency
+# order is placed. "transmit" places the order with no human check; "cancel" drops it.
+[[dialog]]
+name = "crypto_order_confirmation"
+default = "manual"
+match = [ { title = "Cryptocurrency order confirmation" } ]
+[dialog.modes]
+manual = []
+transmit = [ { click = ["Transmit"] } ]
+cancel = [ { click = ["Cancel"] } ]

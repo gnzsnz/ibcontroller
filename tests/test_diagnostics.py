@@ -21,14 +21,19 @@ from ibcontroller.diagnostics import (
     sweep_settings_tree,
     watch_for_diagnostics,
 )
+from ibcontroller.dialogs import ClickStep, DialogEntry, MatchGroup
 from ibcontroller.dispatch import Dispatcher
-from ibcontroller.labels import DismissRule
-from ibcontroller.recognisers import DeclarativeDismissRecognizer, RecognizerRegistry
+from ibcontroller.recognisers import DialogRecognizer, RecognizerRegistry
 from tests.fakes import FakeCommandServer, FakeEventServer
 
 pytestmark = pytest.mark.asyncio
 
-_RULE = DismissRule(name="test_rule", click="OK", match_title="Warning")
+_ENTRY = DialogEntry(
+    name="test_entry",
+    default="on",
+    match=[MatchGroup(title="Warning")],
+    modes={"on": [ClickStep("OK")]},
+)
 
 
 async def _start(cmd_sock, event_sock) -> Dispatcher:
@@ -107,7 +112,7 @@ async def test_watch_for_diagnostics_dumps_a_known_window_when_scope_is_known(
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            registry = RecognizerRegistry([DeclarativeDismissRecognizer(_RULE)])
+            registry = RecognizerRegistry([DialogRecognizer(_ENTRY, "on")])
             calls = []
             watcher = asyncio.ensure_future(
                 watch_for_diagnostics(
@@ -146,7 +151,7 @@ async def test_watch_for_diagnostics_skips_an_unknown_window_when_scope_is_known
     ):
         dispatcher = await _start(sock_path, event_sock_path)
         try:
-            registry = RecognizerRegistry([DeclarativeDismissRecognizer(_RULE)])
+            registry = RecognizerRegistry([DialogRecognizer(_ENTRY, "on")])
             calls = []
             watcher = asyncio.ensure_future(
                 watch_for_diagnostics(

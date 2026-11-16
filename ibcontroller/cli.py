@@ -87,7 +87,7 @@ def init(
     ),
 ) -> None:
     """Scaffold the config directory with starter ibcontroller.toml/
-    ibkr_settings.toml.example/labels.json.example files. Never overwrites a file
+    labels.json.example files. Never overwrites a file
     that already exists unless --force is given."""
     if app_dir is not None:
         os.environ["IBC_APP_DIR"] = str(app_dir)

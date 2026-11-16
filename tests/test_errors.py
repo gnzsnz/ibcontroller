@@ -24,7 +24,7 @@ from ibcontroller.schedule import ScheduleError
 from ibcontroller.settings import SettingsError
 
 # Raised and handled inside a cycle, never reaching `cli.py`: keep the default code 1.
-_NEVER_EXITS = {SettingsError, ScheduleError}
+_NEVER_EXITS = {ScheduleError}
 
 
 @pytest.mark.parametrize(
@@ -34,6 +34,7 @@ _NEVER_EXITS = {SettingsError, ScheduleError}
         (MissingCredentialsError, 78),
         (LabelsError, 78),
         (LauncherError, 78),
+        (SettingsError, 78),  # a bad entry or value stops startup
         (CredentialsRejectedError, 77),  # EX_NOPERM
         (MfaTimeoutError, 75),  # EX_TEMPFAIL
         (TransientError, 69),  # EX_UNAVAILABLE

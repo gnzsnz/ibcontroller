@@ -1,8 +1,51 @@
 # IBController Configuration
 
-`ibcontroller` reads a single flat TOML file, `ibcontroller.toml` (no `[section]`
-headers), found in the config directory. Every key is optional except the
-credentials, which are environment-variable-only (see below).
+`ibcontroller` reads a single TOML file, `ibcontroller.toml`, found in the config
+directory. Every key is optional except the credentials, which are
+environment-variable-only (see below).
+
+## File layout
+
+One table per concern:
+
+| Table | Holds | Environment |
+| ----- | ----- | ----------- |
+| `[ibcontroller]` | ibcontroller's own settings, every field documented below | `IBC_<FIELD>` |
+| `[ibkr]` | values for IBKR settings and dialogs, by name | `IBKR_<NAME>` |
+| `[[setting]]`, `[[dialog]]` | custom setting and dialog entries | none |
+
+The file is rejected at startup if it has a top-level key outside a table (a file
+from before the tables existed) or any table other than the four above.
+`IBKR_<NAME>` also accepts a `_FILE` variant, an empty value counts as missing, and
+the startup environment dump lists these variables with the same masking as `IBC_*`.
+
+Every environment variable that starts with `IBKR_` is read as an `[ibkr]` key. One whose name
+matches no catalog or custom entry is logged as a warning ("names no setting or dialog, ignored")
+and otherwise ignored, so treat the prefix as reserved for ibcontroller.
+
+Coming from v0.1.x or from IBC? See [Upgrading](Upgrading.md).
+
+### Dialogs
+
+ibcontroller handles the pop-ups listed in its bundled catalog (`catalog.toml`).
+Each has a name and modes; a mode is what ibcontroller does to the window, and a
+mode with no steps leaves the dialog to the user. `[ibkr]` picks the mode by the
+dialog's name, for example `blind_trading = "on"` or `IBKR_BLIND_TRADING=on`.
+
+- A boolean means `on` or `off`. In the environment `true`, `false`, `yes` and
+  `no` (any case) are booleans. A string in the file is always a mode name.
+- Mode names ignore case. An unknown mode, a boolean on a dialog without `on` and
+  `off` modes, or any other type stops startup with an error naming the dialog.
+- Without a value the dialog runs in its default mode. Startup logs one line per
+  dialog with its mode and where the mode came from (`default`, `file`, `env`).
+- `[[dialog]]` adds a dialog the catalog lacks, with `name`, `default`, `match` and
+  `[dialog.modes]`, in the same shape as the catalog. A custom entry is checked
+  before catalog entries, and cannot reuse a catalog name.
+- Login outcome and exit progress windows are always handled first and cannot be
+  overridden.
+- `[ibkr]` keys that name no dialog are read by the settings (below). A key that names
+  neither a setting nor a dialog is logged as a warning and ignored; a name shared by a
+  setting and a dialog stops startup.
 
 Precedence, highest first:
 
@@ -10,12 +53,12 @@ Precedence, highest first:
 2. Config file
 3. Built-in defaults
 
-Schema is closed: any key not declared below is rejected at startup with a clean
-error, never silently ignored.
+Schema is closed: any key in `[ibcontroller]` not declared below is rejected at
+startup with a clean error, never silently ignored.
 
 Every config-field also has an environment-variable spelling:
 `IBC_` + the field name upper-cased and in snake-case, e.g.
-`accept_incoming_connections` -> `IBC_ACCEPT_INCOMING_CONNECTIONS`.
+`existing_session_action` -> `IBC_EXISTING_SESSION_ACTION`.
 Environment variables override the config file.
 
 Credentials are never accepted from the config file -- `userid`/`password` in the
@@ -40,7 +83,6 @@ Settings that drive the behaviour of `ibcontroller` itself.
 | `tws_channel` | `IBC_TWS_CHANNEL` | `"stable"`/`"latest"`; narrows auto-detection to installs carrying this update channel. Ignored when `tws_version` is set explicitly | `"stable"` |
 | `tws_path` | `IBC_TWS_PATH` | Override the install-path inference | `None` |
 | `tws_settings_path` | `IBC_TWS_SETTINGS_PATH` | Where TWS/Gateway stores its own settings (not the install dir); per instance | `None` (per-instance default) |
-| `settings_file` | `IBC_SETTINGS_FILE` | Extra declarative settings file, merged on top of the built-in settings -- see "Declarative settings" below | `None` |
 | (rejected) | `IBC_USERID` | Login user id; environment-variable-only, never from the config file. Also accepts `IBC_USERID_FILE` | (required) |
 | (rejected) | `IBC_PASSWORD` | Login password; environment-variable-only, never from the config file. Also accepts `IBC_PASSWORD_FILE` | (required) |
 | `trace_enabled` | `IBC_TRACE_ENABLED` | Verbose raw wire trace (`cmd-{instance}.jsonl` / `events-{instance}.jsonl` next to the log file) | `false` |
@@ -60,27 +102,8 @@ Settings related to TWS/ibgateway.
 | --- | --- | --- | --- |
 | `trading_mode` | `IBC_TRADING_MODE` | `"live"` or `"paper"`; which account to authenticate as | `"paper"` |
 | `read_only_login` | `IBC_READ_ONLY_LOGIN` | TWS only (Gateway logs a warning and logs in normally). Clicks "Enter Read Only" on the 2FA frame instead of waiting for the push; no effect without 2FA (paper) | `false` |
-| `read_only_api` | `IBC_READ_ONLY_API` | `true`/`false` sets it; omit to leave the existing setting unchanged. Applied automatically -- see "Declarative settings" | `None` (unchanged) |
-| `accept_incoming_connections` | `IBC_ACCEPT_INCOMING_CONNECTIONS` | How to handle incoming API connection dialogs -- see below | `"manual"` |
 | `existing_session_action` | `IBC_EXISTING_SESSION_ACTION` | What to do when an existing session is detected -- see below | `"manual"` |
-| `auto_restart_time` | `IBC_AUTO_RESTART_TIME` | Daily auto-restart time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
-| `auto_logoff_time` | `IBC_AUTO_LOGOFF_TIME` | Daily auto-logoff time, `"hh:mm AM/PM"` -- see below | `None` (unchanged) |
 | `time_zone` | `IBC_TIME_ZONE` | IANA zone name, e.g. `"Europe/Zurich"`, written to `jts.ini`'s `TimeZone` -- see below | auto-detected |
-
-### Accept Incoming Connection
-
-**key:** `accept_incoming_connections`
-**Environment variable:** `IBC_ACCEPT_INCOMING_CONNECTIONS`
-
-If set to 'accept', ibcontroller automatically accepts incoming API connection
-dialogs. If set to 'reject', ibcontroller automatically rejects them. If set to
-'manual', the user must decide whether to accept or reject each incoming API
-connection dialog. The default is 'manual'.
-
-NB: it is recommended to set this to 'reject', and to explicitly configure which
-IP addresses can connect to the API in TWS's API configuration page, as this is
-much more secure (in this case, no incoming API connection dialogs will occur for
-those IP addresses).
 
 ### Existing Session Detected Action
 
@@ -141,26 +164,6 @@ Notes:
   after this session chose to continue, which `secondary` and `primaryoverride`
   never do. ibcontroller exits with code `76` without relaunching.
 
-### Auto Restart Time
-
-**key:** `auto_restart_time`
-**Environment variable:** `IBC_AUTO_RESTART_TIME`
-
-`"hh:mm AM/PM"` (e.g. `"08:00 AM"`). Sets TWS/Gateway's own daily "Auto restart"
-time under Lock and Exit. Omit this key (the default) to leave the existing
-setting unchanged. Shares one radio-button pair with Auto Logoff Time below --
-if both are set, this one wins (applied last).
-
-### Auto Logoff Time
-
-**key:** `auto_logoff_time`
-**Environment variable:** `IBC_AUTO_LOGOFF_TIME`
-
-Same `"hh:mm AM/PM"` format and the same Lock and Exit control as Auto Restart
-Time above, just selecting "Auto logoff" instead of "Auto restart". Omit this
-key (the default) to leave the existing setting unchanged. If both keys are
-set, Auto Restart Time wins -- set only one of the two in practice.
-
 ### Time Zone
 
 **key:** `time_zone`
@@ -182,8 +185,8 @@ nothing resolves.
 **Environment variable:** `IBC_COLD_RESTART_TIME`
 
 TWS and Gateway alike (ported from IBC's `IbcTws.java`, the shared base class
-both programs use). `"HH:MM"`, 24-hour, local system time. Unlike the settings
-above, this is not a Global Configuration GUI setting -- it's a self-scheduled
+both programs use). `"HH:MM"`, 24-hour, local system time. Unlike the `[ibkr]`
+settings, this is not a Global Configuration GUI setting -- it's a self-scheduled
 action. Every Sunday at this time, ibcontroller closes the instance tidily and
 relaunches it with a full fresh login (no restart hash, deliberately not a
 silent relogin, and via ibcontroller's own `launch_instance`, not IBC's
@@ -242,30 +245,124 @@ cannot be enumerated, so extend `sweep_paths` to probe more nodes. Use it to
 learn a panel's layout before writing a declarative entry, and after a
 TWS/Gateway upgrade.
 
-## Declarative settings
+## Declarative configuration
 
-`read_only_api` and `auto_restart_time` (and `auto_logoff_time`) are applied to
-TWS/Gateway through built-in declarative settings entries loaded automatically
-at startup (see `data/builtin_settings.toml` and `ibkr_settings.toml.example`).
-`settings_file` points at an extra declarative file layered on top of the
-built-in entries -- the built-ins fire first, then the extra file's entries
-override them. The built-ins only act when their own config key is set:
-`read_only_api` applies when it's `true`/`false` and is skipped when `None`;
-`auto_restart_time`/`auto_logoff_time` apply only when a value is set.
+Two kinds of behaviour are described in data files rather than code: Global Configuration
+**settings** applied to TWS/Gateway at startup, and **dialogs** (pop-ups) that ibcontroller
+recognises and answers. Each has its own section below.
 
-Other Global Configuration settings go in your own file. `ibkr_settings.toml.example`
-carries worked entries, including commented ones for the API socket port
-(`socket_port`), the master API client ID (`master_api_client_id`) and
-`send_market_data_in_lots_us_stocks`, all on the `API/Settings` panel. The port and
-client ID are text fields found by their label (`type_text_near_label`), so their
-`value` is a string.
+### Settings
 
-When no entry resolves to a value (the default configuration), the Global Configuration
-dialog is not opened. If one entry fails (a missing control, an agent error), the others are
-still applied and "OK" commits them. If the dialog closes under the program, the step ends
-without clicking "OK".
+A setting is an entry of the bundled catalog (`data/catalog.toml`) with a name, the
+`tree_path` of its Global Configuration section, an `action` and the control's label. The
+entry carries no value: `[ibkr]` gives it one by name (`read_only_api = true`, or
+`IBKR_READ_ONLY_API=true` in the environment, which wins over the file). A setting with no
+value is left as it is in Gateway/TWS (leave-unchanged, as IBC's empty value).
+
+| Name | Value | Notes |
+| --- | --- | --- |
+| `auto_logoff_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily logoff, under Lock and Exit. |
+| `auto_restart_time` | `"hh:mm AM/PM"`, e.g. `"08:00 AM"` | Daily restart, under Lock and Exit. Shares one radio pair with `auto_logoff_time`: if both have a value, `auto_restart_time` wins (applied last, as IBC specifies). |
+| `read_only_api` | `true`/`false` | API/Settings "Read-Only API". |
+| `socket_port` | number or text | API/Settings "Socket port". IBKR defaults: 7496 TWS live, 7497 TWS paper, 4001 Gateway live, 4002 Gateway paper. On TWS, changing it opens a confirmation dialog after OK, see `socket_port_confirmation`. |
+| `master_api_client_id` | number or text | API/Settings "Master API client ID". |
+| `send_market_data_in_lots_us_stocks` | `true`/`false` | API/Settings, lots for US stocks. Do not set `true` yet: it opens a confirmation window that is not handled and blocks the settings step. |
+| `api_precautions_bypass_order_precautions` | `true`/`false` | API/Precautions: bypass the order precautions for API orders. |
+| `api_precautions_bypass_bond_warning` | `true`/`false` | API/Precautions: bypass the bond warning for API orders. |
+| `api_precautions_bypass_negative_yield_to_worst` | `true`/`false` | API/Precautions: bypass the negative yield to worst confirmation for API orders. |
+| `api_precautions_bypass_called_bond_warning` | `true`/`false` | API/Precautions: bypass the called bond warning for API orders. |
+| `api_precautions_bypass_same_action_pair_trade` | `true`/`false` | API/Precautions: bypass the "same action pair trade" warning for API orders. |
+| `api_precautions_bypass_price_based_volatility` | `true`/`false` | API/Precautions: bypass the price-based volatility risk warning for API orders. |
+| `api_precautions_bypass_redirect_order_warning` | `true`/`false` | API/Precautions: bypass the redirect order warning (stock orders) for API orders. |
+| `api_precautions_bypass_no_overfill_protection` | `true`/`false` | API/Precautions: bypass the no overfill protection precaution for API orders. |
+| `api_precautions_bypass_route_marketable_to_bbo` | `true`/`false` | API/Precautions: bypass the route marketable to BBO warning for API orders. Do not set `true` yet: it opens a confirmation window that is not handled and blocks the settings step. |
+
+- Values are checked at startup; a wrong one stops the run (exit 78) with an error naming
+  the setting. A `toggle` takes a boolean (in the environment `true`, `false`, `yes`, `no`
+  in any case); a time takes `"hh:mm AM/PM"` with one space; a text setting takes a string or
+  a number.
+- Settings are applied in catalog order, after login, in one Global Configuration session.
+  Each applied setting is logged with its value and source (`file` or `env`).
+- `[[setting]]` adds a setting the catalog lacks: `name`, `tree_path`, `action` (`toggle`,
+  `type_text`, `type_text_near_label`) and the control by `label` (literal) or `label_ref` (a
+  name in `labels.json`'s `settings.controls`). `type_text_near_label` also takes
+  `field_index` (0-based field below the label) for a field with no label of its own. The
+  entry's value comes from `[ibkr]` like any other; a custom setting with no value
+  is logged as a warning at startup and left untouched. A custom name cannot reuse a catalog name.
+- `auto_logoff_time` has not been applied on a live run yet. Its mechanism is the same as
+  `auto_restart_time`'s.
+- Settings that moved or were removed since v0.1.x: see [Upgrading](Upgrading.md).
+
+When no setting has a value (the default configuration), the Global Configuration dialog is
+not opened. If one entry fails (a missing control, an agent error), the others are still
+applied and "OK" commits them. If the dialog closes under the program, the step ends without
+clicking "OK". If the dialog is still open a few seconds after "OK", Gateway/TWS rejected a
+value and nothing was committed: an error is logged with the text of the error window (for
+example `The value must be between 1024 and 65535 in Socket port`), the window is left open and
+startup goes on.
 
 Only the TWS Mosaic layout is supported: the dialog is opened with
 `File > Global Configuration...`. On the TWS Classic layout that menu item does not exist, no
-setting is applied (including `read_only_api`), and the attempt waits for `mfa_timeout`
-(default 180s) before giving up and logging the failure. Gateway is not affected.
+setting is applied, and the attempt waits for `mfa_timeout` (default 180s) before giving up
+and logging the failure. Gateway is not affected.
+
+### Dialogs
+
+Pop-ups that are always handled the same simple way are entries of the bundled dialog
+catalog (`data/catalog.toml`). An entry names a dialog, says how to recognise it and what to
+do in each mode. They are checked on every window that opens, after the login-outcome and
+exit-progress dialogs.
+
+| Entry | Default | Recognised by | Does |
+| --- | --- | --- | --- |
+| `non_brokerage_account` | on | text "This is not a brokerage account" | clicks "I understand and accept" |
+| `auto_restart_confirmation` | on | text "trading platform restart automatically" | clicks "OK" |
+| `password_expiry_warning` | off | title "Password Notice" | clicks "OK" |
+| `blind_trading` | off | "Order Preview" with "blind trading", or the confirmation text | clicks "Override and Transmit", else "Yes" |
+| `accept_incoming_connections` | manual | text "Accept incoming connection" (shown when an untrusted API client connects) | `accept` clicks "OK", else "Yes"; `reject` clicks "No"; `manual` leaves it to you |
+| `crypto_order_confirmation` | manual | title "Cryptocurrency order confirmation" (shown when a cryptocurrency order is placed) | `transmit` clicks "Transmit" (the order is placed with no check by you); `cancel` clicks "Cancel" (the order is dropped); `manual` leaves it to you |
+| `socket_port_confirmation` | off | text "apply the new socket port setting immediately" (TWS only, after the port changed) | `on` clicks "Yes" (port applies at once), `no` clicks "No" (applies at the next GUI restart) |
+
+- Matching: see [Matching](#matching).
+- Candidate buttons are tried in order and the first one present is clicked.
+- An entry in a mode with no steps (`off`) leaves the dialog on screen for you.
+- `auto_restart_confirmation`, `password_expiry_warning`, `blind_trading`,
+  `accept_incoming_connections` and `crypto_order_confirmation` come from IBC's source and
+  have not been checked against a live window.
+- `crypto_order_confirmation` takes the modes `manual`, `transmit` and `cancel`, not a
+  boolean. `transmit` places every cryptocurrency order without asking you.
+- `accept_incoming_connections` takes the modes `manual`, `accept` and `reject`, not a
+  boolean. It moved from `[ibcontroller]` to `[ibkr]` (see [Upgrading](Upgrading.md)); set it
+  there or as `IBKR_ACCEPT_INCOMING_CONNECTIONS`. Rejecting every connection and listing the trusted
+  IP addresses in the API settings is the more secure setup.
+- Switch an entry by its name in `[ibkr]`; add your own with `[[dialog]]` in `ibcontroller.toml`.
+- A malformed catalog is a startup error (exit 78) that names the file and the entry.
+
+**Order.** Login-outcome dialogs ("Login failed", "Unrecognized Username or Password", the
+connection and too-many-attempts warnings) and the "Shutdown progress" / "Restart in
+progress" windows are always handled first. A catalog entry that matches one of them never
+runs, so a credential rejection still exits with code 77 and a restart is still recognised
+as one. Catalog entries run before the other built-in handlers (existing session, re-login,
+incoming API connections).
+
+### Matching
+
+Matching ignores case everywhere, in the Python side and in the Java agent. Windows are recognised
+by a substring of their title or message text; message text is compared with HTML tags removed and
+entities decoded. Controls (buttons, checkboxes, text fields, and the label next to a field) are
+found by their whole label, ignoring case and surrounding whitespace: `Log In` does not match
+`Paper Log In`. A few title checks (login frame, two-factor, splash) also compare the whole title.
+A label that IBKR renames or localises goes in a candidate list, tried in order. There is no
+ambiguity error: when several controls carry the same whole label, the first one showing wins.
+
+Writing candidate lists and match strings:
+
+- Button lists (`click = [...]`) are tried in order and the first label found in the window is
+  clicked. Put the most specific label first (`["Override and Transmit", "Yes"]`). A short label
+  cannot hit a longer one, because controls match by whole label.
+- Window and message strings (`match = [...]`) match by substring, and a window matches when any
+  entry matches, so order does not matter there. Use distinctive phrases; a short string widens
+  the match wherever it sits in the list. To narrow a match, require a title and a text together.
+- For two dialog entries that could match the same window, the first recogniser that matches
+  handles it, and custom entries are checked before catalog ones. Put the specific entry before
+  the general one.

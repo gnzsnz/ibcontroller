@@ -146,8 +146,10 @@ Any contribution must follow this separation of concerns.
   through `anyio.to_thread` or the logging listener threads.
 - One object graph per running instance (`Dispatcher`, `LoginManager`, recogniser registry, sockets,
   settings directory). No module-level state shared between instances.
-- Every user-facing string (window titles, button and menu labels) comes from `labels.json` through
-  `labels.py`. Never a Python literal.
+- Strings the code matches or clicks live in data files, never in a Python literal: login and
+  recogniser strings (window titles, button and menu labels) in `labels.json`, read through
+  `labels.py`; dialog and setting strings (message text, button names, control labels) in
+  `catalog.toml`, or in the user's own `[[dialog]]` and `[[setting]]` entries.
 - Credentials stay `Secret` until L3 builds the request line. Nothing logs or traces a credential
   value.
 
@@ -223,6 +225,13 @@ Errors on the command socket:
 | `agent_error`              | `AgentError`             | Any other failure inside the agent. L3 maps an unrecognised code here too. |
 | `window_gone`              | `WindowGoneError`        | The `window_id` no longer resolves: the window closed after the caller learned of it. |
 
+**Lookup rule.** Matching ignores case. Controls are found by their whole accessible name or label
+text, ignoring case and surrounding whitespace (`ComponentLookup.labelMatches`), never by substring;
+when several controls carry the same label the first showing one wins. The Global Configuration
+dialog is found by a title that contains "configuration", ignoring case
+(`WriteOps.isConfigDialogTitle`). Menu items, tree nodes and the `dump` title filter already ignored
+case.
+
 **Event socket.** Push only, one JSON line per message. Ids never repeat, so a client applies events
 idempotently.
 
@@ -283,12 +292,15 @@ and records but never interprets: what a command or an event means is decided ab
 L5-1 is the vocabulary the domains use to act on the UI. Each action is a named, async operation
 (`click`, `type_text`, `navigate_menu`, ...) that builds the matching L3 `Request`, sends it through the
 `Dispatcher`, and adds only the policy that belongs above the wire: `click` tries candidate labels in
-order, `navigate_menu` retries a disabled item. `labels.py` supplies the matching UI text from
-`labels.json`, so no domain holds a literal. Domains never talk to L4 directly; the actions are their only
-way to the UI.
+order, `navigate_menu` retries a disabled item. `labels.py` supplies the login and recogniser UI text
+from `labels.json`, and the matching helpers (`strip_html`, `text_matches`, `label_matches`,
+`text_starts_with`), so no domain holds a literal or its own comparison. Domains never talk to L4
+directly; the actions are their only way to the UI.
 
 - **Owns:** the action vocabulary (`click`, `type_text`, `toggle`, `navigate_menu`, `expand_tree`,
-  `dump`, …), `wait_for_window` and the label data.
+  `dump`, …), `wait_for_window`, the label data and the matching helpers. Domains compare titles and
+  message text only through them: substring with `text_matches`, whole label with `label_matches`,
+  anchored prefix with `text_starts_with`.
 - **Rules:** the only L5 code that calls `Dispatcher.send`; each action builds its L3 `Request`.
   L3 exceptions propagate unchanged.
   `wait_for_window(matches, closed=, timeout)` is the level wait (open or closed now, or later).
@@ -327,7 +339,7 @@ call each other.
 | ---------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | Login      | `login.py`, login-outcome recognisers in `recognisers.py`     | Fill credentials, detect success, MFA and failure, report the outcome.         |
 | Dialogs    | `RecognizerRegistry`, `watch_for_unprompted_windows`          | Recognise and handle windows nobody is waiting for.                          |
-| Settings   | `settings.py`, `builtin_settings.toml`, `ibkr_settings.toml`  | Apply declared Global Configuration settings.                                |
+| Settings   | `settings.py`, `[[setting]]` entries of `catalog.toml`        | Apply declared Global Configuration settings.                                |
 | Scheduling | `schedule.py`                                                  | Wall-clock maths for cold restart and close-down. No I/O.                     |
 | Diagnostic | `diagnostics.py`                                               | Dump window structure for development and support.                           |
 | Management | `management.py`                                                | Runtime operations on a running instance: graceful shutdown today; restart and data-farm reconnect when built. Decides how; callers (L6, later L7) decide when. |
@@ -353,8 +365,10 @@ call each other.
   - A recogniser acts only on the window it matched (`window_id`). The dialogs registry never acts
     on a window with a visible credential field.
   - The registry dispatches to the first matching recogniser: login-outcome and exit progress
-    recognisers, then declarative `dismiss_rules`, then the other built-ins. A declarative rule
-    cannot shadow a dialog that carries a login outcome or announces an exit.
+    recognisers, then one `DialogRecognizer` per entry of the bundled dialog catalog
+    (`dialogs.py`, `data/catalog.toml`), then the other built-ins. A catalog entry cannot shadow
+    a dialog that carries a login outcome or announces an exit. L6 receives the catalog from
+    `main.run_async`, loaded once at startup.
 - **Known deviations:**
   - `recognisers.py` and `diagnostics.py` iterate `Dispatcher.subscribe()` directly instead of going
     through L5-1.

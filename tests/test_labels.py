@@ -8,7 +8,15 @@ import logging
 import pytest
 
 from ibcontroller.config import ConfigError
-from ibcontroller.labels import DismissRule, Labels, LabelsError, load_labels
+from ibcontroller.labels import (
+    Labels,
+    LabelsError,
+    label_matches,
+    load_labels,
+    strip_html,
+    text_matches,
+    text_starts_with,
+)
 
 
 def test_bundled_default_loads_and_structures():
@@ -19,9 +27,6 @@ def test_bundled_default_loads_and_structures():
     assert labels.mfa.tws_frame_label == "SECOND FACTOR AUTHENTICATION"
     assert labels.mfa.read_only_button == "Enter Read Only"
     assert labels.existing_session.title == "Existing session detected"
-    assert labels.accept_incoming_connection.title == "Accept incoming connection"
-    assert labels.accept_incoming_connection.accept_buttons == ["OK", "Yes"]
-    assert labels.accept_incoming_connection.reject_buttons == ["No"]
     assert labels.login_failed.title == "Login failed"
     assert labels.login_error.title == "Login Error"
     assert labels.unrecognized_credentials.title == "Unrecognized Username or Password"
@@ -32,15 +37,6 @@ def test_bundled_default_loads_and_structures():
     assert labels.gateway_connection_failed.known_reasons == [
         "has multiple Paper Trading users associated with it"
     ]
-    assert {rule.name for rule in labels.dismiss_rules} == {
-        "non_brokerage_account",
-        "auto_restart_confirmation",
-    }
-    non_brokerage = next(
-        r for r in labels.dismiss_rules if r.name == "non_brokerage_account"
-    )
-    assert non_brokerage.match_text == "This is not a brokerage account"
-    assert non_brokerage.click == "I understand and accept"
 
 
 def test_api_settings_controls_are_in_the_bundled_file():
@@ -61,53 +57,6 @@ def test_generic_dismiss_buttons_reject_empty_override(tmp_path):
     (tmp_path / "labels.json").write_text('{"generic": {"dismiss_buttons": []}}')
     with pytest.raises(LabelsError):
         load_labels(config_dir=tmp_path)
-
-
-def test_dismiss_rule_needs_at_least_one_match_field():
-    with pytest.raises(LabelsError):
-        DismissRule(name="bad", click="OK")
-
-
-def _bundled_rule_names():
-    return [r.name for r in load_labels(config_dir=None).dismiss_rules]
-
-
-def test_dismiss_rules_override_appends_new_name(tmp_path):
-    (tmp_path / "labels.json").write_text(
-        json.dumps(
-            {
-                "dismiss_rules": [
-                    {"name": "custom", "click": "OK", "match_title": "Custom Dialog"}
-                ]
-            }
-        )
-    )
-    labels = load_labels(config_dir=tmp_path)
-    assert [r.name for r in labels.dismiss_rules] == [*_bundled_rule_names(), "custom"]
-
-
-def test_dismiss_rules_override_replaces_same_name(tmp_path):
-    bundled = _bundled_rule_names()
-    (tmp_path / "labels.json").write_text(
-        json.dumps(
-            {
-                "dismiss_rules": [
-                    {"name": bundled[0], "click": "Nope", "match_title": "Other"}
-                ]
-            }
-        )
-    )
-    labels = load_labels(config_dir=tmp_path)
-    assert [r.name for r in labels.dismiss_rules] == bundled
-    assert labels.dismiss_rules[0].click == "Nope"
-
-
-def test_dismiss_rules_bundled_kept_without_override(tmp_path):
-    (tmp_path / "labels.json").write_text(
-        json.dumps({"login": {"login_buttons": ["X"]}})
-    )
-    labels = load_labels(config_dir=tmp_path)
-    assert [r.name for r in labels.dismiss_rules] == _bundled_rule_names()
 
 
 def test_no_config_dir_uses_bundled_default_only():
@@ -176,8 +125,6 @@ def test_wrong_type_is_rejected_naming_file_and_field(tmp_path, override, field)
         ("login", "login_buttons"),
         ("existing_session", "continue_buttons"),
         ("existing_session", "cancel_buttons"),
-        ("accept_incoming_connection", "accept_buttons"),
-        ("accept_incoming_connection", "reject_buttons"),
     ],
 )
 def test_empty_candidate_list_is_rejected(tmp_path, group, name):
@@ -191,12 +138,6 @@ def test_empty_known_reasons_is_accepted(tmp_path):
     assert (
         load_labels(config_dir=tmp_path).gateway_connection_failed.known_reasons == []
     )
-
-
-def test_dismiss_rule_without_match_fields_raises_labels_error(tmp_path):
-    _write_override(tmp_path, {"dismiss_rules": [{"name": "bad", "click": "OK"}]})
-    with pytest.raises(LabelsError, match="dismiss_rules entry 'bad'"):
-        load_labels(config_dir=tmp_path)
 
 
 def test_invalid_json_raises_labels_error(tmp_path):
@@ -221,9 +162,7 @@ def test_unknown_keys_are_logged_and_ignored(tmp_path, caplog):
         {
             "login": {"gateway_title": ["x"]},
             "bogus": 1,
-            "dismiss_rules": [
-                {"name": "r", "click": "OK", "match_title": "t", "extra": 1}
-            ],
+            "dismiss_rules": [{"name": "r", "click": "OK", "match_title": "t"}],
         },
     )
     with caplog.at_level(logging.WARNING, logger="ibcontroller.labels"):
@@ -231,10 +170,48 @@ def test_unknown_keys_are_logged_and_ignored(tmp_path, caplog):
     logged = " ".join(r.getMessage() for r in caplog.records)
     assert "login.gateway_title" in logged
     assert "'bogus'" in logged
-    assert "dismiss_rules[0].extra" in logged
+    assert "'dismiss_rules'" in logged  # removed in favour of the dialog catalog
     assert labels.login.gateway_titles[0] == "IBKR Gateway"  # typo had no effect
 
 
 def test_settings_sweep_paths_are_in_the_bundled_file():
     paths = load_labels().settings.sweep_paths
     assert {"API/Settings", "Lock and Exit", "Orders/Smart Routing"} <= set(paths)
+
+
+def teststrip_html_collapses_tags_and_whitespace():
+    raw = (
+        "<html>Connection to server failed:  <br><br>  The specified user has "
+        "multiple Paper Trading users associated with it.<br><br>Please log on "
+        "using one of the Paper Trading users and corresponding password.</html>"
+    )
+    stripped = strip_html(raw)
+    assert stripped.startswith("Connection to server failed:")
+    assert "multiple Paper Trading users associated with it" in stripped
+    assert "<" not in stripped
+
+
+def test_text_matches_ignores_case_and_html():
+    assert text_matches("login failed", "Some LOGIN FAILED here") is True
+    assert text_matches("failed: the user", "<html>Failed:<br>The user</html>") is True
+    assert text_matches('say "hi"', "say &quot;hi&quot;") is True
+    assert text_matches("absent", "<html>Nothing</html>") is False
+
+
+def test_label_matches_ignores_case_and_surrounding_whitespace():
+    assert label_matches("Log In", "log in") is True
+    assert label_matches("OK", " ok ") is True
+
+
+def test_label_matches_is_whole_label_and_null_safe():
+    assert label_matches("Log In", "Paper Log In") is False
+    assert label_matches("OK", "Book") is False
+    assert label_matches("OK", None) is False
+
+
+def test_text_starts_with_is_anchored_ignores_case_and_html():
+    prefix = "Connection to server failed:"
+    assert text_starts_with(prefix, "<html>CONNECTION TO SERVER FAILED: x</html>")
+    assert not text_starts_with(
+        prefix, "<html>Oops connection to server failed:</html>"
+    )
